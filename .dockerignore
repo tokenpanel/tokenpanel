@@ -1,0 +1,9 @@
+.git
+.env
+.env.local
+.claude
+node_modules
+dist
+.turbo
+*.tsbuildinfo
+coverage

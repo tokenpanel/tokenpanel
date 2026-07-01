@@ -1,0 +1,22 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+.turbo/
+*.tsbuildinfo
+node_modules/.tmp/
+
+# Env
+.env
+.env.local
+
+# Editor
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+
+# Logs
+*.log

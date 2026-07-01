@@ -1,0 +1,14 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2022"],
+    "types": ["bun"],
+    "jsx": "preserve",
+    "paths": {
+      "@tokenpanel/db": ["../../packages/db/src/index.ts"],
+      "@tokenpanel/db/*": ["../../packages/db/src/*"]
+    }
+  },
+  "include": ["src"],
+  "exclude": ["dist", "node_modules"]
+}

@@ -1,0 +1,104 @@
+services:
+  mongo:
+    image: mongo:8
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_USER:-tokenpanel}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASS:-tokenpanel_dev}
+      MONGO_INITDB_DATABASE: ${MONGODB_DB:-tokenpanel}
+    expose:
+      - "27017"
+    ports:
+      - "${MONGO_HOST_PORT:-27017}:27017"
+    volumes:
+      - tokenpanel-mongo:/data/db
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.runCommand({ping:1}).ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    env_file:
+      - .env
+    environment:
+      MONGODB_URI: mongodb://${MONGO_USER:-tokenpanel}:${MONGO_PASS:-tokenpanel_dev}@mongo:27017/${MONGODB_DB:-tokenpanel}?authSource=admin
+      MONGODB_DB: ${MONGODB_DB:-tokenpanel}
+      PORT: ${PORT:-3000}
+    expose:
+      - "${PORT:-3000}"
+    ports:
+      - "${PORT:-3000}:${PORT:-3000}"
+    volumes:
+      # Bind-mount the whole project for hot-reload. node_modules lives on the
+      # host (installed via `bun install`) and is shared into the container —
+      # no anonymous volumes, so dep changes on host are picked up immediately.
+      - .:/app
+    restart: unless-stopped
+    profiles: ["dev"]
+    depends_on:
+      mongo:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "bun", "-e", "const r = await fetch('http://127.0.0.1:${PORT:-3000}/health'); process.exit(r.ok ? 0 : 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  admin:
+    build:
+      context: .
+      dockerfile: docker/admin.Dockerfile
+    env_file:
+      - .env
+    environment:
+      VITE_DEV_API_URL: http://api:3000
+      VITE_WATCH_POLL: "true"
+    expose:
+      - "5173"
+    ports:
+      - "${ADMIN_HOST_PORT:-5173}:5173"
+    volumes:
+      # Bind-mount the whole project for hot-reload. node_modules lives on the
+      # host (installed via `bun install`) and is shared into the container —
+      # no anonymous volumes, so dep changes on host are picked up immediately.
+      - .:/app
+    restart: unless-stopped
+    profiles: ["dev"]
+    depends_on:
+      api:
+        condition: service_healthy
+
+  # --- Prod single-port: api serves admin SPA + API on one port ---
+  # `docker compose --profile prod up --build -d` (or `bun run docker:prod`).
+  # The dev `admin` service is skipped under the prod profile (HMR not needed).
+  prod:
+    build:
+      context: .
+      dockerfile: docker/prod.Dockerfile
+    env_file:
+      - .env
+    environment:
+      MONGODB_URI: mongodb://${MONGO_USER:-tokenpanel}:${MONGO_PASS:-tokenpanel_dev}@mongo:27017/${MONGODB_DB:-tokenpanel}?authSource=admin
+      MONGODB_DB: ${MONGODB_DB:-tokenpanel}
+      PORT: ${PORT:-3000}
+    expose:
+      - "${PORT:-3000}"
+    ports:
+      - "${PORT:-3000}:${PORT:-3000}"
+    restart: unless-stopped
+    profiles: ["prod"]
+    depends_on:
+      mongo:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "bun", "-e", "const r = await fetch('http://127.0.0.1:${PORT:-3000}/health'); process.exit(r.ok ? 0 : 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  tokenpanel-mongo:

@@ -1,0 +1,36 @@
+{
+  "name": "tokenpanel",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck",
+    "test": "turbo run test",
+    "clean": "turbo run clean && rm -rf node_modules",
+    "start": "turbo run start",
+    "docker:start": "docker compose --profile dev --env-file .env up --build -d --remove-orphans",
+    "docker:stop": "docker compose --profile dev --env-file .env stop",
+    "docker:restart": "docker compose --profile dev --env-file .env up --build -d --force-recreate --remove-orphans",
+    "docker:reset": "docker compose --profile dev --env-file .env down -v --remove-orphans && docker compose --profile dev --env-file .env up --build -d --remove-orphans",
+    "docker:logs": "docker compose --profile dev --env-file .env logs -f --tail=100",
+    "docker:ps": "docker compose --profile dev --env-file .env ps",
+    "docker:prod": "docker compose --profile prod --env-file .env up --build -d --remove-orphans",
+    "docker:prod:logs": "docker compose --profile prod --env-file .env logs -f --tail=100",
+    "docker:prod:stop": "docker compose --profile prod --env-file .env stop",
+    "docker:prod:restart": "docker compose --profile prod --env-file .env up --build -d --force-recreate --remove-orphans"
+  },
+  "devDependencies": {
+    "turbo": "^2.5",
+    "typescript": "~6.0.2"
+  },
+  "engines": {
+    "bun": ">=1.2"
+  },
+  "packageManager": "bun@1.2.21"
+}

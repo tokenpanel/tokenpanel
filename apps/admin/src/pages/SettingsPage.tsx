@@ -1,0 +1,454 @@
+import { useEffect, useState, type FormEvent } from "react";
+import { useAuth, type UserRole } from "../auth/AuthContext.tsx";
+import { deleteJson, getJson, postJson } from "../api/client.ts";
+import type {
+  InviteCreateResponse,
+  InviteDeleteResponse,
+  InviteListResponse,
+  Invite,
+} from "../api/types.ts";
+import { formatDate, formatRelative } from "../utils/format.ts";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Badge } from "@/components/ui/badge";
+import { Card } from "@/components/ui/card";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { PasswordInput } from "@/components/ui/password-input";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Copy, Check, User, Mail, ShieldCheck, Lock } from "lucide-react";
+import { PageHeader } from "@/components/PageHeader";
+import { EmptyState } from "@/components/EmptyState";
+import { FadeIn } from "@/components/anim";
+
+export function statusVariant(status: string): "warning" | "success" | "destructive" {
+  switch (status) {
+    case "pending":
+      return "warning";
+    case "accepted":
+      return "success";
+    case "expired":
+    case "revoked":
+      return "destructive";
+    default:
+      return "warning";
+  }
+}
+
+export default function SettingsPage(): React.ReactElement {
+  const { user, updateEmail, changePassword } = useAuth();
+  const isAdmin = user?.role === "admin";
+
+  const [invites, setInvites] = useState<Invite[]>([]);
+  const [loadingInvites, setLoadingInvites] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // --- Profile: email form ---
+  const [emailValue, setEmailValue] = useState("");
+  const [emailSaving, setEmailSaving] = useState(false);
+  const [emailMsg, setEmailMsg] = useState<{ kind: "success" | "error"; text: string } | null>(null);
+
+  useEffect(() => {
+    if (user?.email) setEmailValue(user.email);
+  }, [user?.email]);
+
+  const emailDirty = emailValue.trim() !== (user?.email ?? "");
+
+  async function onSaveEmail(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    const next = emailValue.trim();
+    if (!next || next === user?.email) return;
+    setEmailSaving(true);
+    setEmailMsg(null);
+    try {
+      await updateEmail(next);
+      setEmailMsg({ kind: "success", text: "Email updated." });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Failed to update email.";
+      setEmailMsg({ kind: "error", text: msg });
+    } finally {
+      setEmailSaving(false);
+    }
+  }
+
+  // --- Profile: password form ---
+  const [curPw, setCurPw] = useState("");
+  const [newPw, setNewPw] = useState("");
+  const [confirmPw, setConfirmPw] = useState("");
+  const [showCur, setShowCur] = useState(false);
+  const [showNew, setShowNew] = useState(false);
+  const [showConfirm, setShowConfirm] = useState(false);
+  const [pwSaving, setPwSaving] = useState(false);
+  const [pwMsg, setPwMsg] = useState<{ kind: "success" | "error"; text: string } | null>(null);
+
+  async function onChangePassword(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    if (!curPw || !newPw || !confirmPw) return;
+    if (newPw !== confirmPw) {
+      setPwMsg({ kind: "error", text: "New password and confirmation do not match." });
+      return;
+    }
+    if (newPw.length < 8) {
+      setPwMsg({ kind: "error", text: "New password must be at least 8 characters." });
+      return;
+    }
+    if (newPw === curPw) {
+      setPwMsg({ kind: "error", text: "New password must differ from current." });
+      return;
+    }
+    setPwSaving(true);
+    setPwMsg(null);
+    try {
+      await changePassword(curPw, newPw);
+      setPwMsg({ kind: "success", text: "Password changed." });
+      setCurPw("");
+      setNewPw("");
+      setConfirmPw("");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Failed to change password.";
+      setPwMsg({ kind: "error", text: msg });
+    } finally {
+      setPwSaving(false);
+    }
+  }
+
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteRole, setInviteRole] = useState<UserRole>("member");
+  const [inviteTtl, setInviteTtl] = useState("");
+  const [creating, setCreating] = useState(false);
+  const [createdToken, setCreatedToken] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  const [revokingId, setRevokingId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!isAdmin) return;
+    let cancelled = false;
+    async function load() {
+      setLoadingInvites(true);
+      setError(null);
+      try {
+        const res = await getJson<InviteListResponse>("/admin/invites");
+        if (cancelled) return;
+        setInvites(res.items);
+      } catch (err) {
+        if (cancelled) return;
+        setError(err instanceof Error ? err.message : "Failed to load invites.");
+      } finally {
+        if (!cancelled) setLoadingInvites(false);
+      }
+    }
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, [isAdmin]);
+
+  async function onInvite(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    if (!inviteEmail.trim()) return;
+    setCreating(true);
+    setError(null);
+    const ttlHours = inviteTtl.trim() ? Number(inviteTtl.trim()) : undefined;
+    try {
+      const body: { email: string; role?: string; ttlHours?: number } = {
+        email: inviteEmail.trim(),
+        role: inviteRole,
+      };
+      if (ttlHours !== undefined && !Number.isNaN(ttlHours) && ttlHours > 0) {
+        body.ttlHours = ttlHours;
+      }
+      const res = await postJson<InviteCreateResponse>("/admin/invites", body);
+      setCreatedToken(res.token);
+      setInvites((prev) => [res.invite, ...prev.filter((i) => i._id !== res.invite._id)]);
+      setInviteEmail("");
+      setInviteTtl("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to create invite.");
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  async function onRevokeInvite(id: string) {
+    setRevokingId(id);
+    setError(null);
+    try {
+      await deleteJson<InviteDeleteResponse>(`/admin/invites/${encodeURIComponent(id)}`);
+      setInvites((prev) => prev.filter((i) => i._id !== id));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to revoke invite.");
+    } finally {
+      setRevokingId(null);
+    }
+  }
+
+  async function copyToken(token: string) {
+    try {
+      await navigator.clipboard.writeText(token);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* clipboard may be unavailable */
+    }
+  }
+
+  const signupUrl = createdToken
+    ? `${window.location.origin}/signup?token=${encodeURIComponent(createdToken)}`
+    : "";
+
+  const initials = (user?.username ?? "U").slice(0, 2).toUpperCase();
+
+  return (
+    <div className="flex flex-col gap-6 p-6 lg:p-8">
+      <PageHeader title="Settings" description="Profile and organization management." />
+
+      {error ? (
+        <Alert variant="destructive">
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      ) : null}
+
+      <Tabs defaultValue="profile" className="gap-4">
+        <TabsList>
+          <TabsTrigger value="profile"><User className="size-4" />Profile</TabsTrigger>
+          <TabsTrigger value="invites"><Mail className="size-4" />Invites</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="profile">
+          <div className="flex max-w-2xl flex-col gap-4">
+            <Card className="p-6">
+              <div className="flex items-center gap-4">
+                <Avatar className="size-14">
+                  <AvatarFallback className="text-base">{initials}</AvatarFallback>
+                </Avatar>
+                <div className="flex flex-col gap-0.5">
+                  <span className="text-lg font-semibold">{user?.username ?? "—"}</span>
+                  <div className="flex items-center gap-2 mt-1">
+                    <Badge variant="secondary">{user?.role ?? "—"}</Badge>
+                    {isAdmin ? <ShieldCheck className="size-3.5 text-success" /> : null}
+                  </div>
+                </div>
+              </div>
+              <div className="mt-6 grid grid-cols-[130px_1fr] gap-x-4 gap-y-2 text-sm">
+                <div className="text-muted-foreground">Username</div><div className="font-mono text-xs">{user?.username ?? "—"}</div>
+                <div className="text-muted-foreground">Role</div><div><Badge variant="secondary">{user?.role ?? "—"}</Badge></div>
+                <div className="text-muted-foreground">Organization</div><div className="font-mono text-xs">{user?.activeOrganizationId ?? "—"}</div>
+              </div>
+            </Card>
+
+            <Card className="p-6">
+              <h2 className="text-base font-semibold">Email</h2>
+              <p className="mt-1 text-sm text-muted-foreground">
+                The address used for your account. Must be unique.
+              </p>
+              <form className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-end" onSubmit={onSaveEmail}>
+                <div className="flex flex-1 flex-col gap-1.5">
+                  <Label htmlFor="profile-email">Email address</Label>
+                  <Input
+                    id="profile-email"
+                    type="email"
+                    value={emailValue}
+                    onChange={(e) => setEmailValue(e.target.value)}
+                    disabled={emailSaving}
+                    required
+                  />
+                </div>
+                <Button type="submit" disabled={emailSaving || !emailDirty}>
+                  {emailSaving ? "Saving…" : "Save email"}
+                </Button>
+              </form>
+              {emailMsg ? (
+                <p className={`mt-2 text-sm ${emailMsg.kind === "success" ? "text-success" : "text-destructive"}`}>
+                  {emailMsg.text}
+                </p>
+              ) : null}
+            </Card>
+
+            <Card className="p-6">
+              <h2 className="text-base font-semibold">Password</h2>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Enter your current password to set a new one. Minimum 8 characters.
+              </p>
+              <form className="mt-4 flex flex-col gap-3" onSubmit={onChangePassword}>
+                <div className="flex flex-col gap-1.5">
+                  <Label htmlFor="cur-pw">Current password</Label>
+                  <PasswordInput
+                    id="cur-pw"
+                    value={curPw}
+                    onChange={(e) => setCurPw(e.target.value)}
+                    showPassword={showCur}
+                    onToggleShow={() => setShowCur((v) => !v)}
+                    disabled={pwSaving}
+                    autoComplete="current-password"
+                    required
+                  />
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <Label htmlFor="new-pw">New password</Label>
+                  <PasswordInput
+                    id="new-pw"
+                    value={newPw}
+                    onChange={(e) => setNewPw(e.target.value)}
+                    showPassword={showNew}
+                    onToggleShow={() => setShowNew((v) => !v)}
+                    disabled={pwSaving}
+                    autoComplete="new-password"
+                    required
+                  />
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <Label htmlFor="confirm-pw">Confirm new password</Label>
+                  <PasswordInput
+                    id="confirm-pw"
+                    value={confirmPw}
+                    onChange={(e) => setConfirmPw(e.target.value)}
+                    showPassword={showConfirm}
+                    onToggleShow={() => setShowConfirm((v) => !v)}
+                    disabled={pwSaving}
+                    autoComplete="new-password"
+                    required
+                  />
+                </div>
+                <div>
+                  <Button type="submit" disabled={pwSaving || !curPw || !newPw || !confirmPw}>
+                    {pwSaving ? "Changing…" : "Change password"}
+                  </Button>
+                </div>
+              </form>
+              {pwMsg ? (
+                <p className={`mt-2 text-sm ${pwMsg.kind === "success" ? "text-success" : "text-destructive"}`}>
+                  {pwMsg.text}
+                </p>
+              ) : null}
+            </Card>
+          </div>
+        </TabsContent>
+
+        <TabsContent value="invites">
+          {isAdmin ? (
+            <div className="flex flex-col gap-4">
+              {createdToken ? (
+                <Alert variant="info">
+                  <div className="flex flex-col gap-2">
+                    <div className="text-sm font-semibold">
+                      Invite created. Share this signup link — token shown only once.
+                    </div>
+                    <p className="text-sm text-muted-foreground">
+                      Send this URL to the invitee. They can use it to sign up and join your organization.
+                    </p>
+                    <div className="rounded border border-border bg-muted px-2 py-1.5 font-mono text-xs break-all">{signupUrl}</div>
+                    <div className="flex items-center gap-2">
+                      <code className="flex-1 rounded border border-border bg-muted px-2 py-1.5 font-mono text-xs break-all">{createdToken}</code>
+                      <Button variant="outline" size="sm" onClick={() => void copyToken(createdToken)}>
+                        {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+                        {copied ? "Copied" : "Copy token"}
+                      </Button>
+                      <Button variant="ghost" size="sm" onClick={() => setCreatedToken(null)}>Dismiss</Button>
+                    </div>
+                  </div>
+                </Alert>
+              ) : null}
+
+              <Card className="p-5">
+                <form className="flex flex-col gap-3 sm:flex-row sm:items-end" onSubmit={onInvite}>
+                  <div className="flex flex-1 flex-col gap-1.5">
+                    <Label htmlFor="invite-email">Email</Label>
+                    <Input id="invite-email" type="email" placeholder="newuser@example.com" value={inviteEmail} required disabled={creating} onChange={(e) => setInviteEmail(e.target.value)} />
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                    <Label htmlFor="invite-role">Role</Label>
+                    <Select value={inviteRole} onValueChange={(v) => setInviteRole(v as UserRole)} disabled={creating}>
+                      <SelectTrigger id="invite-role" className="w-[120px]">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="member">Member</SelectItem>
+                        <SelectItem value="admin">Admin</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                    <Label htmlFor="invite-ttl">TTL (hours, optional)</Label>
+                    <Input id="invite-ttl" type="number" min={1} placeholder="72" value={inviteTtl} disabled={creating} onChange={(e) => setInviteTtl(e.target.value)} className="w-[160px]" />
+                  </div>
+                  <Button type="submit" disabled={creating}>{creating ? "Inviting…" : "Invite User"}</Button>
+                </form>
+                <p className="mt-2 text-xs text-muted-foreground">Default TTL is 72 hours if left blank.</p>
+              </Card>
+
+              {loadingInvites ? null : invites.length === 0 ? (
+                <Card className="p-8">
+                  <EmptyState
+                    icon={<Mail className="size-5" />}
+                    title="No invites yet"
+                    description="Invite new users to your organization to let them sign up."
+                  />
+                </Card>
+              ) : (
+                <FadeIn>
+                  <Card className="overflow-hidden p-0">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Email</TableHead>
+                          <TableHead>Role</TableHead>
+                          <TableHead>Status</TableHead>
+                          <TableHead>Expires</TableHead>
+                          <TableHead>Created</TableHead>
+                          <TableHead className="text-right">Actions</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {invites.map((inv) => (
+                          <TableRow key={inv._id}>
+                            <TableCell>{inv.email}</TableCell>
+                            <TableCell className="capitalize">{inv.role}</TableCell>
+                            <TableCell><Badge variant={statusVariant(inv.status)}>{inv.status}</Badge></TableCell>
+                            <TableCell>{formatDate(inv.expiresAt)}</TableCell>
+                            <TableCell className="text-muted-foreground">{formatRelative(inv.createdAt)}</TableCell>
+                            <TableCell className="text-right">
+                              {inv.status === "pending" ? (
+                                <Button variant="destructive" size="sm" disabled={revokingId === inv._id} onClick={() => void onRevokeInvite(inv._id)}>
+                                  {revokingId === inv._id ? "Revoking…" : "Revoke"}
+                                </Button>
+                              ) : null}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </Card>
+                </FadeIn>
+              )}
+            </div>
+          ) : (
+            <Card className="max-w-2xl p-6">
+              <EmptyState
+                icon={<Lock className="size-5" />}
+                title="Admins only"
+                description="Only admins can manage invites. Contact an admin if you need to invite a new user."
+              />
+            </Card>
+          )}
+        </TabsContent>
+
+      </Tabs>
+    </div>
+  );
+}

@@ -1,0 +1,23 @@
+# Caddy reverse proxy config for TokenPanel.
+# Rendered by tokenpanel-setup into /etc/tokenpanel/Caddyfile.
+# Auto-HTTPS via Let's Encrypt — zero config.
+
+{
+	email ${ADMIN_EMAIL}
+}
+
+${DOMAIN} {
+	reverse_proxy api:3000 {
+		header_up X-Real-IP {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+	}
+
+	encode gzip zstd
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy strict-origin-when-cross-origin
+	}
+}

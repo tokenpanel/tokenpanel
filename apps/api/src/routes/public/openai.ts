@@ -9,6 +9,7 @@ import {
   streamWithFallback,
   computeCharges,
   settleUsage,
+  estimatePromptTokens,
   BillingError,
 } from "../../lib/billing.ts";
 import type { ChatRequest, ChatMessage, ContentPart } from "../../providers/index.ts";
@@ -144,8 +145,10 @@ publicOpenAI.post("/v1/chat/completions", async (c) => {
       customerId: customer._id,
       apiKeyModelWhitelist: apiKey.modelWhitelist,
       aliasId: body.model,
-      estimatedTokens: 0,
-      estimatedSpendMinor: 0,
+      // Conservative pre-call estimate so balance + spend/token limits are
+      // enforced BEFORE the paid upstream call (previously 0/0 → no enforcement).
+      estimatedPromptTokens: estimatePromptTokens(request.messages),
+      maxCompletionTokens: body.max_tokens ?? body.max_completion_tokens,
     });
   } catch (err) {
     if (err instanceof BillingError) {
@@ -166,23 +169,29 @@ publicOpenAI.post("/v1/chat/completions", async (c) => {
       const outcome = await callWithFallback({ orgId, model, request });
       const durationMs = Date.now() - start;
       const charges = computeCharges({ entry: outcome.entry, model, usage: outcome.response.usage });
-      await settleUsage({
-        orgId,
-        customerId: customer._id,
-        apiKeyId: apiKey._id,
-        model,
-        entry: outcome.entry,
-        provider: outcome.provider,
-        protocol: "openai",
-        usage: outcome.response.usage,
-        costMinor: charges.costMinor,
-        priceMinor: charges.priceMinor,
-        currency: charges.currency,
-        providerRequestId: outcome.response.providerRequestId,
-        status: 200,
-        durationMs,
-        rules,
-      });
+      try {
+        await settleUsage({
+          orgId,
+          customerId: customer._id,
+          apiKeyId: apiKey._id,
+          model,
+          entry: outcome.entry,
+          provider: outcome.provider,
+          protocol: "openai",
+          usage: outcome.response.usage,
+          costMinor: charges.costMinor,
+          priceMinor: charges.priceMinor,
+          currency: charges.currency,
+          providerRequestId: outcome.response.providerRequestId,
+          status: 200,
+          durationMs,
+          rules,
+        });
+      } catch (settleErr) {
+        // The upstream call already succeeded; a settlement failure must not
+        // turn a 200 into a 502. Log so it can be reconciled (dxe).
+        console.error("[chat/completions] settlement failed (non-stream):", settleErr);
+      }
 
       const r = outcome.response;
       return c.json({
@@ -301,26 +310,33 @@ publicOpenAI.post("/v1/chat/completions", async (c) => {
         const totalTokens = promptTokens + completionTokens;
         const usage = { promptTokens, completionTokens, reasoningTokens, cacheReadTokens, cacheWriteTokens, totalTokens };
         if (activeEntry && activeProviderId && (promptTokens > 0 || completionTokens > 0)) {
-          const db = await getDb();
-          const providerDoc = await db.providers.findOne({ _id: activeProviderId });
-          if (providerDoc && activeEntry) {
-            const charges = computeCharges({ entry: activeEntry, model, usage });
-            await settleUsage({
-              orgId,
-              customerId: customer._id,
-              apiKeyId: apiKey._id,
-              model,
-              entry: activeEntry,
-              provider: providerDoc,
-              protocol: "openai",
-              usage,
-              costMinor: charges.costMinor,
-              priceMinor: charges.priceMinor,
-              currency: charges.currency,
-              status: 200,
-              durationMs,
-              rules,
-            });
+          // Stream-safe settlement: the client has already received [DONE], so a
+          // settlement failure cannot be surfaced to it. Wrap + log so failures
+          // are reliable to reconcile instead of silently lost (dxe).
+          try {
+            const db = await getDb();
+            const providerDoc = await db.providers.findOne({ _id: activeProviderId });
+            if (providerDoc && activeEntry) {
+              const charges = computeCharges({ entry: activeEntry, model, usage });
+              await settleUsage({
+                orgId,
+                customerId: customer._id,
+                apiKeyId: apiKey._id,
+                model,
+                entry: activeEntry,
+                provider: providerDoc,
+                protocol: "openai",
+                usage,
+                costMinor: charges.costMinor,
+                priceMinor: charges.priceMinor,
+                currency: charges.currency,
+                status: 200,
+                durationMs,
+                rules,
+              });
+            }
+          } catch (settleErr) {
+            console.error("[chat/completions] settlement failed (stream):", settleErr);
           }
         }
       }

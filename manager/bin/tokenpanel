@@ -1,0 +1,354 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/../lib/config.sh"
+source "${SCRIPT_DIR}/../lib/output.sh"
+source "${SCRIPT_DIR}/../lib/preflight.sh"
+source "${SCRIPT_DIR}/../lib/health.sh"
+
+MANAGER_VERSION="$(cat "${SCRIPT_DIR}/../VERSION" 2>/dev/null || echo 'unknown')"
+
+# Compare two semver strings. Returns 0 if $1 >= $2, 1 if $1 < $2, 2 if either
+# is not parseable as major.minor.patch (after stripping a leading 'v'). Used
+# by the update downgrade check — lexicographic compare mis-orders 1.10.0 <
+# 1.9.0. Non-semver inputs (e.g. "unknown", commit hashes) return 2 so the
+# caller can skip the check instead of false-refusing.
+semver_ge() {
+  local a="$1" b="$2"
+  a="${a#v}"; a="${a#V}"
+  b="${b#v}"; b="${b#V}"
+  [[ "$a" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+) ]] || return 2
+  local a1="${BASH_REMATCH[1]}" a2="${BASH_REMATCH[2]}" a3="${BASH_REMATCH[3]}"
+  [[ "$b" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+) ]] || return 2
+  local b1="${BASH_REMATCH[1]}" b2="${BASH_REMATCH[2]}" b3="${BASH_REMATCH[3]}"
+  (( a1 > b1 )) && return 0
+  (( a1 < b1 )) && return 1
+  (( a2 > b2 )) && return 0
+  (( a2 < b2 )) && return 1
+  (( a3 > b3 )) && return 0
+  (( a3 < b3 )) && return 1
+  return 0 # equal
+}
+
+usage() {
+  cat <<EOF
+TokenPanel Manager v${MANAGER_VERSION}
+
+Usage: tokenpanel <command> [args]
+
+Lifecycle:
+  status       Show container state, version, pending migrations, disk usage
+  start        Start all services (preflight + health check)
+  stop         Stop all services
+  restart      Restart all services
+  rebuild      Force-recreate containers (keeps data)
+
+Updates:
+  update       Update to latest stable (backup → build → migrate → swap)
+  migrate      Run pending migrations without updating image
+
+Backup:
+  backup       Create a mongodump backup
+  restore <f>  Restore from a backup archive
+
+Diagnostics:
+  logs [-f]    Tail container logs (optionally follow)
+  enter [svc]  Exec shell into a container (default: api)
+  doctor       Run diagnostics (docker, disk, mongo RS, ports)
+  version      Show manager + app versions
+
+Destructive:
+  destroy      Stop + remove containers (KEEPS data)
+  reset        Stop + remove containers + WIPE ALL data (strong confirm)
+
+Run 'tokenpanel <command> --help' for command-specific options.
+EOF
+}
+
+cmd_status() {
+  preflight_quick 2>/dev/null || true
+  step "status" "containers:"
+  docker compose -f "$APP_YML" ps --format 'table {{.Name}}\t{{.Status}}\t{{.Ports}}' 2>/dev/null || warn "containers not running"
+
+  local app_version
+  app_version="$(cd "$INSTALL_DIR" 2>/dev/null && git describe --tags 2>/dev/null || echo 'unknown')"
+  info "app version: $app_version"
+
+  local last_backup
+  last_backup="$(find "$BACKUP_DIR" -maxdepth 1 -type f -name '*.gz' 2>/dev/null | sort | tail -1 || true)"
+  [ -n "$last_backup" ] && info "last backup: $(basename "$last_backup")" || warn "no backups found"
+
+  local disk_used
+  # `|| true` inside the substitution guards against `du` failing when the
+  # data dir does not exist yet (fresh host, status run before install). Under
+  # set -e + pipefail the pipeline's non-zero exit would otherwise abort the
+  # whole status command before the remaining diagnostics print.
+  disk_used="$(du -sh "$DATA_DIR" 2>/dev/null | cut -f1 || true)"
+  if [ -n "$disk_used" ]; then
+    info "data dir: $disk_used at $DATA_DIR"
+  fi
+
+  # Pending migrations. migration_status surfaces stderr + the real exit code
+  # (no longer suppressed), so invalid migration files are reported loudly.
+  # status is read-only: tolerate an offline api with a warning instead of
+  # aborting the whole diagnostic.
+  source "${SCRIPT_DIR}/../lib/migrate.sh" 2>/dev/null || true
+  if declare -F migration_status >/dev/null 2>&1; then
+    step "status" "pending migrations:"
+    if migration_status; then
+      :
+    else
+      warn "migrations: status unavailable (api not running, or migration files invalid — see errors above)"
+    fi
+  fi
+
+  # Explicit success: status is a read-only diagnostic command. A missing data
+  # dir (uninstalled host) must not leak a non-zero exit code through the empty
+  # `disk_used` test above — the command already printed all it could.
+  return 0
+}
+
+cmd_start() {
+  preflight_quick || die "preflight failed"
+  step "start" "bringing up containers..."
+  docker compose -f "$APP_YML" up -d --remove-orphans
+  wait_for_health api 60 || die "api did not become healthy"
+  ok "TokenPanel is up"
+}
+
+cmd_stop() {
+  step "stop" "stopping containers..."
+  docker compose -f "$APP_YML" stop
+  ok "stopped"
+}
+
+cmd_restart() {
+  cmd_stop
+  cmd_start
+}
+
+cmd_logs() {
+  local follow=""
+  local service=""
+  if [[ "${1:-}" == "-f" || "${1:-}" == "--follow" ]]; then
+    follow="-f"
+    service="${2:-}"
+  else
+    service="${1:-}"
+  fi
+  docker compose -f "$APP_YML" logs $follow --tail=100 $service
+}
+
+cmd_enter() {
+  local service="${1:-api}"
+  docker compose -f "$APP_YML" exec "$service" /bin/sh || \
+    die "container '$service' not running. Try 'tokenpanel start' first."
+}
+
+cmd_doctor() {
+  step "doctor" "running diagnostics..."
+  local fail=0
+
+  docker info >/dev/null 2>&1 && ok "docker running" || { err "docker not running"; fail=1; }
+
+  local free_mb
+  free_mb="$(df -m /var 2>/dev/null | tail -1 | awk '{print $4}')"
+  [ "${free_mb:-0}" -gt 2048 ] && ok "disk: ${free_mb}MB free" || warn "low disk: ${free_mb}MB free"
+
+  docker compose -f "$APP_YML" exec -T mongo mongosh --quiet \
+    --eval 'db.hello().isWritablePrimary' 2>/dev/null | grep -q true && \
+    ok "mongo: replica set primary" || { err "mongo: not primary or unreachable"; fail=1; }
+
+  for port in 80 443 3000; do
+    if ss -tlnp 2>/dev/null | grep -q ":${port} "; then
+      warn "port ${port} in use"
+    fi
+  done
+
+  [ "$fail" -eq 0 ] && ok "all checks passed" || { err "issues found"; exit 1; }
+}
+
+cmd_version() {
+  echo "TokenPanel Manager v${MANAGER_VERSION}"
+  local app_version commit
+  app_version="$(cd "$INSTALL_DIR" 2>/dev/null && git describe --tags 2>/dev/null || echo 'unknown')"
+  commit="$(cd "$INSTALL_DIR" 2>/dev/null && git rev-parse --short HEAD 2>/dev/null || echo 'unknown')"
+  echo "App: ${app_version}"
+  echo "Commit: ${commit}"
+}
+
+cmd_rebuild() {
+  preflight_quick || die "preflight failed"
+  step "rebuild" "force-recreating containers (keeping data)..."
+  docker compose -f "$APP_YML" up -d --force-recreate --remove-orphans
+  wait_for_health api 60 || die "api did not become healthy"
+  ok "rebuilt"
+}
+
+cmd_destroy() {
+  step "destroy" "stopping + removing containers (keeping data)..."
+  echo
+  warn "This stops and removes containers. Your DATA IS PRESERVED."
+  warn "Use this when you want to rebuild containers without losing the database."
+  echo
+  read -rp "Proceed? [y/N] " confirm
+  [[ "$confirm" =~ ^[Yy] ]] || { info "aborted"; exit 0; }
+  docker compose -f "$APP_YML" down --remove-orphans
+  ok "containers removed. Data preserved at $DATA_DIR"
+  info "to restart: tokenpanel start"
+}
+
+cmd_reset() {
+  source "${SCRIPT_DIR}/../lib/config.sh"
+  echo -e "${RED}${BOLD}⚠  TOKENPANEL RESET  ⚠${NC}"
+  echo
+  echo "This will PERMANENTLY DESTROY:"
+  echo "  • All MongoDB data (organizations, users, customers, models, usage, billing)"
+  echo "  • All backups (mongodump archives)"
+  echo "  • All Caddy certificates (Let's Encrypt)"
+  echo "  • All container state"
+  echo
+  echo "This will PRESERVE:"
+  echo "  • Manager code (/opt/tokenpanel)"
+  echo "  • Configuration (/etc/tokenpanel)"
+  echo
+  echo -e "${RED}This action is IRREVERSIBLE. No recovery is possible after reset.${NC}"
+  echo
+
+  local domain="${DOMAIN:-}"
+  if [ -z "$domain" ]; then
+    err "DOMAIN not set in config — cannot confirm"
+    exit 1
+  fi
+  echo "To confirm, type your domain name exactly: ${domain}"
+  read -rp "> " confirm
+  [ "$confirm" = "$domain" ] || { err "domain mismatch — aborting"; exit 1; }
+
+  echo
+  read -rp "Type RESET in capital letters to proceed: " confirm2
+  [ "$confirm2" = "RESET" ] || { err "did not type RESET — aborting"; exit 1; }
+
+  echo
+  warn "resetting in 5 seconds... (Ctrl+C to cancel)"
+  sleep 5
+
+  step "reset" "stopping containers..."
+  docker compose -f "$APP_YML" down -v --remove-orphans 2>/dev/null || true
+
+  step "reset" "removing data directory..."
+  if ! tp_safe_destructive_path "$DATA_DIR"; then
+    die "refusing to wipe unsafe data path: '$DATA_DIR' (must be under /opt, /var, /etc, /srv, or /usr/local — not a bare root). Aborting."
+  fi
+  rm -rf "${DATA_DIR:?}"
+  mkdir -p "$DATA_DIR"/mongo "$DATA_DIR"/backups "$DATA_DIR"/caddy
+
+  step "reset" "disabling systemd service..."
+  systemctl stop tokenpanel 2>/dev/null || true
+  systemctl disable tokenpanel 2>/dev/null || true
+
+  step "reset" "pruning images..."
+  docker image rm tokenpanel/app:current tokenpanel/app:previous 2>/dev/null || true
+  docker image prune -f 2>/dev/null || true
+
+  echo
+  ok "reset complete — all data destroyed"
+  info "to reinstall: tokenpanel-setup"
+}
+
+cmd_update() {
+  local target_version="${1:-}"
+
+  source "${SCRIPT_DIR}/../lib/backup.sh"
+  source "${SCRIPT_DIR}/../lib/build.sh"
+  source "${SCRIPT_DIR}/../lib/migrate.sh"
+  source "${SCRIPT_DIR}/../lib/rollback.sh"
+
+  echo -e "${BOLD}TokenPanel Update${NC}"
+  echo
+
+  # ── Phase 1: PREFLIGHT ──
+  step "1/6" "preflight checks..."
+  preflight_full || die "preflight failed — aborting (nothing changed)"
+
+  local current_version
+  current_version="$(cd "$INSTALL_DIR" 2>/dev/null && git describe --tags 2>/dev/null || echo 'unknown')"
+  if [ -n "$target_version" ]; then
+    info "target: $target_version (current: $current_version)"
+    if [ "$current_version" != "unknown" ]; then
+      local cmp=0
+      semver_ge "$target_version" "$current_version" || cmp=$?
+      if [ "$cmp" -eq 1 ]; then
+        die "refusing downgrade: $current_version → $target_version. Restore from backup instead."
+      elif [ "$cmp" -eq 2 ]; then
+        warn "cannot compare versions ($current_version / $target_version) — skipping downgrade check"
+      fi
+    fi
+  else
+    info "current: $current_version, target: latest stable"
+  fi
+  ok "preflight passed"
+
+  # ── Phase 2: BACKUP ──
+  step "2/6" "creating backup..."
+  local backup_file
+  backup_file="$(create_backup "pre-update")" || die "backup failed — aborting (nothing changed)"
+  ok "backup ready: $(basename "$backup_file")"
+
+  # ── Phase 3: FETCH + BUILD ──
+  step "3/6" "fetching + building new image..."
+  fetch_and_build "$target_version" || die "build failed — aborting (old container still serving, backup available)"
+  ok "new image built and tagged"
+
+  # ── Phase 4: PRE-MIGRATE ──
+  # Run pre/ migrations from the NEW image (tokenpanel/app:${NEW_IMAGE_TAG})
+  # in a one-shot container — the old container keeps serving but lacks the
+  # new migration files, so we must NOT exec into it. Same compose
+  # network/env as the live api; mongo is untouched.
+  step "4/6" "running pre-deploy migrations from new image (old container still serving)..."
+  run_migrations_image "pre" "$NEW_IMAGE_TAG" || die "pre-migration failed — aborting (old container serving, db rolled back per-txn, backup available)"
+  ok "pre-deploy migrations applied (from tokenpanel/app:${NEW_IMAGE_TAG})"
+
+  # ── Phase 5: SWAP ──
+  step "5/6" "swapping to new container..."
+  swap_containers || die "swap failed — see rollback output above"
+  ok "new container is live and healthy"
+
+  # ── Phase 6: POST-MIGRATE ──
+  step "6/6" "running post-deploy migrations..."
+  run_migrations "post" || {
+    err "post-migration failed!"
+    err "new code is live but some destructive migrations may not have applied."
+    err "check 'tokenpanel logs' and 'tokenpanel doctor'."
+    err "if needed, restore from backup: tokenpanel restore $backup_file"
+    return 1
+  }
+  ok "post-deploy migrations applied"
+
+  cleanup_old_images
+
+  echo
+  ok "══════════════════════════════════════"
+  ok "  Update complete: $current_version → ${target_version:-latest}"
+  ok "  Backup: $(basename "$backup_file")"
+  ok "══════════════════════════════════════"
+}
+
+case "${1:-}" in
+  status)   cmd_status ;;
+  start)    cmd_start ;;
+  stop)     cmd_stop ;;
+  restart)  cmd_restart ;;
+  rebuild)  cmd_rebuild ;;
+  destroy)  cmd_destroy ;;
+  reset)    cmd_reset ;;
+  logs)     shift; cmd_logs "$@" ;;
+  enter)    shift; cmd_enter "$@" ;;
+  doctor)   cmd_doctor ;;
+  version)  cmd_version ;;
+  update)   shift; cmd_update "$@" ;;
+  backup)   source "${SCRIPT_DIR}/../lib/backup.sh"; create_backup "manual" ;;
+  restore)  source "${SCRIPT_DIR}/../lib/backup.sh"; restore_backup "${2:-}" ;;
+  migrate)  source "${SCRIPT_DIR}/../lib/migrate.sh"; run_migrations "${2:-pre}" ;;
+  *)        usage ;;
+esac

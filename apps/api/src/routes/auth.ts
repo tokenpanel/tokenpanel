@@ -5,6 +5,7 @@ import { getDb } from "@tokenpanel/db";
 import type { AuthVariables } from "../middleware/auth.ts";
 import { requireAuth } from "../middleware/auth.ts";
 import { hashPassword, verifyPassword, signJwt } from "../lib/crypto.ts";
+import { loginThrottle } from "../lib/throttle.ts";
 
 export const loginBody = z.object({
   username: z.string().min(1).max(60),
@@ -71,18 +72,32 @@ auth.get("/status", async (c) => {
 
 auth.post("/login", zValidator("json", loginBody), async (c) => {
   const body = c.req.valid("json");
+  // Throttle credential-stuffing per username before any DB lookup.
+  const gate = loginThrottle.check(body.username);
+  if (!gate.allowed) {
+    return c.json(
+      { error: "too_many_attempts", retryAfterSeconds: gate.retryAfterSeconds },
+      429,
+      { "Retry-After": String(gate.retryAfterSeconds) },
+    );
+  }
   const db = await getDb();
   const user = await db.users.findOne({ username: body.username });
   if (!user) {
+    loginThrottle.recordFailure(body.username);
     return c.json({ error: "invalid_credentials" }, 401);
   }
   const ok = await verifyPassword(body.password, user.passwordHash);
   if (!ok) {
+    loginThrottle.recordFailure(body.username);
     return c.json({ error: "invalid_credentials" }, 401);
   }
+  // Correct password — not a brute-force attempt; don't penalize. A disabled
+  // account with the right password returns 403 without recording a failure.
   if (user.status === "disabled") {
     return c.json({ error: "forbidden", message: "user disabled" }, 403);
   }
+  loginThrottle.recordSuccess(body.username);
   const secret = process.env.JWT_SECRET;
   if (!secret) {
     return c.json({ error: "server_misconfigured" }, 500);

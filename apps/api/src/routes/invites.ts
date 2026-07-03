@@ -6,6 +6,7 @@ import { getDb, type InviteDoc, type UserDoc, type UserRole } from "@tokenpanel/
 import type { AuthVariables } from "../middleware/auth.ts";
 import { requireAuth, requireRole } from "../middleware/auth.ts";
 import { hashPassword, verifyPassword, randomToken, hashToken, signJwt } from "../lib/crypto.ts";
+import { inviteThrottle } from "../lib/throttle.ts";
 
 const inviteRoutes = new Hono<{ Variables: AuthVariables }>();
 
@@ -76,11 +77,24 @@ export const acceptBody = z.object({
 export const acceptInviteRoute = new Hono();
 acceptInviteRoute.post("/accept-invite", zValidator("json", acceptBody), async (c) => {
   const body = c.req.valid("json");
+  // Throttle invite-token guessing before any DB lookup.
+  const gate = inviteThrottle.check(body.token);
+  if (!gate.allowed) {
+    return c.json(
+      { error: "too_many_attempts", retryAfterSeconds: gate.retryAfterSeconds },
+      429,
+      { "Retry-After": String(gate.retryAfterSeconds) },
+    );
+  }
   const db = await getDb();
   const tokenHash = hashToken(body.token);
   const invite = await db.invites.findOne({ tokenHash, status: "pending" });
-  if (!invite) return c.json({ error: "invalid_or_expired" }, 404);
+  if (!invite) {
+    inviteThrottle.recordFailure(body.token);
+    return c.json({ error: "invalid_or_expired" }, 404);
+  }
   if (invite.expiresAt.getTime() < Date.now()) {
+    inviteThrottle.recordFailure(body.token);
     return c.json({ error: "expired" }, 410);
   }
 
@@ -103,7 +117,10 @@ acceptInviteRoute.post("/accept-invite", zValidator("json", acceptBody), async (
 
   if (existingUser) {
     const ok = await verifyPassword(body.password, existingUser.passwordHash);
-    if (!ok) return c.json({ error: "invalid_credentials" }, 401);
+    if (!ok) {
+      inviteThrottle.recordFailure(body.token);
+      return c.json({ error: "invalid_credentials" }, 401);
+    }
     if (existingUser.status !== "active") {
       return c.json({ error: "forbidden", reason: "user_disabled" }, 403);
     }
@@ -160,6 +177,7 @@ acceptInviteRoute.post("/accept-invite", zValidator("json", acceptBody), async (
     { $set: { status: "accepted", acceptedAt: now, updatedAt: now } },
   );
 
+  inviteThrottle.recordSuccess(body.token);
   const token = signJwt(
     {
       sub: userId.toHexString(),

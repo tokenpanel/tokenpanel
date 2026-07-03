@@ -36,6 +36,14 @@ turbo.json                       task pipeline (build/dev/lint/typecheck/clean)
 - Money is stored as integer minor units (`amountMinor`) + ISO currency code, never floats.
 - Env: Bun auto-loads `.env`; no dotenv import. Required vars: `MONGODB_URI`, `MONGODB_DB`, optional `PORT`.
 - API fail-fast: server exits if MongoDB is unreachable on boot.
+- **Migrations**: ordered, timestamped migration files in `packages/db/migrations/{pre,post}/`.
+  `pre/` runs before `Bun.serve` (additive only); `post/` runs after deploy (destructive allowed,
+  gated by `RUN_POST_MIGRATIONS=1`). SafeMigrate lint rejects destructive ops (`drop`, `$unset`,
+  `$rename`, `collMod`, `dropIndex`) in `pre/` `up()` functions. Each migration runs in a
+  transaction (replica set required). Tracked in `_migrations` collection with checksum.
+  Lock via `_migration_lock` (TTL 5 min, renewed by a 60 s heartbeat while a
+  migration runs; dead holders still auto-expire). Commands: `bun run db:new-migration`,
+  `bun run db:migrate`, `bun run db:status` (run from `packages/db`).
 
 ### Common commands
 
@@ -50,8 +58,8 @@ bun --filter @tokenpanel/api dev    # run one workspace's dev
 
 ### Docker local-dev
 
-`compose.yml` boots MongoDB 8 + api + admin with hot-reload bind-mounts. Bun
-scripts wrap `docker compose`:
+`compose.yml` boots MongoDB 8 (single-node replica set) + api + admin with
+hot-reload bind-mounts. Bun scripts wrap `docker compose`:
 
 ```bash
 bun run docker:start    # build + up -d (reuses mongo volume)
@@ -66,10 +74,31 @@ bun run docker:ps       # container status
 - `docker:start` requires a `.env` (copy `.env.example`). Bun auto-loads it for
   non-Docker dev; compose reads it via `--env-file .env`.
 - Inside compose, api connects to `mongo` via `MONGODB_URI` built from
-  `MONGO_USER`/`MONGO_PASS` (not the host `MONGODB_URI`).
+  `MONGO_USER`/`MONGO_PASS` with `directConnection=true` (not the host `MONGODB_URI`).
+- MongoDB runs as a **single-node replica set** (`rs0`). A `mongo-init` one-shot
+  container initiates the RS on first boot (idempotent). This enables multi-document
+  ACID transactions (required by the migration runner).
+- A keyfile is auto-generated on first boot (stored in the mongo data volume) for
+  internal RS authentication.
 - Mongo exposed on host `:27017` (`MONGO_HOST_PORT` to remap). api `:3000`,
   admin `:5173`.
 - `docker:reset` is destructive: drops the `tokenpanel-mongo` volume.
+- For non-Docker dev (`bun run dev`), start local mongod with `--replSet rs0`
+  and initiate it (`mongosh --eval 'rs.initiate({_id:"rs0",members:[{_id:0,host:"localhost:27017"}]})'`)
+  to enable transaction support.
+
+### Deployment Manager
+
+`manager/` contains the deployment system (bash scripts + templates, modeled
+after Discourse's `discourse_docker`). Installed to `/opt/tokenpanel` via curl
+installer. All scripts are bash (no node/bun dependency for the manager itself).
+
+- `manager/bin/tokenpanel` — operator CLI (status, start, stop, update, backup, etc.)
+- `manager/bin/tokenpanel-setup` — interactive installer wizard
+- `manager/lib/*.sh` — shared library (config, output, preflight, health, backup, etc.)
+- `manager/templates/*.tmpl` — parameterized compose/Caddyfile/systemd templates
+- Config: `/etc/tokenpanel/` (app.yml + .env), Data: `/var/tokenpanel/shared/`
+- Build on host (git clone + docker build) for future plugin support.
 
 ## Non-Interactive Shell Commands
 

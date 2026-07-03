@@ -1,0 +1,27 @@
+# TokenPanel systemd service.
+# Installed to /etc/systemd/system/tokenpanel.service by the wizard.
+# Paths are substituted by envsubst.
+
+[Unit]
+Description=TokenPanel — AI reseller gateway + admin panel
+Documentation=https://github.com/tokenpanel/tokenpanel
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=${INSTALL_DIR}
+
+ExecStart=/usr/bin/docker compose -f ${CONFIG_DIR}/app.yml up -d --remove-orphans
+ExecStop=/usr/bin/docker compose -f ${CONFIG_DIR}/app.yml stop
+ExecReload=/usr/bin/docker compose -f ${CONFIG_DIR}/app.yml restart
+
+TimeoutStopSec=120
+
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

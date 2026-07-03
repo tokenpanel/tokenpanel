@@ -3,7 +3,7 @@ import { cors } from "hono/cors";
 import { serveStatic } from "hono/bun";
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { getDb, ensureIndexes } from "@tokenpanel/db";
+import { getDb, getRawDb, getClient, runMigrations } from "@tokenpanel/db";
 import type { AuthVariables } from "./middleware/auth.ts";
 import authRoutes from "./routes/auth.ts";
 import signupRoutes from "./routes/signup.ts";
@@ -115,10 +115,24 @@ app.onError((err, c) => {
 const port = Number(process.env.PORT ?? 3000);
 
 try {
-  await ensureIndexes(await getDb());
+  await getDb();
+  const db = getRawDb();
+  const mongoClient = getClient();
+
+  const preReport = await runMigrations(mongoClient, db, "pre");
+  if (preReport.applied.length > 0) {
+    console.log(`migrations: ${preReport.applied.length} pre-deploy applied`);
+  }
+
+  // Post-deploy (destructive) migrations are NOT run on API boot. They are
+  // executed exclusively by the manager's update flow (Phase 6, `tokenpanel
+  // update`) via `bun run db:migrate --phase=post` in the live container.
+  // Running them on every boot (a persisted RUN_POST_MIGRATIONS=1) would
+  // repeatedly re-scan destructive migrations — a footgun with no benefit,
+  // since the manager already drives them deterministically.
   console.log("mongodb ready");
 } catch (err) {
-  console.error("mongodb connection failed:", err instanceof Error ? err.message : err);
+  console.error("mongodb migration failed:", err instanceof Error ? err.message : err);
   process.exit(1);
 }
 

@@ -1,0 +1,397 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+MANAGER_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+source "${SCRIPT_DIR}/../lib/config.sh"
+source "${SCRIPT_DIR}/../lib/output.sh"
+source "${SCRIPT_DIR}/../lib/preflight.sh"
+source "${SCRIPT_DIR}/../lib/health.sh"
+source "${SCRIPT_DIR}/../lib/encode.sh"
+
+# ── Helpers ──
+
+generate_secret() {
+  local length="${1:-32}"
+  # Hex output is URL-safe (only 0-9a-f) — safe for Mongo URIs and JWT
+  # secrets. Avoids +, /, = from base64 which break connection strings.
+  openssl rand -hex "$length" 2>/dev/null || head -c "$length" /dev/urandom | od -An -tx1 | tr -d ' \n'
+}
+
+validate_domain() {
+  local domain="$1"
+  [[ "$domain" =~ ^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$ ]] || {
+    err "invalid domain format"; return 1; 
+  }
+  if ! host "$domain" >/dev/null 2>&1 && ! nslookup "$domain" >/dev/null 2>&1; then
+    warn "DNS for $domain does not resolve yet. Make sure it points to this server before starting."
+  fi
+  return 0
+}
+
+validate_email() {
+  local email="$1"
+  [[ "$email" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]] || {
+    err "invalid email format"; return 1; 
+  }
+}
+
+# Validate the MongoDB database name. MONGODB_DB is interpolated RAW into the
+# mongodb:// URI path in the compose templates (app.*.yml.tmpl) and used as
+# MONGO_INITDB_DATABASE, so a name containing URI-breaking characters (/, ?, :,
+# @, space, etc.) would silently break the connection string or misroute
+# writes. Allow only the strict, URI-safe charset [A-Za-z0-9_-] (1-64 chars)
+# and reject MongoDB's reserved system database names. This makes percent-
+# encoding unnecessary: the validated name is safe to embed verbatim.
+validate_db_name() {
+  local db="$1"
+  [ -n "$db" ] || { err "database name is required"; return 1; }
+  if (( ${#db} > 64 )); then
+    err "database name too long (max 64 chars): '${#db}' given"
+    return 1
+  fi
+  if ! [[ "$db" =~ ^[A-Za-z0-9_-]+$ ]]; then
+    err "invalid database name: '$db'"
+    err "  allowed:    letters, digits, underscore, hyphen (1-64 chars)"
+    err "  forbidden:  / \\ . \" \$ * < > : | ? space and other URI-breaking chars"
+    return 1
+  fi
+  case "$db" in
+    admin|local|config)
+      err "database name '$db' is reserved by MongoDB (system database)"
+      return 1
+      ;;
+  esac
+  return 0
+}
+
+# Reject characters that break .env parsing in Docker Compose (and, to a
+# lesser extent, the manager's load_env_safe): whitespace, #, $, quotes,
+# backslash, backtick. Generated secrets are hex and always pass; this guards
+# manually-entered values so they can be written raw (unquoted) into .env
+# without breaking Compose's parser. Returns 0 (safe) / 1 (unsafe).
+validate_env_value() {
+  local val="$1"
+  local name="$2"
+  [ -n "$val" ] || return 0
+  # Delete all .env-safe characters; anything left would break parsing.
+  # Safe set: letters, digits, and !@%^&*()-_=+.,:/~;<>?
+  local leftover
+  leftover="$(printf '%s' "$val" | LC_ALL=C tr -d 'A-Za-z0-9!@%^&*()_+=,./:;<>?~-')"
+  if [ -n "$leftover" ]; then
+    err "$name contains characters that are unsafe in .env:"
+    err "  disallowed: spaces, #, \$, quotes, backslash, backtick, and other specials"
+    err "  allowed:    letters, digits, and !@%^&*()-_=+.,:/~;<>?"
+    err "  (leave the secret blank to auto-generate a safe value)"
+    return 1
+  fi
+  return 0
+}
+
+prompt_yn() {
+  local prompt="$1"
+  local default="${2:-y}"
+  local input
+  if [ "$default" = "y" ]; then
+    read -rp "${prompt} [Y/n]: " input
+    input="${input:-y}"
+  else
+    read -rp "${prompt} [y/N]: " input
+    input="${input:-n}"
+  fi
+  [[ "$input" =~ ^[Yy] ]] && echo "y" || echo "n"
+}
+
+prompt_with_default() {
+  local prompt="$1"
+  local default="${2:-}"
+  local input
+  if [ -n "$default" ]; then
+    read -rp "${prompt} [${default}]: " input
+    echo "${input:-$default}"
+  else
+    read -rp "${prompt}: " input
+    echo "$input"
+  fi
+}
+
+# ── Banner ──
+
+cat <<'BANNER'
+  ╔══════════════════════════════════════════╗
+  ║       TokenPanel Installer               ║
+  ║       AI reseller gateway + admin        ║
+  ╚══════════════════════════════════════════╝
+BANNER
+
+echo
+echo "This will install TokenPanel to:"
+echo "  Code:   ${INSTALL_DIR}"
+echo "  Config: ${CONFIG_DIR}"
+echo "  Data:   ${DATA_DIR}  (MongoDB, backups, certs)"
+echo
+echo "Existing data will be preserved. Existing config will be backed up."
+echo
+read -rp "Press ENTER to continue, Ctrl+C to cancel. "
+
+# ── Root check ──
+[ "$(id -u)" -eq 0 ] || die "must run as root (use sudo)"
+
+# ── Docker check ──
+if ! command -v docker >/dev/null 2>&1; then
+  step "prereq" "Docker not found. Installing..."
+  curl -fsSL https://get.docker.com | sh
+  systemctl enable --now docker
+  ok "Docker installed"
+else
+  ok "Docker already installed"
+fi
+
+# ── jq check ──
+if ! command -v jq >/dev/null 2>&1; then
+  step "prereq" "Installing jq..."
+  apt-get update -qq >/dev/null 2>&1 && apt-get install -y -qq jq >/dev/null 2>&1 || \
+    yum install -y -q jq >/dev/null 2>&1 || warn "jq not installed — backup size check will use fallback"
+fi
+
+# ── envsubst check ──
+if ! command -v envsubst >/dev/null 2>&1; then
+  step "prereq" "Installing gettext (envsubst)..."
+  apt-get update -qq >/dev/null 2>&1 && apt-get install -y -qq gettext >/dev/null 2>&1 || \
+    yum install -y -q gettext >/dev/null 2>&1 || die "envsubst not available — install gettext"
+fi
+
+# ── Load existing config as defaults ──
+EXISTING_DOMAIN="${DOMAIN:-}"
+EXISTING_EMAIL="${ADMIN_EMAIL:-}"
+EXISTING_MONGO_USER="${MONGO_USER:-tokenpanel}"
+EXISTING_MONGODB_DB="${MONGODB_DB:-tokenpanel}"
+EXISTING_TIMEZONE="${TZ:-UTC}"
+EXISTING_API_PORT="${API_PORT:-3000}"
+
+# ── Prompts ──
+echo
+step "1/8" "Domain name for the admin panel"
+DOMAIN="$(prompt_with_default '  Domain []:' '')"
+[ -n "$DOMAIN" ] || die "domain is required"
+validate_domain "$DOMAIN" || die "invalid domain"
+
+step "2/8" "Admin email (first login + Let's Encrypt notifications)"
+ADMIN_EMAIL="$(prompt_with_default '  Email []:' '')"
+[ -n "$ADMIN_EMAIL" ] || die "email is required"
+validate_email "$ADMIN_EMAIL" || die "invalid email"
+
+step "3/8" "HTTPS via Let's Encrypt (Caddy reverse proxy)"
+USE_CADDY="$(prompt_yn '  Use built-in Caddy for automatic HTTPS?' 'y')"
+
+if [ "$USE_CADDY" = "n" ]; then
+  API_PORT="$(prompt_with_default '  External API port' "${EXISTING_API_PORT}")"
+else
+  API_PORT="3000"
+fi
+
+step "4/8" "MongoDB credentials"
+MONGO_USER="$(prompt_with_default '  MongoDB admin username' "${EXISTING_MONGO_USER}")"
+MONGO_PASS_PROMPT=""
+read -rsp "  MongoDB admin password (blank = generate): " MONGO_PASS_PROMPT
+echo
+if [ -z "$MONGO_PASS_PROMPT" ]; then
+  MONGO_PASS="$(generate_secret 24)"
+  info "  generated Mongo password (saved to ${ENV_FILE})"
+  SHOW_MONGO_PASS="$(prompt_yn '  Display the generated password now?' 'n')"
+  if [ "$SHOW_MONGO_PASS" = "y" ]; then
+    echo "  Mongo password: ${MONGO_PASS}"
+  else
+    info "  (kept hidden — view later: sudo cat ${ENV_FILE})"
+  fi
+else
+  MONGO_PASS="$MONGO_PASS_PROMPT"
+fi
+
+# Percent-encode credentials for safe embedding in mongodb:// URIs.
+# A password containing @, :, /, +, etc. would break the connection string.
+MONGO_USER_URI="$(uri_encode "$MONGO_USER")"
+MONGO_PASS_URI="$(uri_encode "$MONGO_PASS")"
+JWT_SECRET_PROMPT=""
+read -rsp "  JWT secret (blank = generate): " JWT_SECRET_PROMPT
+echo
+if [ -z "$JWT_SECRET_PROMPT" ]; then
+  JWT_SECRET="$(generate_secret 48)"
+  info "  generated (48 bytes, saved to ${ENV_FILE})"
+else
+  JWT_SECRET="$JWT_SECRET_PROMPT"
+fi
+
+step "6/8" "MongoDB database name"
+MONGODB_DB="$(prompt_with_default '  Database name' "${EXISTING_MONGODB_DB}")"
+validate_db_name "$MONGODB_DB" || die "invalid database name (allowed: letters, digits, underscore, hyphen; 1-64 chars)"
+
+step "7/8" "SMTP for notifications (optional)"
+USE_SMTP="$(prompt_yn '  Configure SMTP?' 'n')"
+SMTP_BLOCK=""
+if [ "$USE_SMTP" = "y" ]; then
+  SMTP_HOST="$(prompt_with_default '  SMTP host' '')"
+  SMTP_PORT="$(prompt_with_default '  SMTP port' '587')"
+  SMTP_USER="$(prompt_with_default '  SMTP user' '')"
+  read -rsp "  SMTP password: " SMTP_PASS
+  echo
+  SMTP_FROM="$(prompt_with_default '  From address' "$ADMIN_EMAIL")"
+  SMTP_BLOCK="SMTP_HOST=${SMTP_HOST}
+SMTP_PORT=${SMTP_PORT}
+SMTP_USER=${SMTP_USER}
+SMTP_PASS=${SMTP_PASS}
+SMTP_FROM=${SMTP_FROM}"
+fi
+
+step "8/8" "Timezone"
+TIMEZONE="$(prompt_with_default '  Timezone' "${EXISTING_TIMEZONE}")"
+
+# ── Summary ──
+echo
+echo "────────────────────────────────────────────"
+echo "Summary:"
+echo "  Domain:    ${DOMAIN}"
+if [ "$USE_CADDY" = "y" ]; then
+  echo "  HTTPS:     Let's Encrypt (Caddy)"
+else
+  echo "  HTTPS:     disabled (bring your own reverse proxy)"
+  echo "  App port:  ${API_PORT}"
+fi
+echo "  Data dir:  ${DATA_DIR}"
+echo "  Install:   ${INSTALL_DIR}"
+echo "────────────────────────────────────────────"
+echo
+
+CONFIRM="$(prompt_yn 'Proceed with install?' 'y')"
+[ "$CONFIRM" = "y" ] || { info "aborted"; exit 0; }
+
+# ── Validate required config ──
+for var in DOMAIN ADMIN_EMAIL MONGO_USER MONGO_PASS MONGODB_DB JWT_SECRET; do
+  eval "val=\"\${$var:-}\""
+  [ -n "$val" ] || die "$var is required and must not be empty"
+  validate_env_value "$val" "$var" \
+    || die "aborting: unsafe characters in $var (see .env rules above)"
+done
+# SMTP values are optional but, if configured, are written raw into .env too.
+if [ "${USE_SMTP:-n}" = "y" ]; then
+  for var in SMTP_HOST SMTP_PORT SMTP_USER SMTP_PASS SMTP_FROM; do
+    eval "val=\"\${$var:-}\""
+    validate_env_value "$val" "$var" \
+      || die "aborting: unsafe characters in $var (see .env rules above)"
+  done
+fi
+# ── Render config ──
+step "config" "writing configuration..."
+# Restrictive umask for all rendered files (secrets in .env, paths in app.yml).
+umask 077
+
+mkdir -p "$CONFIG_DIR" "$DATA_DIR/mongo" "$DATA_DIR/caddy" "$DATA_DIR/backups" "$LOG_DIR"
+
+# Backup existing config
+if [ -f "$ENV_FILE" ]; then
+  cp "$ENV_FILE" "${ENV_FILE}.bak.$(date +%s)"
+  info "backed up existing .env"
+fi
+
+# Export all variables for envsubst (env.tmpl expands everything — it's the
+# .env file itself, so secrets belong here).
+export DOMAIN ADMIN_EMAIL MONGO_USER MONGO_PASS MONGO_USER_URI MONGO_PASS_URI \
+       MONGODB_DB JWT_SECRET API_PORT TIMEZONE \
+       INSTALL_DIR CONFIG_DIR DATA_DIR LOG_DIR BACKUP_DIR TEMPLATE_DIR
+
+# Render .env (no whitelist — every var in env.tmpl is a real config value).
+envsubst < "${TEMPLATE_DIR}/env.tmpl" > "$ENV_FILE"
+if [ -n "$SMTP_BLOCK" ]; then
+  echo "$SMTP_BLOCK" >> "$ENV_FILE"
+fi
+chmod 600 "$ENV_FILE"
+ok ".env written to ${ENV_FILE}"
+
+# Render app.yml. Whitelist envsubst to ONLY expand structural path vars
+# (DATA_DIR, CONFIG_DIR). Secrets (MONGO_USER, MONGO_PASS, etc.) are left as
+# ${VAR} placeholders for compose to resolve from .env at runtime — they
+# never appear as literal values in app.yml.
+if [ "$USE_CADDY" = "y" ]; then
+  envsubst '${DATA_DIR} ${CONFIG_DIR}' < "${TEMPLATE_DIR}/app.caddy.yml.tmpl" > "$APP_YML"
+  # Render Caddyfile (DOMAIN + ADMIN_EMAIL are not secrets; Caddyfile is not
+  # processed by compose so these must be envsubst-expanded).
+  envsubst '${DOMAIN} ${ADMIN_EMAIL}' < "${TEMPLATE_DIR}/Caddyfile.tmpl" > "${CONFIG_DIR}/Caddyfile"
+  chmod 600 "$APP_YML" "${CONFIG_DIR}/Caddyfile"
+  ok "app.yml + Caddyfile written (HTTPS via Let's Encrypt)"
+else
+  envsubst '${DATA_DIR} ${CONFIG_DIR}' < "${TEMPLATE_DIR}/app.direct.yml.tmpl" > "$APP_YML"
+  chmod 600 "$APP_YML"
+  ok "app.yml written (api on port ${API_PORT})"
+fi
+
+# ── Bootstrap ──
+step "1/5" "preflight..."
+preflight_quick 2>/dev/null || true
+
+step "2/5" "pulling base images..."
+docker pull mongo:8 >/dev/null 2>&1 || true
+[ "$USE_CADDY" = "y" ] && docker pull caddy:2-alpine >/dev/null 2>&1 || true
+
+step "3/5" "starting mongo replica set..."
+docker compose -f "$APP_YML" up -d mongo mongo-init
+# Wait for primary
+for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+  sleep 2
+  if docker compose -f "$APP_YML" exec -T mongo mongosh --quiet \
+    "mongodb://${MONGO_USER_URI}:${MONGO_PASS_URI}@mongo:27017/admin?authSource=admin&directConnection=true" \
+    --eval 'db.hello().isWritablePrimary' 2>/dev/null | grep -q true; then
+    ok "mongo primary ready"
+    break
+  fi
+  [ "$i" = 15 ] && die "mongo did not become primary in 30s"
+done
+
+step "4/5" "building app image..."
+docker build -f "${INSTALL_DIR}/docker/prod.Dockerfile" -t tokenpanel/app:current "$INSTALL_DIR" || \
+  die "docker build failed — check Dockerfile and code"
+
+step "5/5" "starting app..."
+docker compose -f "$APP_YML" up -d
+wait_for_health api 60 || die "api did not become healthy"
+
+# ── Install systemd ──
+step "systemd" "enabling boot-time start..."
+source "${SCRIPT_DIR}/../lib/systemd.sh"
+install_systemd_service
+
+# ── Install CLI symlinks into PATH ──
+step "cli" "linking tokenpanel into PATH..."
+mkdir -p /usr/local/bin
+chmod +x "${INSTALL_DIR}/manager/bin/tokenpanel" "${INSTALL_DIR}/manager/bin/tokenpanel-setup"
+ln -sf "${INSTALL_DIR}/manager/bin/tokenpanel" /usr/local/bin/tokenpanel
+ln -sf "${INSTALL_DIR}/manager/bin/tokenpanel-setup" /usr/local/bin/tokenpanel-setup
+if command -v tokenpanel >/dev/null 2>&1; then
+  ok "CLI in PATH: tokenpanel, tokenpanel-setup"
+else
+  warn "/usr/local/bin not in PATH — invoke via full path:"
+  warn "  ${INSTALL_DIR}/manager/bin/tokenpanel"
+fi
+
+# ── Success banner ──
+echo
+local_scheme="https"
+[ "$USE_CADDY" != "y" ] && local_scheme="http"
+local_port=""
+[ "$USE_CADDY" != "y" ] && local_port=":${API_PORT}"
+
+cat <<EOF
+
+╔════════════════════════════════════════════╗
+║  ✓ TokenPanel is up                        ║
+║                                            ║
+║  URL:      ${local_scheme}://${DOMAIN}${local_port}$(printf '%*s' $((20 - ${#DOMAIN} - ${#local_port})) '')║
+║  Signup:   ${local_scheme}://${DOMAIN}${local_port}$(printf '%*s' $((20 - ${#DOMAIN} - ${#local_port})) '')║
+║                                            ║
+║  Manage:   tokenpanel status               ║
+║            tokenpanel update               ║
+║            tokenpanel backup               ║
+║                                            ║
+║  Data:     ${DATA_DIR}║
+║  Backups:  ${BACKUP_DIR}║
+╚════════════════════════════════════════════╝
+EOF

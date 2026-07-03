@@ -9,7 +9,7 @@ import {
   type ApiKeyDoc,
   type CustomerDoc,
 } from "@tokenpanel/db";
-import { requireAuth, type AuthVariables } from "../middleware/auth.ts";
+import { requireAuth, requireRole, type AuthVariables } from "../middleware/auth.ts";
 import { hashToken, randomToken } from "../lib/crypto.ts";
 
 const apiKeyRoutes = new Hono<{ Variables: AuthVariables }>();
@@ -64,7 +64,7 @@ const createBodySchema = z.object({
   modelWhitelist: z.array(z.string().min(1).max(80)).optional(),
 });
 
-apiKeyRoutes.post("/", zValidator("json", createBodySchema), async (c) => {
+apiKeyRoutes.post("/", requireRole("admin"), zValidator("json", createBodySchema), async (c) => {
   const orgId = c.get("orgId");
   const body = c.req.valid("json");
   const db = await getDb();
@@ -124,6 +124,7 @@ apiKeyRoutes.get("/:id", async (c) => {
 
 apiKeyRoutes.patch(
   "/:id",
+  requireRole("admin"),
   zValidator("json", apiKeyUpdateInput),
   async (c) => {
     const orgId = c.get("orgId");
@@ -149,7 +150,7 @@ apiKeyRoutes.patch(
   },
 );
 
-apiKeyRoutes.delete("/:id", async (c) => {
+apiKeyRoutes.delete("/:id", requireRole("admin"), async (c) => {
   const orgId = c.get("orgId");
   const oid = parseObjectIdParam(c.req.param("id"));
   if (!oid) return c.json({ error: "not_found" }, 404);

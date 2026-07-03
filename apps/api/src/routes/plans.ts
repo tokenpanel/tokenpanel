@@ -9,7 +9,7 @@ import {
   type SubscriptionPlanDoc,
 } from "@tokenpanel/db";
 import type { AuthVariables } from "../middleware/auth.ts";
-import { requireAuth } from "../middleware/auth.ts";
+import { requireAuth, requireRole } from "../middleware/auth.ts";
 
 const planRoutes = new Hono<{ Variables: AuthVariables }>();
 planRoutes.use("*", requireAuth);
@@ -41,7 +41,7 @@ planRoutes.get("/", async (c) => {
   return c.json({ items });
 });
 
-planRoutes.post("/", zValidator("json", subscriptionPlanCreateInput), async (c) => {
+planRoutes.post("/", requireRole("admin"), zValidator("json", subscriptionPlanCreateInput), async (c) => {
   const body = c.req.valid("json");
   const db = await getDb();
   const orgId = c.get("orgId");
@@ -78,7 +78,7 @@ planRoutes.get("/:id", async (c) => {
   return c.json(doc);
 });
 
-planRoutes.patch("/:id", zValidator("json", subscriptionPlanUpdateInput), async (c) => {
+planRoutes.patch("/:id", requireRole("admin"), zValidator("json", subscriptionPlanUpdateInput), async (c) => {
   const body = c.req.valid("json");
   const db = await getDb();
   const id = c.req.param("id");
@@ -107,7 +107,7 @@ planRoutes.patch("/:id", zValidator("json", subscriptionPlanUpdateInput), async 
   return c.json(updated);
 });
 
-planRoutes.delete("/:id", async (c) => {
+planRoutes.delete("/:id", requireRole("admin"), async (c) => {
   const db = await getDb();
   const id = c.req.param("id");
   if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);

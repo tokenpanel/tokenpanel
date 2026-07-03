@@ -12,7 +12,7 @@ import {
   type ModelEntryDoc,
 } from "@tokenpanel/db";
 import type { AuthVariables } from "../middleware/auth.ts";
-import { requireAuth } from "../middleware/auth.ts";
+import { requireAuth, requireRole } from "../middleware/auth.ts";
 
 const modelRoutes = new Hono<{ Variables: AuthVariables }>();
 
@@ -46,7 +46,7 @@ modelRoutes.get("/", async (c) => {
   return c.json({ items });
 });
 
-modelRoutes.post("/", zValidator("json", modelCreateInput), async (c) => {
+modelRoutes.post("/", requireRole("admin"), zValidator("json", modelCreateInput), async (c) => {
   const body = c.req.valid("json");
   const db = await getDb();
   const orgId = c.get("orgId");
@@ -103,7 +103,7 @@ modelRoutes.get("/:id", async (c) => {
   return c.json(doc);
 });
 
-modelRoutes.patch("/:id", zValidator("json", modelUpdateInput), async (c) => {
+modelRoutes.patch("/:id", requireRole("admin"), zValidator("json", modelUpdateInput), async (c) => {
   const body = c.req.valid("json");
   const db = await getDb();
   const id = c.req.param("id");
@@ -145,7 +145,7 @@ modelRoutes.patch("/:id", zValidator("json", modelUpdateInput), async (c) => {
   return c.json(updated);
 });
 
-modelRoutes.delete("/:id", async (c) => {
+modelRoutes.delete("/:id", requireRole("admin"), async (c) => {
   const db = await getDb();
   const id = c.req.param("id");
   if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
@@ -159,6 +159,7 @@ modelRoutes.delete("/:id", async (c) => {
 
 modelRoutes.patch(
   "/:id/fallbacks",
+  requireRole("admin"),
   zValidator("json", fallbackReorderInput),
   async (c) => {
     const body = c.req.valid("json");
@@ -190,7 +191,7 @@ modelRoutes.patch(
   },
 );
 
-modelRoutes.post("/:id/entries", zValidator("json", modelEntryInput), async (c) => {
+modelRoutes.post("/:id/entries", requireRole("admin"), zValidator("json", modelEntryInput), async (c) => {
   const body = c.req.valid("json");
   const db = await getDb();
   const id = c.req.param("id");
@@ -227,7 +228,7 @@ modelRoutes.post("/:id/entries", zValidator("json", modelEntryInput), async (c) 
   return c.json(updated);
 });
 
-modelRoutes.delete("/:id/entries/:entryId", async (c) => {
+modelRoutes.delete("/:id/entries/:entryId", requireRole("admin"), async (c) => {
   const db = await getDb();
   const id = c.req.param("id");
   const entryId = c.req.param("entryId");

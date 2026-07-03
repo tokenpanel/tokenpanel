@@ -12,7 +12,7 @@ import {
   type SubscriptionPlanDoc,
 } from "@tokenpanel/db";
 import type { Document, Filter } from "mongodb";
-import { requireAuth, type AuthVariables } from "../middleware/auth.ts";
+import { requireAuth, requireRole, type AuthVariables } from "../middleware/auth.ts";
 
 const app = new Hono<{ Variables: AuthVariables }>();
 
@@ -53,7 +53,7 @@ app.get("/", zValidator("query", listQuerySchema), async (c) => {
   return c.json({ items: items as CustomerDoc[], total });
 });
 
-app.post("/", zValidator("json", customerCreateInput), async (c) => {
+app.post("/", requireRole("admin"), zValidator("json", customerCreateInput), async (c) => {
   const orgId = c.get("orgId");
   const body = c.req.valid("json");
   const db = await getDb();
@@ -112,7 +112,7 @@ app.get("/:id", async (c) => {
   return c.json(doc as CustomerDoc);
 });
 
-app.patch("/:id", zValidator("json", customerUpdateInput), async (c) => {
+app.patch("/:id", requireRole("admin"), zValidator("json", customerUpdateInput), async (c) => {
   const orgId = c.get("orgId");
   const oid = parseObjectIdParam(c.req.param("id"));
   if (!oid) return c.json({ error: "not_found" }, 404);
@@ -146,7 +146,7 @@ app.patch("/:id", zValidator("json", customerUpdateInput), async (c) => {
   return c.json(updated as CustomerDoc);
 });
 
-app.delete("/:id", async (c) => {
+app.delete("/:id", requireRole("admin"), async (c) => {
   const orgId = c.get("orgId");
   const oid = parseObjectIdParam(c.req.param("id"));
   if (!oid) return c.json({ error: "not_found" }, 404);
@@ -169,6 +169,7 @@ const balanceBodySchema = z.object({
 
 app.post(
   "/:id/balance",
+  requireRole("admin"),
   zValidator("json", balanceBodySchema),
   async (c) => {
     const orgId = c.get("orgId");
@@ -288,6 +289,7 @@ export function addInterval(date: Date, interval: string, count: number): Date {
 
 app.post(
   "/:id/subscribe",
+  requireRole("admin"),
   zValidator("json", subscribeBodySchema),
   async (c) => {
     const orgId = c.get("orgId");

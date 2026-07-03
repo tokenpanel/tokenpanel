@@ -1,6 +1,17 @@
 services:
   mongo:
     image: mongo:8
+    # Replica set mode requires a keyFile when auth is enabled (MONGO_INITDB_ROOT_USERNAME).
+    # Generate one on first boot (persists in the data volume), reuse on subsequent boots.
+    entrypoint:
+      - sh
+      - -c
+      - |
+        if [ ! -f /data/db/replica-key ]; then
+          head -c 756 /dev/urandom | base64 | tr -d '\n' > /data/db/replica-key
+          chmod 400 /data/db/replica-key
+        fi
+        exec docker-entrypoint.sh mongod --replSet rs0 --keyFile /data/db/replica-key
     environment:
       MONGO_INITDB_ROOT_USERNAME: ${MONGO_USER:-tokenpanel}
       MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASS:-tokenpanel_dev}
@@ -16,7 +27,29 @@ services:
       test: ["CMD", "mongosh", "--quiet", "--eval", "db.runCommand({ping:1}).ok"]
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 10
+      start_period: 10s
+
+  # One-shot: initiates the replica set on first boot. Idempotent — detects
+  # existing RS via rs.status() try/catch. Waits for primary before exiting.
+  mongo-init:
+    image: mongo:8
+    depends_on:
+      mongo:
+        condition: service_healthy
+    restart: "no"
+    command:
+      - sh
+      - -c
+      - |
+        MONGO_URI="mongodb://${MONGO_USER_URI:-tokenpanel}:${MONGO_PASS_URI:-tokenpanel_dev}@mongo:27017/admin?authSource=admin"
+        mongosh "$$MONGO_URI" --eval 'try { rs.status().ok; print("replica set already initiated") } catch(e) { rs.initiate({_id:"rs0",members:[{_id:0,host:"mongo:27017"}]}); print("replica set initiated") }'
+        for i in 1 2 3 4 5 6 7 8 9 10; do
+          sleep 1
+          mongosh "$$MONGO_URI" --quiet --eval 'db.hello().isWritablePrimary' 2>/dev/null | grep -q true && exit 0
+        done
+        echo "ERROR: mongo primary not writable after 10s — api must not start"
+        exit 1
 
   api:
     build:
@@ -25,7 +58,7 @@ services:
     env_file:
       - .env
     environment:
-      MONGODB_URI: mongodb://${MONGO_USER:-tokenpanel}:${MONGO_PASS:-tokenpanel_dev}@mongo:27017/${MONGODB_DB:-tokenpanel}?authSource=admin
+      MONGODB_URI: mongodb://${MONGO_USER_URI:-tokenpanel}:${MONGO_PASS_URI:-tokenpanel_dev}@mongo:27017/${MONGODB_DB:-tokenpanel}?authSource=admin&directConnection=true
       MONGODB_DB: ${MONGODB_DB:-tokenpanel}
       PORT: ${PORT:-3000}
     expose:
@@ -42,6 +75,8 @@ services:
     depends_on:
       mongo:
         condition: service_healthy
+      mongo-init:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "bun", "-e", "const r = await fetch('http://127.0.0.1:${PORT:-3000}/health'); process.exit(r.ok ? 0 : 1)"]
       interval: 10s
@@ -82,7 +117,7 @@ services:
     env_file:
       - .env
     environment:
-      MONGODB_URI: mongodb://${MONGO_USER:-tokenpanel}:${MONGO_PASS:-tokenpanel_dev}@mongo:27017/${MONGODB_DB:-tokenpanel}?authSource=admin
+      MONGODB_URI: mongodb://${MONGO_USER_URI:-tokenpanel}:${MONGO_PASS_URI:-tokenpanel_dev}@mongo:27017/${MONGODB_DB:-tokenpanel}?authSource=admin&directConnection=true
       MONGODB_DB: ${MONGODB_DB:-tokenpanel}
       PORT: ${PORT:-3000}
     expose:
@@ -94,6 +129,8 @@ services:
     depends_on:
       mongo:
         condition: service_healthy
+      mongo-init:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "bun", "-e", "const r = await fetch('http://127.0.0.1:${PORT:-3000}/health'); process.exit(r.ok ? 0 : 1)"]
       interval: 10s

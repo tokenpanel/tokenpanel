@@ -9,8 +9,18 @@ export * from "./schemas/usage.ts";
 export * from "./schemas/apikey.ts";
 export {
   getDb,
+  getRawDb,
+  getClient,
   getMongoUri,
   getDbName,
-  ensureIndexes,
   closeDb,
 } from "./client.ts";
+export { runMigrations, getMigrationStatus, executeMigration, validateMigrationMeta } from "./migrator/runner.ts";
+export { createMigrationDb } from "./migrator/migration-db.ts";
+export type {
+  MigrationPhase,
+  MigrationFile,
+  MigrationReport,
+  MigrationStatus,
+} from "./migrator/types.ts";
+export type { MigrationDb, SessionBoundCollection } from "./migrator/migration-db.ts";

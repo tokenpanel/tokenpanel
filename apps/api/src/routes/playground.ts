@@ -8,7 +8,7 @@ import {
   type ModelEntryDoc,
   type ProviderDoc,
 } from "@tokenpanel/db";
-import { requireAuth, type AuthVariables } from "../middleware/auth.ts";
+import { requireAuth, requireRole, type AuthVariables } from "../middleware/auth.ts";
 import {
   preFlight,
   callWithFallback,
@@ -22,7 +22,10 @@ import type { ChatRequest, ChatMessage, ContentPart } from "../providers/index.t
 
 const playground = new Hono<{ Variables: AuthVariables }>();
 
-playground.use("*", requireAuth);
+// Playground calls upstream providers with the org's decrypted API keys (like
+// discover-models), so it is admin-only — a member must not be able to drive
+// paid upstream calls or probe provider credentials.
+playground.use("*", requireAuth, requireRole("admin"));
 
 const messageSchema = z.object({
   role: z.enum(["system", "user", "assistant", "tool"]),
@@ -162,8 +165,10 @@ playground.post("/chat", zValidator("json", chatBody), async (c) => {
       customerId: ctx.customer?._id ?? new ObjectId(),
       apiKeyModelWhitelist: [], // admin playground bypasses per-key model whitelist
       aliasId: body.model,
-      estimatedTokens: 0,
-      estimatedSpendMinor: 0,
+      // Playground is admin-only test mode: no balance pre-check (an admin can
+      // test regardless of a selected customer's balance). 0/0 → estimate skipped.
+      estimatedPromptTokens: 0,
+      maxCompletionTokens: 0,
     });
   } catch (err) {
     if (err instanceof BillingError) {
@@ -189,23 +194,27 @@ playground.post("/chat", zValidator("json", chatBody), async (c) => {
 
       // Only debit + meter when a real customer is selected.
       if (ctx.customer) {
-        await settleUsage({
-          orgId,
-          customerId: ctx.customer._id,
-          apiKeyId: null,
-          model,
-          entry: outcome.entry,
-          provider: outcome.provider,
-          protocol: "openai",
-          usage: outcome.response.usage,
-          costMinor: charges.costMinor,
-          priceMinor: charges.priceMinor,
-          currency: charges.currency,
-          providerRequestId: outcome.response.providerRequestId,
-          status: 200,
-          durationMs,
-          rules,
-        });
+        try {
+          await settleUsage({
+            orgId,
+            customerId: ctx.customer._id,
+            apiKeyId: null,
+            model,
+            entry: outcome.entry,
+            provider: outcome.provider,
+            protocol: "openai",
+            usage: outcome.response.usage,
+            costMinor: charges.costMinor,
+            priceMinor: charges.priceMinor,
+            currency: charges.currency,
+            providerRequestId: outcome.response.providerRequestId,
+            status: 200,
+            durationMs,
+            rules,
+          });
+        } catch (settleErr) {
+          console.error("[playground] settlement failed (non-stream):", settleErr);
+        }
       } else {
         await recordPlaygroundUsage({
           orgId,
@@ -342,22 +351,26 @@ playground.post("/chat", zValidator("json", chatBody), async (c) => {
           const usage = { promptTokens, completionTokens, reasoningTokens, cacheReadTokens, cacheWriteTokens, totalTokens };
           const charges = computeCharges({ entry: activeEntry, model, usage });
           if (ctx.customer) {
-            await settleUsage({
-              orgId,
-              customerId: ctx.customer._id,
-              apiKeyId: null,
-              model,
-              entry: activeEntry,
-              provider: activeProvider,
-              protocol: "openai",
-              usage,
-              costMinor: charges.costMinor,
-              priceMinor: charges.priceMinor,
-              currency: charges.currency,
-              status: 200,
-              durationMs: Date.now() - start,
-              rules,
-            });
+            try {
+              await settleUsage({
+                orgId,
+                customerId: ctx.customer._id,
+                apiKeyId: null,
+                model,
+                entry: activeEntry,
+                provider: activeProvider,
+                protocol: "openai",
+                usage,
+                costMinor: charges.costMinor,
+                priceMinor: charges.priceMinor,
+                currency: charges.currency,
+                status: 200,
+                durationMs: Date.now() - start,
+                rules,
+              });
+            } catch (settleErr) {
+              console.error("[playground] settlement failed (stream):", settleErr);
+            }
           } else {
             await recordPlaygroundUsage({
               orgId,

@@ -1,0 +1,87 @@
+# TokenPanel production compose — WITH Caddy (auto-HTTPS via Let's Encrypt).
+# Rendered by tokenpanel-setup via envsubst into /etc/tokenpanel/app.yml.
+# Variables: ${DATA_DIR}, ${CONFIG_DIR}, ${DOMAIN},
+#            ${MONGO_USER}, ${MONGO_PASS}, ${MONGODB_DB}, ${ADMIN_EMAIL}
+# The api image is pre-built by `tokenpanel-setup` / `tokenpanel update`
+# (fetch_and_build) and tagged tokenpanel/app:current; compose only runs it.
+
+services:
+  mongo:
+    image: mongo:8
+    entrypoint:
+      - sh
+      - -c
+      - |
+        if [ ! -f /data/db/replica-key ]; then
+          head -c 756 /dev/urandom | base64 | tr -d '\n' > /data/db/replica-key
+          chmod 400 /data/db/replica-key
+        fi
+        exec docker-entrypoint.sh mongod --replSet rs0 --keyFile /data/db/replica-key
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_USER}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASS}
+      MONGO_INITDB_DATABASE: ${MONGODB_DB}
+    volumes:
+      - ${DATA_DIR}/mongo:/data/db
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.runCommand({ping:1}).ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  mongo-init:
+    image: mongo:8
+    depends_on:
+      mongo:
+        condition: service_healthy
+    restart: "no"
+    command:
+      - sh
+      - -c
+      - |
+        MONGO_URI="mongodb://${MONGO_USER_URI}:${MONGO_PASS_URI}@mongo:27017/admin?authSource=admin"
+        mongosh "$$MONGO_URI" --eval 'try { rs.status().ok } catch(e) { rs.initiate({_id:"rs0",members:[{_id:0,host:"mongo:27017"}]}) }'
+        for i in 1 2 3 4 5 6 7 8 9 10; do
+          sleep 1
+          mongosh "$$MONGO_URI" --quiet --eval 'db.hello().isWritablePrimary' 2>/dev/null | grep -q true && exit 0
+        done
+        echo "ERROR: mongo primary not writable after 10s — api must not start"
+        exit 1
+
+  api:
+    image: tokenpanel/app:current
+    pull_policy: never
+    env_file:
+      - ${CONFIG_DIR}/.env
+    environment:
+      MONGODB_URI: "mongodb://${MONGO_USER_URI}:${MONGO_PASS_URI}@mongo:27017/${MONGODB_DB}?authSource=admin&directConnection=true"
+      MONGODB_DB: ${MONGODB_DB}
+      PORT: 3000
+    expose:
+      - "3000"
+    depends_on:
+      mongo:
+        condition: service_healthy
+      mongo-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "bun", "-e", "const r = await fetch('http://127.0.0.1:3000/health'); process.exit(r.ok ? 0 : 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ${DATA_DIR}/caddy:/data
+      - ${CONFIG_DIR}/Caddyfile:/etc/caddy/Caddyfile:ro
+    depends_on:
+      api:
+        condition: service_healthy

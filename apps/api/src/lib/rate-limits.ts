@@ -1,4 +1,4 @@
-import { type ObjectId, type AnyBulkWriteOperation } from "mongodb";
+import { type ObjectId, type AnyBulkWriteOperation, type ClientSession } from "mongodb";
 import type { TypedDb, RateLimitCounterDoc, RateLimitRule } from "@tokenpanel/db";
 
 export type ViolatedLimit = {
@@ -32,6 +32,8 @@ export type RecordUsageParams = {
     scopeTarget?: string;
   };
   occurredAt?: Date;
+  /** Optional transaction session — passed to bulkWrite for atomic settlement. */
+  session?: ClientSession;
 };
 
 export type EnforceParams = {
@@ -209,7 +211,7 @@ export async function checkLimits(
  * scopeTarget). Skips rules whose increment is 0 to avoid empty docs.
  */
 export async function recordUsage(params: RecordUsageParams): Promise<void> {
-  const { db, organizationId, customerId, rules, usage, occurredAt } = params;
+  const { db, organizationId, customerId, rules, usage, occurredAt, session } = params;
   const when = occurredAt ?? new Date();
   const nowMs = when.getTime();
 
@@ -255,7 +257,7 @@ export async function recordUsage(params: RecordUsageParams): Promise<void> {
   }
 
   if (ops.length > 0) {
-    await db.rateLimitCounters.bulkWrite(ops);
+    await db.rateLimitCounters.bulkWrite(ops, { session });
   }
 }
 

@@ -8,7 +8,7 @@ import {
   type ProviderDoc,
   type ModelCatalogDoc,
 } from "@tokenpanel/db";
-import { requireAuth, type AuthVariables } from "../middleware/auth.ts";
+import { requireAuth, requireRole, type AuthVariables } from "../middleware/auth.ts";
 import { encryptSecret, decryptSecret } from "../lib/crypto.ts";
 import {
   getAdapter,
@@ -51,7 +51,7 @@ providerRoutes.get("/", async (c) => {
   return c.json({ items });
 });
 
-providerRoutes.post("/", zValidator("json", providerCreateInput), async (c) => {
+providerRoutes.post("/", requireRole("admin"), zValidator("json", providerCreateInput), async (c) => {
   const orgId = c.get("orgId");
   const body = c.req.valid("json");
   if (!getAdapter(body.sdkType)) {
@@ -93,6 +93,7 @@ providerRoutes.get("/:id", async (c) => {
 
 providerRoutes.patch(
   "/:id",
+  requireRole("admin"),
   zValidator("json", providerUpdateInput),
   async (c) => {
     const orgId = c.get("orgId");
@@ -122,7 +123,7 @@ providerRoutes.patch(
   },
 );
 
-providerRoutes.delete("/:id", async (c) => {
+providerRoutes.delete("/:id", requireRole("admin"), async (c) => {
   const orgId = c.get("orgId");
   const oid = parseObjectIdParam(c.req.param("id"));
   if (!oid) return c.json({ error: "not_found" }, 404);
@@ -147,7 +148,7 @@ providerRoutes.delete("/:id", async (c) => {
   return c.json({ ok: true });
 });
 
-providerRoutes.get("/:id/discover-models", async (c) => {
+providerRoutes.get("/:id/discover-models", requireRole("admin"), async (c) => {
   const orgId = c.get("orgId");
   const oid = parseObjectIdParam(c.req.param("id"));
   if (!oid) return c.json({ error: "not_found" }, 404);

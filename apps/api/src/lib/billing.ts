@@ -1,12 +1,13 @@
 import { ObjectId } from "mongodb";
 import {
   getDb,
+  getClient,
   type ModelDoc,
   type ModelEntryDoc,
   type ProviderDoc,
   type UsageRecordDoc,
 } from "@tokenpanel/db";
-import { getAdapter, buildAdapterContext, type ChatRequest, type ChatResponse, type StreamChunk } from "../providers/index.ts";
+import { getAdapter, buildAdapterContext, type ChatRequest, type ChatResponse, type StreamChunk, type ChatMessage } from "../providers/index.ts";
 import { decryptSecret } from "./crypto.ts";
 import {
   getEffectiveRules,
@@ -69,7 +70,15 @@ export async function checkBalance(
     throw new BillingError(403, "customer_not_found", "Customer not found");
   }
   if (customer.balance.currency !== currency) {
-    return;
+    // Enforce currency match: previously this returned silently, so a customer
+    // whose balance currency differed from the model's could bypass the balance
+    // check entirely and go negative (the debit $inc would also mix currencies).
+    throw new BillingError(
+      402,
+      "currency_mismatch",
+      "Customer balance currency does not match model currency",
+      { balanceCurrency: customer.balance.currency, modelCurrency: currency },
+    );
   }
   if (customer.balance.amountMinor < estimatedSpendMinor) {
     throw new BillingError(
@@ -83,26 +92,119 @@ export async function checkBalance(
 
 type EffectiveRules = Awaited<ReturnType<typeof getEffectiveRules>>;
 
+/**
+ * Conservative prompt-token estimate from the translated message array, used by
+ * preFlight to enforce balance + token/spend limits BEFORE a paid upstream call.
+ * Text content → ~4 chars/token; each non-text part (image/audio) → a fixed
+ * overhead. Over-estimating is safe (may reject a marginal request); under-
+ * estimating lets a customer exceed limits, which is what this guards against.
+ */
+const NON_TEXT_PART_TOKENS = 768;
+
+export function estimatePromptTokens(messages: ChatMessage[]): number {
+  let chars = 0;
+  let nonTextParts = 0;
+  for (const m of messages) {
+    if (typeof m.content === "string") {
+      chars += m.content.length;
+    } else if (Array.isArray(m.content)) {
+      for (const part of m.content) {
+        if (part && part.type === "text") {
+          chars += part.text?.length ?? 0;
+        } else {
+          nonTextParts += 1;
+        }
+      }
+    }
+  }
+  return Math.max(1, Math.ceil(chars / 4) + nonTextParts * NON_TEXT_PART_TOKENS);
+}
+
+/**
+ * Fallback completion cap (in tokens) when neither the request nor the model
+ * config provides an output limit. OpenAI chat completions may omit
+ * max_tokens/max_completion_tokens entirely; without a cap the pre-flight
+ * spend estimate for completion tokens would be zero, bypassing balance and
+ * spend-limit checks. 4096 is a conservative default that matches the common
+ * upstream default; models with a known limits.output use that instead.
+ */
+export const DEFAULT_COMPLETION_CAP = 4096;
+
+/**
+ * Worst-case input + output price (minor units per million tokens) across the
+ * model's ACTIVE entries. Settlement charges `entry.price ?? model.price`, so
+ * a higher-priced fallback entry can spend more than model.price would suggest.
+ * Pre-flight must reserve against the most expensive active entry so balance
+ * and spend limits are not bypassed when failover lands on a pricier entry.
+ * Entries without a price override fall back to model.price (the floor).
+ */
+export function worstCaseActiveEntryPrice(model: ModelDoc): {
+  inputMinorPerMillion: number;
+  outputMinorPerMillion: number;
+} {
+  const active = model.entries.filter((e) => e.active);
+  let maxIn = model.price.inputMinorPerMillion;
+  let maxOut = model.price.outputMinorPerMillion;
+  for (const e of active) {
+    const s = e.price ?? model.price;
+    if (s.inputMinorPerMillion > maxIn) maxIn = s.inputMinorPerMillion;
+    if (s.outputMinorPerMillion > maxOut) maxOut = s.outputMinorPerMillion;
+  }
+  return { inputMinorPerMillion: maxIn, outputMinorPerMillion: maxOut };
+}
+
+/**
+ * Resolve the completion token cap for pre-flight estimation. Preference:
+ * request max_tokens > model.limits.output > DEFAULT_COMPLETION_CAP. Returns 0
+ * only when explicitly passed 0 (caller intent: no completion expected).
+ */
+export function resolveCompletionCap(
+  maxCompletionTokens: number | undefined,
+  model: ModelDoc,
+): number {
+  if (maxCompletionTokens !== undefined) return Math.max(0, maxCompletionTokens);
+  return Math.max(0, model.limits.output ?? DEFAULT_COMPLETION_CAP);
+}
+
 export async function preFlight(params: {
   orgId: ObjectId;
   customerId: ObjectId;
   apiKeyModelWhitelist: string[];
   aliasId: string;
-  estimatedTokens?: number;
-  estimatedSpendMinor?: number;
+  /** Conservative prompt-token estimate (from estimatePromptTokens). */
+  estimatedPromptTokens?: number;
+  /** Completion cap (max_tokens) — upper bound on output tokens. */
+  maxCompletionTokens?: number;
   scopeTarget?: string;
 }): Promise<{ model: ModelDoc; rules: EffectiveRules }> {
   await checkModelAccess(params.apiKeyModelWhitelist, params.aliasId);
   const model = await resolveModel(params.orgId, params.aliasId);
   const db = await getDb();
   const rules = await getEffectiveRules(db, params.customerId);
-  if (rules.length > 0) {
+
+  // Conservative pre-call estimate. Completion is bounded by max_tokens (an
+  // upper bound on actual output); prompt by estimatePromptTokens. Spend is
+  // derived from the worst-case ACTIVE entry price (entry.price ?? model.price)
+  // so higher-priced fallback entries cannot bypass balance/spend limits, and
+  // the completion cap falls back to model.limits.output or a default when the
+  // request omits max_tokens (OpenAI allows this) — previously completion was
+  // estimated as zero, so balance + spend/token limits were never enforced and
+  // customers could go negative / exceed limits until settlement.
+  const prompt = Math.max(0, params.estimatedPromptTokens ?? 0);
+  const completion = resolveCompletionCap(params.maxCompletionTokens, model);
+  const estimatedTokens = prompt + completion;
+  const price = worstCaseActiveEntryPrice(model);
+  const estimatedSpendMinor =
+    Math.ceil((prompt * price.inputMinorPerMillion) / 1_000_000) +
+    Math.ceil((completion * price.outputMinorPerMillion) / 1_000_000);
+
+  if (rules.length > 0 && estimatedTokens > 0) {
     const result = await checkLimits({
       db,
       customerId: params.customerId,
       rules,
-      estimatedTokens: params.estimatedTokens,
-      estimatedSpendMinor: params.estimatedSpendMinor,
+      estimatedTokens,
+      estimatedSpendMinor,
       modelAliasId: params.aliasId,
       scopeTarget: params.scopeTarget,
     });
@@ -120,8 +222,8 @@ export async function preFlight(params: {
       throw new BillingError(429, "rate_limited", "Rate limit exceeded");
     }
   }
-  if (params.estimatedSpendMinor && params.estimatedSpendMinor > 0) {
-    await checkBalance(params.customerId, params.estimatedSpendMinor, model.currency);
+  if (estimatedSpendMinor > 0) {
+    await checkBalance(params.customerId, estimatedSpendMinor, model.currency);
   }
   return { model, rules };
 }
@@ -270,6 +372,13 @@ export function computeCharges(params: {
   return { costMinor, priceMinor, currency: model.currency };
 }
 
+/**
+ * Settlement guard failure: the customer no longer matches the expected
+ * org/currency/state, so the debit must NOT happen. Thrown inside the
+ * transaction to abort it atomically; caught by settleUsage and logged.
+ */
+class SettlementGuardError extends Error {}
+
 export async function settleUsage(params: {
   orgId: ObjectId;
   customerId: ObjectId;
@@ -287,8 +396,9 @@ export async function settleUsage(params: {
   durationMs: number;
   errorCode?: string;
   rules: EffectiveRules;
-  }): Promise<void> {
+}): Promise<void> {
   const db = await getDb();
+  const client = getClient();
   const now = new Date();
   const occurredAt = now;
 
@@ -317,43 +427,94 @@ export async function settleUsage(params: {
     occurredAt,
   };
 
-  await db.usageRecords.insertOne({
-    _id: new ObjectId(),
-    ...usageRecord,
-    createdAt: now,
-    updatedAt: now,
-  } as UsageRecordDoc);
+  // Wrap usage insert + balance debit + ledger entry + rate counters in ONE
+  // transaction so a failure can never leave a partial charge (debit without a
+  // usage record, or a successful stream left uncharged). The balance update
+  // carries org/currency/not-closed guards: if the customer was closed, moved
+  // orgs, or changed currency mid-flight, the debit is refused and the whole
+  // txn aborts atomically.
+  const session = client.startSession();
+  try {
+    // withTransaction commits when the callback resolves and rethrows (after
+    // its internal retries) when it cannot commit, so a resolved promise means
+    // the settlement committed atomically; a throw propagates to the catch.
+    await session.withTransaction(async () => {
+      await db.usageRecords.insertOne(
+        {
+          _id: new ObjectId(),
+          ...usageRecord,
+          createdAt: now,
+          updatedAt: now,
+        } as UsageRecordDoc,
+        { session },
+      );
 
-  if (params.priceMinor > 0) {
-    await db.customers.updateOne(
-      { _id: params.customerId },
-      { $inc: { "balance.amountMinor": -params.priceMinor }, $set: { updatedAt: now } },
-    );
-    await db.balanceAdjustments.insertOne({
-      _id: new ObjectId(),
-      organizationId: params.orgId,
-      customerId: params.customerId,
-      amountMinor: -params.priceMinor,
-      currency: params.currency,
-      reason: "usage_debit",
-      occurredAt,
-      createdAt: now,
-      updatedAt: now,
+      if (params.priceMinor > 0) {
+        const debit = await db.customers.updateOne(
+          {
+            _id: params.customerId,
+            organizationId: params.orgId,
+            "balance.currency": params.currency,
+            status: { $ne: "closed" },
+          },
+          {
+            $inc: { "balance.amountMinor": -params.priceMinor },
+            $set: { updatedAt: now },
+          },
+          { session },
+        );
+        if (debit.matchedCount === 0) {
+          // Guard failed: refuse the debit and abort the transaction atomically.
+          throw new SettlementGuardError();
+        }
+        await db.balanceAdjustments.insertOne(
+          {
+            _id: new ObjectId(),
+            organizationId: params.orgId,
+            customerId: params.customerId,
+            amountMinor: -params.priceMinor,
+            currency: params.currency,
+            reason: "usage_debit",
+            occurredAt,
+            createdAt: now,
+            updatedAt: now,
+          },
+          { session },
+        );
+      }
+
+      await recordUsage({
+        db,
+        organizationId: params.orgId,
+        customerId: params.customerId,
+        rules: params.rules,
+        usage: {
+          tokens: params.usage.totalTokens,
+          requests: 1,
+          spendMinor: params.priceMinor,
+          currency: params.currency,
+          modelAliasId: params.model.aliasId,
+        },
+        occurredAt,
+        session,
+      });
     });
+  } catch (err) {
+    if (err instanceof SettlementGuardError) {
+      // Expected edge: customer closed / org or currency changed mid-call. The
+      // upstream call already succeeded; no charge is applied. Log so it can be
+      // reconciled, but do not surface to the caller (the AI response is valid).
+      console.error("[settleUsage] balance guard failed — no charge applied", {
+        customerId: params.customerId.toHexString(),
+        orgId: params.orgId.toHexString(),
+        currency: params.currency,
+        priceMinor: params.priceMinor,
+      });
+      return;
+    }
+    // Transient/unknown error: propagate so the caller logs it reliably.
+    throw err;
+  } finally {
+    await session.endSession();
   }
-
-  await recordUsage({
-    db,
-    organizationId: params.orgId,
-    customerId: params.customerId,
-    rules: params.rules,
-    usage: {
-      tokens: params.usage.totalTokens,
-      requests: 1,
-      spendMinor: params.priceMinor,
-      currency: params.currency,
-      modelAliasId: params.model.aliasId,
-    },
-    occurredAt,
-  });
 }

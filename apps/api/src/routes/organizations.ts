@@ -158,7 +158,9 @@ organizationRoutes.patch(
     const id = c.req.param("id");
     if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
     const oid = new ObjectId(id);
-    if (!roleForOrg(user, oid)) return c.json({ error: "not_found" }, 404);
+    const role = roleForOrg(user, oid);
+    if (!role) return c.json({ error: "not_found" }, 404);
+    if (role !== "admin") return c.json({ error: "forbidden" }, 403);
     const body = c.req.valid("json");
     const db = await getDb();
 

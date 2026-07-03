@@ -17,6 +17,7 @@ import {
   setToken,
   ApiError,
 } from "../api/client.ts";
+import { tokenValidatedState } from "./bootstrap-state.ts";
 
 export type UserRole = "admin" | "member";
 
@@ -100,9 +101,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         try {
           const me = await getJson<User>("/admin/auth/me");
           if (!cancelled) {
-            setUser(me);
-            setNeedsSetup(false);
-            setLoading(false);
+            // tokenValidatedState centralizes the token-success invariant
+            // (needsSetup MUST become false, not null) so it is unit-tested.
+            const next = tokenValidatedState(me);
+            setUser(next.user);
+            setNeedsSetup(next.needsSetup);
+            setLoading(next.loading);
           }
           return;
         } catch (err) {

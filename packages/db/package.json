@@ -13,7 +13,11 @@
     "build": "bun build src/index.ts --target=bun --outdir dist",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
-    "clean": "rm -rf dist .turbo node_modules/.tmp"
+    "clean": "rm -rf dist .turbo node_modules/.tmp",
+    "migrator": "bun run src/migrator/cli.ts",
+    "db:new-migration": "bun run src/migrator/cli.ts new",
+    "db:migrate": "bun run src/migrator/cli.ts run",
+    "db:status": "bun run src/migrator/cli.ts status"
   },
   "dependencies": {
     "mongodb": "^6.18",

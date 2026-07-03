@@ -27,6 +27,21 @@ export function hashToken(token: string): string {
   return createHash("sha256").update(token, "utf8").digest("hex");
 }
 
+/**
+ * Constant-time comparison of two equal-length strings (e.g. sha256 hex key
+ * hashes). Length mismatch returns false without comparing bytes (an attacker
+ * cannot use timing to recover the hash: hashToken always emits a 64-char hex
+ * digest, so legitimate comparisons are always equal-length). Used for public
+ * API-key verification so a normal `===` doesn't short-circuit on the first
+ * differing byte and leak how many leading bytes matched.
+ */
+export function safeHashEqual(a: string, b: string): boolean {
+  const ab = Buffer.from(a, "utf8");
+  const bb = Buffer.from(b, "utf8");
+  if (ab.length !== bb.length) return false;
+  return timingSafeEqual(ab, bb);
+}
+
 export interface JwtPayload {
   sub: string;
   orgId: string;

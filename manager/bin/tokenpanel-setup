@@ -495,8 +495,8 @@ done
 docker compose -f "$APP_YML" rm -sf mongo-init >/dev/null 2>&1 || true
 
 step "4/5" "building app image..."
-docker build --progress=plain -f "${INSTALL_DIR}/docker/prod.Dockerfile" -t tokenpanel/app:current "$INSTALL_DIR" || \
-  die "docker build failed — check Dockerfile and code"
+source "${SCRIPT_DIR}/../lib/build.sh"
+build_current_checkout_image || die "docker build failed — check Dockerfile and code"
 
 step "5/5" "starting app..."
 docker compose -f "$APP_YML" up -d

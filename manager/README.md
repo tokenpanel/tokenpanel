@@ -19,7 +19,7 @@ manager/
     health.sh            # health-check polling
     backup.sh            # mongodump wrapper (tokenpanel-wuv)
     migrate.sh           # migration runner wrapper
-    build.sh             # docker build on host (tokenpanel-db3)
+    build.sh             # docker build on host (shared by setup/update/rebuild)
     rollback.sh          # container swap + rollback (tokenpanel-db3)
   templates/
     app.yml.tmpl         # compose template (envsubst)
@@ -57,7 +57,7 @@ tokenpanel migrate      # run pending migrations
 tokenpanel logs [-f]    # tail container logs
 tokenpanel enter [svc]  # exec shell into container
 tokenpanel doctor       # diagnostics
-tokenpanel rebuild      # force-recreate (keeps data)
+tokenpanel rebuild      # rebuild current checkout + force-recreate (keeps data)
 tokenpanel destroy      # remove containers (keeps data)
 tokenpanel reset        # WIPE everything (strong confirm)
 tokenpanel version      # manager + app versions

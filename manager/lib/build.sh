@@ -1,9 +1,65 @@
 #!/usr/bin/env bash
-# Build on host — git pull + docker build + tag.
-# Used by the 6-phase update flow.
+# Build on host — docker build + tags.
+# Shared by setup, rebuild, and the 6-phase update flow.
 
 CURRENT_IMAGE_ID=""
 NEW_IMAGE_TAG=""
+
+docker_tag_safe() {
+  local raw="$1"
+  local safe
+  safe="$(printf '%s' "$raw" | tr -c 'A-Za-z0-9_.-' '-')"
+  safe="${safe:0:120}"
+  [ -n "$safe" ] || safe="dev-$(date +%s)"
+  [[ "$safe" =~ ^[A-Za-z0-9_] ]] || safe="v${safe}"
+  printf '%s\n' "$safe"
+}
+
+current_checkout_tag() {
+  local raw
+  raw="$(git -C "$INSTALL_DIR" describe --tags --always 2>/dev/null || echo "dev-$(date +%s)")"
+  docker_tag_safe "$raw"
+}
+
+docker_build_prod() {
+  if [ "$#" -lt 1 ]; then
+    err "docker_build_prod: at least one image tag is required"
+    return 1
+  fi
+
+  local -a args
+  args=(--progress=plain -f "$INSTALL_DIR/docker/prod.Dockerfile")
+
+  local tag
+  for tag in "$@"; do
+    args+=(-t "$tag")
+  done
+  args+=("$INSTALL_DIR")
+
+  if docker build "${args[@]}"; then
+    return 0
+  fi
+
+  warn "docker build failed; retrying once for transient registry/network failure..."
+  docker build "${args[@]}"
+}
+
+build_current_checkout_image() {
+  local new_version_tag
+  new_version_tag="$(current_checkout_tag)"
+  info "building image: tokenpanel/app:${new_version_tag}..."
+
+  docker_build_prod \
+    "tokenpanel/app:${new_version_tag}" \
+    "tokenpanel/app:current" || {
+    err "docker build failed"
+    return 1
+  }
+
+  NEW_IMAGE_TAG="$new_version_tag"
+  export NEW_IMAGE_TAG
+  ok "image built: tokenpanel/app:${new_version_tag}"
+}
 
 fetch_and_build() {
   local target_version="${1:-}"
@@ -41,25 +97,13 @@ fetch_and_build() {
     fi
   fi
 
-  local new_version_tag
-  new_version_tag="$(git -C "$INSTALL_DIR" describe --tags --always 2>/dev/null || echo "dev-$(date +%s)")"
-  info "building image: tokenpanel/app:${new_version_tag}..."
-
-  docker build --progress=plain \
-    -f "$INSTALL_DIR/docker/prod.Dockerfile" \
-    -t "tokenpanel/app:${new_version_tag}" \
-    -t "tokenpanel/app:current" \
-    "$INSTALL_DIR" || { err "docker build failed"; return 1; }
+  build_current_checkout_image || return 1
 
   # Tag old image as :previous for rollback
   if [ -n "$CURRENT_IMAGE_ID" ]; then
     docker tag "$CURRENT_IMAGE_ID" tokenpanel/app:previous 2>/dev/null || true
     info "tagged old image as tokenpanel/app:previous"
   fi
-
-  NEW_IMAGE_TAG="$new_version_tag"
-  export NEW_IMAGE_TAG
-  ok "image built: tokenpanel/app:${new_version_tag}"
 }
 
 cleanup_old_images() {

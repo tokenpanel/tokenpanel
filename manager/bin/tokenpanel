@@ -247,7 +247,16 @@ cmd_version() {
 }
 
 cmd_rebuild() {
+  source "${SCRIPT_DIR}/../lib/build.sh"
+
   preflight_quick || die "preflight failed"
+  step "rebuild" "building current checkout image..."
+  CURRENT_IMAGE_ID="$(docker compose -f "$APP_YML" images api --format '{{.ID}}' 2>/dev/null | head -1)"
+  build_current_checkout_image || die "build failed — old container still available"
+  if [ -n "$CURRENT_IMAGE_ID" ]; then
+    docker tag "$CURRENT_IMAGE_ID" tokenpanel/app:previous 2>/dev/null || true
+  fi
+
   step "rebuild" "force-recreating containers (keeping data)..."
   docker compose -f "$APP_YML" up -d --force-recreate --remove-orphans
   wait_for_health api 60 || die "api did not become healthy"

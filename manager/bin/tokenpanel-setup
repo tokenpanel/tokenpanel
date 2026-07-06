@@ -1,10 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SOURCE="${BASH_SOURCE[0]}"
+while [ -L "$SOURCE" ]; do
+  DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  [[ "$SOURCE" = /* ]] || SOURCE="$DIR/$SOURCE"
+done
+SCRIPT_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
 MANAGER_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 source "${SCRIPT_DIR}/../lib/config.sh"
 source "${SCRIPT_DIR}/../lib/output.sh"
+source "${SCRIPT_DIR}/../lib/prompt.sh"
 source "${SCRIPT_DIR}/../lib/preflight.sh"
 source "${SCRIPT_DIR}/../lib/health.sh"
 source "${SCRIPT_DIR}/../lib/encode.sh"
@@ -23,10 +30,89 @@ validate_domain() {
   [[ "$domain" =~ ^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$ ]] || {
     err "invalid domain format"; return 1; 
   }
-  if ! host "$domain" >/dev/null 2>&1 && ! nslookup "$domain" >/dev/null 2>&1; then
+  if command -v getent >/dev/null 2>&1 && getent hosts "$domain" >/dev/null 2>&1; then
+    return 0
+  fi
+  if command -v host >/dev/null 2>&1 && host "$domain" >/dev/null 2>&1; then
+    return 0
+  fi
+  if command -v nslookup >/dev/null 2>&1 && nslookup "$domain" >/dev/null 2>&1; then
+    return 0
+  fi
+  if [[ "$domain" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+    return 0
+  fi
+  if [ "$domain" = "localhost" ]; then
+    return 0
+  fi
+  if command -v getent >/dev/null 2>&1 || command -v host >/dev/null 2>&1 || command -v nslookup >/dev/null 2>&1; then
     warn "DNS for $domain does not resolve yet. Make sure it points to this server before starting."
   fi
   return 0
+}
+
+domain_supports_letsencrypt() {
+  local domain="$1"
+  [[ "$domain" != "localhost" ]] || return 1
+  [[ ! "$domain" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || return 1
+  [[ "$domain" == *.* ]] || return 1
+  return 0
+}
+
+is_ipv4_literal() {
+  [[ "${1:-}" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]
+}
+
+local_ipv4_addresses() {
+  if command -v ip >/dev/null 2>&1; then
+    ip -o -4 addr show scope global 2>/dev/null | awk '{ split($4, a, "/"); print a[1] }'
+    return 0
+  fi
+  if command -v hostname >/dev/null 2>&1; then
+    hostname -I 2>/dev/null | tr ' ' '\n' | awk '/^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/'
+  fi
+}
+
+host_has_ipv4_address() {
+  local wanted="$1"
+  local ip_addr
+  while IFS= read -r ip_addr; do
+    [ "$ip_addr" = "$wanted" ] && return 0
+  done < <(local_ipv4_addresses)
+  return 1
+}
+
+detect_public_ipv4() {
+  command -v curl >/dev/null 2>&1 || return 1
+  local public_ip
+  public_ip="$(curl -fsS --max-time 4 https://api.ipify.org 2>/dev/null || true)"
+  is_ipv4_literal "$public_ip" || return 1
+  printf '%s\n' "$public_ip"
+}
+
+warn_if_nat_or_forwarding_needed() {
+  local public_ports
+  if [ "${USE_CADDY:-n}" = "y" ]; then
+    public_ports="80 and 443"
+  else
+    public_ports="${API_PORT:-3000}"
+  fi
+
+  [ -n "${DOMAIN:-}" ] || return 0
+  is_ipv4_literal "$DOMAIN" || return 0
+  host_has_ipv4_address "$DOMAIN" && return 0
+
+  local local_ips public_ip
+  local_ips="$(local_ipv4_addresses | tr '\n' ' ' | sed 's/[[:space:]]*$//')"
+  public_ip="$(detect_public_ipv4 || true)"
+
+  if [ "$public_ip" = "$DOMAIN" ]; then
+    warn "public IP ${DOMAIN} is NATed (not assigned to this host)."
+  else
+    warn "IP ${DOMAIN} is not assigned to this host."
+  fi
+  warn "TokenPanel is healthy locally; external access needs provider NAT/firewall forwarding for TCP ${public_ports}."
+  [ -n "$local_ips" ] && warn "Forward to host address(es): ${local_ips}."
 }
 
 validate_email() {
@@ -93,10 +179,10 @@ prompt_yn() {
   local default="${2:-y}"
   local input
   if [ "$default" = "y" ]; then
-    read -rp "${prompt} [Y/n]: " input
+    tp_read_required input "${prompt} [Y/n]: " || exit 1
     input="${input:-y}"
   else
-    read -rp "${prompt} [y/N]: " input
+    tp_read_required input "${prompt} [y/N]: " || exit 1
     input="${input:-n}"
   fi
   [[ "$input" =~ ^[Yy] ]] && echo "y" || echo "n"
@@ -107,11 +193,34 @@ prompt_with_default() {
   local default="${2:-}"
   local input
   if [ -n "$default" ]; then
-    read -rp "${prompt} [${default}]: " input
+    tp_read_required input "${prompt} [${default}]: " || exit 1
     echo "${input:-$default}"
   else
-    read -rp "${prompt}: " input
+    tp_read_required input "${prompt}: " || exit 1
     echo "$input"
+  fi
+}
+
+install_packages() {
+  if command -v apt-get >/dev/null 2>&1; then
+    apt-get update -qq >/dev/null
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "$@" >/dev/null
+  elif command -v dnf >/dev/null 2>&1; then
+    dnf install -y -q "$@" >/dev/null
+  elif command -v yum >/dev/null 2>&1; then
+    yum install -y -q "$@" >/dev/null
+  elif command -v apk >/dev/null 2>&1; then
+    apk add --no-cache "$@" >/dev/null
+  else
+    return 1
+  fi
+}
+
+start_docker() {
+  if command -v systemctl >/dev/null 2>&1 && systemctl list-system-units >/dev/null 2>&1; then
+    systemctl enable --now docker.service 2>/dev/null || systemctl start docker.service 2>/dev/null || true
+  elif command -v service >/dev/null 2>&1; then
+    service docker start >/dev/null 2>&1 || true
   fi
 }
 
@@ -132,77 +241,98 @@ echo "  Data:   ${DATA_DIR}  (MongoDB, backups, certs)"
 echo
 echo "Existing data will be preserved. Existing config will be backed up."
 echo
-read -rp "Press ENTER to continue, Ctrl+C to cancel. "
 
 # ── Root check ──
 [ "$(id -u)" -eq 0 ] || die "must run as root (use sudo)"
+tp_require_tty "tokenpanel-setup is interactive and needs a TTY" || exit 1
+tp_read_required _ "Press ENTER to continue, Ctrl+C to cancel. " || exit 1
 
 # ── Docker check ──
 if ! command -v docker >/dev/null 2>&1; then
   step "prereq" "Docker not found. Installing..."
   curl -fsSL https://get.docker.com | sh
-  systemctl enable --now docker
+  start_docker
   ok "Docker installed"
 else
   ok "Docker already installed"
 fi
+start_docker
+docker info >/dev/null 2>&1 || die "Docker is installed but not running. Start it with: systemctl start docker"
 
 # ── jq check ──
 if ! command -v jq >/dev/null 2>&1; then
   step "prereq" "Installing jq..."
-  apt-get update -qq >/dev/null 2>&1 && apt-get install -y -qq jq >/dev/null 2>&1 || \
-    yum install -y -q jq >/dev/null 2>&1 || warn "jq not installed — backup size check will use fallback"
+  install_packages jq || warn "jq not installed — backup size check will use fallback"
 fi
 
 # ── envsubst check ──
 if ! command -v envsubst >/dev/null 2>&1; then
   step "prereq" "Installing gettext (envsubst)..."
-  apt-get update -qq >/dev/null 2>&1 && apt-get install -y -qq gettext >/dev/null 2>&1 || \
-    yum install -y -q gettext >/dev/null 2>&1 || die "envsubst not available — install gettext"
+  install_packages gettext || die "envsubst not available — install gettext"
 fi
 
 # ── Load existing config as defaults ──
 EXISTING_DOMAIN="${DOMAIN:-}"
 EXISTING_EMAIL="${ADMIN_EMAIL:-}"
 EXISTING_MONGO_USER="${MONGO_USER:-tokenpanel}"
+EXISTING_MONGO_PASS="${MONGO_PASS:-}"
 EXISTING_MONGODB_DB="${MONGODB_DB:-tokenpanel}"
+EXISTING_JWT_SECRET="${JWT_SECRET:-}"
 EXISTING_TIMEZONE="${TZ:-UTC}"
 EXISTING_API_PORT="${API_PORT:-3000}"
+EXISTING_USE_CADDY="${USE_CADDY:-y}"
+if [ -f "$APP_YML" ] && ! grep -q '^[[:space:]]*caddy:' "$APP_YML" 2>/dev/null; then
+  EXISTING_USE_CADDY="n"
+fi
 
 # ── Prompts ──
 echo
-step "1/8" "Domain name for the admin panel"
-DOMAIN="$(prompt_with_default '  Domain []:' '')"
+step "1/7" "Domain name for the admin panel"
+DOMAIN="$(prompt_with_default '  Domain' "$EXISTING_DOMAIN")"
 [ -n "$DOMAIN" ] || die "domain is required"
 validate_domain "$DOMAIN" || die "invalid domain"
 
-step "2/8" "Admin email (first login + Let's Encrypt notifications)"
-ADMIN_EMAIL="$(prompt_with_default '  Email []:' '')"
+step "2/7" "Admin email (first login + Let's Encrypt notifications)"
+ADMIN_EMAIL="$(prompt_with_default '  Email' "$EXISTING_EMAIL")"
 [ -n "$ADMIN_EMAIL" ] || die "email is required"
 validate_email "$ADMIN_EMAIL" || die "invalid email"
 
-step "3/8" "HTTPS via Let's Encrypt (Caddy reverse proxy)"
-USE_CADDY="$(prompt_yn '  Use built-in Caddy for automatic HTTPS?' 'y')"
+step "3/7" "HTTPS via Let's Encrypt (Caddy reverse proxy)"
+if domain_supports_letsencrypt "$DOMAIN"; then
+  USE_CADDY="$(prompt_yn '  Use built-in Caddy for automatic HTTPS?' "$EXISTING_USE_CADDY")"
+else
+  warn "Let's Encrypt needs a real DNS hostname. Using direct HTTP mode for '$DOMAIN'."
+  USE_CADDY="n"
+fi
 
 if [ "$USE_CADDY" = "n" ]; then
   API_PORT="$(prompt_with_default '  External API port' "${EXISTING_API_PORT}")"
 else
   API_PORT="3000"
 fi
+warn_if_nat_or_forwarding_needed
 
-step "4/8" "MongoDB credentials"
+step "4/7" "MongoDB credentials"
 MONGO_USER="$(prompt_with_default '  MongoDB admin username' "${EXISTING_MONGO_USER}")"
 MONGO_PASS_PROMPT=""
-read -rsp "  MongoDB admin password (blank = generate): " MONGO_PASS_PROMPT
-echo
+if [ -n "$EXISTING_MONGO_PASS" ]; then
+  tp_read_secret MONGO_PASS_PROMPT "  MongoDB admin password (blank = keep existing): " || exit 1
+else
+  tp_read_secret MONGO_PASS_PROMPT "  MongoDB admin password (blank = generate): " || exit 1
+fi
 if [ -z "$MONGO_PASS_PROMPT" ]; then
-  MONGO_PASS="$(generate_secret 24)"
-  info "  generated Mongo password (saved to ${ENV_FILE})"
-  SHOW_MONGO_PASS="$(prompt_yn '  Display the generated password now?' 'n')"
-  if [ "$SHOW_MONGO_PASS" = "y" ]; then
-    echo "  Mongo password: ${MONGO_PASS}"
+  if [ -n "$EXISTING_MONGO_PASS" ]; then
+    MONGO_PASS="$EXISTING_MONGO_PASS"
+    info "  keeping existing Mongo password"
   else
-    info "  (kept hidden — view later: sudo cat ${ENV_FILE})"
+    MONGO_PASS="$(generate_secret 24)"
+    info "  generated Mongo password (saved to ${ENV_FILE})"
+    SHOW_MONGO_PASS="$(prompt_yn '  Display the generated password now?' 'n')"
+    if [ "$SHOW_MONGO_PASS" = "y" ]; then
+      echo "  Mongo password: ${MONGO_PASS}"
+    else
+      info "  (kept hidden — view later: sudo cat ${ENV_FILE})"
+    fi
   fi
 else
   MONGO_PASS="$MONGO_PASS_PROMPT"
@@ -213,28 +343,35 @@ fi
 MONGO_USER_URI="$(uri_encode "$MONGO_USER")"
 MONGO_PASS_URI="$(uri_encode "$MONGO_PASS")"
 JWT_SECRET_PROMPT=""
-read -rsp "  JWT secret (blank = generate): " JWT_SECRET_PROMPT
-echo
+if [ -n "$EXISTING_JWT_SECRET" ]; then
+  tp_read_secret JWT_SECRET_PROMPT "  JWT secret (blank = keep existing): " || exit 1
+else
+  tp_read_secret JWT_SECRET_PROMPT "  JWT secret (blank = generate): " || exit 1
+fi
 if [ -z "$JWT_SECRET_PROMPT" ]; then
-  JWT_SECRET="$(generate_secret 48)"
-  info "  generated (48 bytes, saved to ${ENV_FILE})"
+  if [ -n "$EXISTING_JWT_SECRET" ]; then
+    JWT_SECRET="$EXISTING_JWT_SECRET"
+    info "  keeping existing JWT secret"
+  else
+    JWT_SECRET="$(generate_secret 48)"
+    info "  generated (48 bytes, saved to ${ENV_FILE})"
+  fi
 else
   JWT_SECRET="$JWT_SECRET_PROMPT"
 fi
 
-step "6/8" "MongoDB database name"
+step "5/7" "MongoDB database name"
 MONGODB_DB="$(prompt_with_default '  Database name' "${EXISTING_MONGODB_DB}")"
 validate_db_name "$MONGODB_DB" || die "invalid database name (allowed: letters, digits, underscore, hyphen; 1-64 chars)"
 
-step "7/8" "SMTP for notifications (optional)"
+step "6/7" "SMTP for notifications (optional)"
 USE_SMTP="$(prompt_yn '  Configure SMTP?' 'n')"
 SMTP_BLOCK=""
 if [ "$USE_SMTP" = "y" ]; then
   SMTP_HOST="$(prompt_with_default '  SMTP host' '')"
   SMTP_PORT="$(prompt_with_default '  SMTP port' '587')"
   SMTP_USER="$(prompt_with_default '  SMTP user' '')"
-  read -rsp "  SMTP password: " SMTP_PASS
-  echo
+  tp_read_secret SMTP_PASS "  SMTP password: " || exit 1
   SMTP_FROM="$(prompt_with_default '  From address' "$ADMIN_EMAIL")"
   SMTP_BLOCK="SMTP_HOST=${SMTP_HOST}
 SMTP_PORT=${SMTP_PORT}
@@ -243,7 +380,7 @@ SMTP_PASS=${SMTP_PASS}
 SMTP_FROM=${SMTP_FROM}"
 fi
 
-step "8/8" "Timezone"
+step "7/7" "Timezone"
 TIMEZONE="$(prompt_with_default '  Timezone' "${EXISTING_TIMEZONE}")"
 
 # ── Summary ──
@@ -267,7 +404,7 @@ CONFIRM="$(prompt_yn 'Proceed with install?' 'y')"
 
 # ── Validate required config ──
 for var in DOMAIN ADMIN_EMAIL MONGO_USER MONGO_PASS MONGODB_DB JWT_SECRET; do
-  eval "val=\"\${$var:-}\""
+  val="${!var:-}"
   [ -n "$val" ] || die "$var is required and must not be empty"
   validate_env_value "$val" "$var" \
     || die "aborting: unsafe characters in $var (see .env rules above)"
@@ -275,7 +412,7 @@ done
 # SMTP values are optional but, if configured, are written raw into .env too.
 if [ "${USE_SMTP:-n}" = "y" ]; then
   for var in SMTP_HOST SMTP_PORT SMTP_USER SMTP_PASS SMTP_FROM; do
-    eval "val=\"\${$var:-}\""
+    val="${!var:-}"
     validate_env_value "$val" "$var" \
       || die "aborting: unsafe characters in $var (see .env rules above)"
   done
@@ -289,14 +426,14 @@ mkdir -p "$CONFIG_DIR" "$DATA_DIR/mongo" "$DATA_DIR/caddy" "$DATA_DIR/backups" "
 
 # Backup existing config
 if [ -f "$ENV_FILE" ]; then
-  cp "$ENV_FILE" "${ENV_FILE}.bak.$(date +%s)"
+  cp -f "$ENV_FILE" "${ENV_FILE}.bak.$(date +%s)"
   info "backed up existing .env"
 fi
 
 # Export all variables for envsubst (env.tmpl expands everything — it's the
 # .env file itself, so secrets belong here).
 export DOMAIN ADMIN_EMAIL MONGO_USER MONGO_PASS MONGO_USER_URI MONGO_PASS_URI \
-       MONGODB_DB JWT_SECRET API_PORT TIMEZONE \
+       MONGODB_DB JWT_SECRET API_PORT USE_CADDY TIMEZONE \
        INSTALL_DIR CONFIG_DIR DATA_DIR LOG_DIR BACKUP_DIR TEMPLATE_DIR
 
 # Render .env (no whitelist — every var in env.tmpl is a real config value).
@@ -333,21 +470,32 @@ docker pull mongo:8 >/dev/null 2>&1 || true
 [ "$USE_CADDY" = "y" ] && docker pull caddy:2-alpine >/dev/null 2>&1 || true
 
 step "3/5" "starting mongo replica set..."
-docker compose -f "$APP_YML" up -d mongo mongo-init
-# Wait for primary
-for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+docker compose -f "$APP_YML" up -d mongo
+
+mongo_admin_uri="mongodb://${MONGO_USER_URI}:${MONGO_PASS_URI}@mongo:27017/admin?authSource=admin&directConnection=true"
+for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do
   sleep 2
-  if docker compose -f "$APP_YML" exec -T mongo mongosh --quiet \
-    "mongodb://${MONGO_USER_URI}:${MONGO_PASS_URI}@mongo:27017/admin?authSource=admin&directConnection=true" \
+  if docker compose -f "$APP_YML" exec -T mongo mongosh --quiet "$mongo_admin_uri" \
+    --eval 'try { rs.status().ok } catch(e) { rs.initiate({_id:"rs0",members:[{_id:0,host:"mongo:27017"}]}) }' >/dev/null 2>&1; then
+    break
+  fi
+  [ "$i" = 30 ] && die "mongo did not accept authenticated setup connection in 60s"
+done
+
+for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do
+  sleep 2
+  if docker compose -f "$APP_YML" exec -T mongo mongosh --quiet "$mongo_admin_uri" \
     --eval 'db.hello().isWritablePrimary' 2>/dev/null | grep -q true; then
     ok "mongo primary ready"
     break
   fi
-  [ "$i" = 15 ] && die "mongo did not become primary in 30s"
+  [ "$i" = 30 ] && die "mongo did not become primary in 60s"
 done
 
+docker compose -f "$APP_YML" rm -sf mongo-init >/dev/null 2>&1 || true
+
 step "4/5" "building app image..."
-docker build -f "${INSTALL_DIR}/docker/prod.Dockerfile" -t tokenpanel/app:current "$INSTALL_DIR" || \
+docker build --progress=plain -f "${INSTALL_DIR}/docker/prod.Dockerfile" -t tokenpanel/app:current "$INSTALL_DIR" || \
   die "docker build failed — check Dockerfile and code"
 
 step "5/5" "starting app..."

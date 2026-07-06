@@ -6,6 +6,7 @@ set -euo pipefail
 UNINSTALL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${UNINSTALL_DIR}/lib/config.sh"
 source "${UNINSTALL_DIR}/lib/output.sh"
+source "${UNINSTALL_DIR}/lib/prompt.sh"
 source "${UNINSTALL_DIR}/lib/systemd.sh"
 
 [ "$(id -u)" -eq 0 ] || die "must run as root (use sudo)"
@@ -30,11 +31,11 @@ for p in "$INSTALL_DIR" "$CONFIG_DIR" "$DATA_DIR" "$LOG_DIR"; do
 done
 
 # ── Double confirmation ──
-read -rp "Type DELETE to confirm: " confirm1
+tp_read_required confirm1 "Type DELETE to confirm: " || exit 1
 [ "$confirm1" = "DELETE" ] || { info "Aborted."; exit 0; }
 echo
 echo "To confirm, type the data directory exactly: ${DATA_DIR}"
-read -rp "> " confirm2
+tp_read_required confirm2 "> " || exit 1
 [ "$confirm2" = "$DATA_DIR" ] || { err "data directory mismatch — aborting"; exit 1; }
 
 echo

@@ -1,9 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SOURCE="${BASH_SOURCE[0]}"
+while [ -L "$SOURCE" ]; do
+  DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  [[ "$SOURCE" = /* ]] || SOURCE="$DIR/$SOURCE"
+done
+SCRIPT_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
 source "${SCRIPT_DIR}/../lib/config.sh"
 source "${SCRIPT_DIR}/../lib/output.sh"
+source "${SCRIPT_DIR}/../lib/prompt.sh"
 source "${SCRIPT_DIR}/../lib/preflight.sh"
 source "${SCRIPT_DIR}/../lib/health.sh"
 
@@ -137,7 +144,10 @@ cmd_logs() {
   else
     service="${1:-}"
   fi
-  docker compose -f "$APP_YML" logs $follow --tail=100 $service
+  local args=(logs --tail=100)
+  [ -n "$follow" ] && args+=("$follow")
+  [ -n "$service" ] && args+=("$service")
+  docker compose -f "$APP_YML" "${args[@]}"
 }
 
 cmd_enter() {
@@ -160,10 +170,68 @@ cmd_doctor() {
     --eval 'db.hello().isWritablePrimary' 2>/dev/null | grep -q true && \
     ok "mongo: replica set primary" || { err "mongo: not primary or unreachable"; fail=1; }
 
-  for port in 80 443 3000; do
-    if ss -tlnp 2>/dev/null | grep -q ":${port} "; then
-      warn "port ${port} in use"
+  port_listening() {
+    local port="$1"
+    if command -v ss >/dev/null 2>&1; then
+      ss -H -tln 2>/dev/null | awk '{print $4}' | grep -Eq ":${port}$"
+      return $?
     fi
+    if command -v netstat >/dev/null 2>&1; then
+      netstat -tln 2>/dev/null | awk '{print $4}' | grep -Eq ":${port}$"
+      return $?
+    fi
+    return 2
+  }
+
+  compose_owns_port() {
+    local port="$1"
+    docker compose -f "$APP_YML" ps --format '{{.Ports}}' 2>/dev/null | grep -q ":${port}->"
+  }
+
+  check_port() {
+    local port="$1"
+    local expected="${2:-optional}"
+    local rc=0
+
+    port_listening "$port" || rc=$?
+    if [ "$rc" -eq 0 ]; then
+      if compose_owns_port "$port"; then
+        ok "port ${port}: bound by tokenpanel"
+      elif [ "$expected" = "expected" ]; then
+        err "port ${port}: in use outside tokenpanel"
+        fail=1
+      else
+        warn "port ${port}: in use outside tokenpanel"
+      fi
+      return 0
+    fi
+
+    if [ "$rc" -eq 2 ]; then
+      warn "port ${port}: cannot inspect listeners (ss/netstat unavailable)"
+    elif [ "$expected" = "expected" ]; then
+      err "port ${port}: not listening"
+      fail=1
+    fi
+  }
+
+  local expected_ports=()
+  if [ "${USE_CADDY:-y}" = "y" ]; then
+    expected_ports=(80 443)
+  else
+    expected_ports=("${API_PORT:-3000}")
+  fi
+
+  local port expected
+  for port in "${expected_ports[@]}"; do
+    check_port "$port" expected
+  done
+
+  for port in 80 443 3000; do
+    expected=0
+    for expected_port in "${expected_ports[@]}"; do
+      [ "$port" = "$expected_port" ] && { expected=1; break; }
+    done
+    [ "$expected" -eq 0 ] && check_port "$port" optional
   done
 
   [ "$fail" -eq 0 ] && ok "all checks passed" || { err "issues found"; exit 1; }
@@ -192,7 +260,7 @@ cmd_destroy() {
   warn "This stops and removes containers. Your DATA IS PRESERVED."
   warn "Use this when you want to rebuild containers without losing the database."
   echo
-  read -rp "Proceed? [y/N] " confirm
+  tp_read_required confirm "Proceed? [y/N] " || exit 1
   [[ "$confirm" =~ ^[Yy] ]] || { info "aborted"; exit 0; }
   docker compose -f "$APP_YML" down --remove-orphans
   ok "containers removed. Data preserved at $DATA_DIR"
@@ -222,11 +290,11 @@ cmd_reset() {
     exit 1
   fi
   echo "To confirm, type your domain name exactly: ${domain}"
-  read -rp "> " confirm
+  tp_read_required confirm "> " || exit 1
   [ "$confirm" = "$domain" ] || { err "domain mismatch — aborting"; exit 1; }
 
   echo
-  read -rp "Type RESET in capital letters to proceed: " confirm2
+  tp_read_required confirm2 "Type RESET in capital letters to proceed: " || exit 1
   [ "$confirm2" = "RESET" ] || { err "did not type RESET — aborting"; exit 1; }
 
   echo

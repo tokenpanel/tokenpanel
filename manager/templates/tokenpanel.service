@@ -14,9 +14,9 @@ Type=oneshot
 RemainAfterExit=yes
 WorkingDirectory=${INSTALL_DIR}
 
-ExecStart=/usr/bin/docker compose -f ${CONFIG_DIR}/app.yml up -d --remove-orphans
-ExecStop=/usr/bin/docker compose -f ${CONFIG_DIR}/app.yml stop
-ExecReload=/usr/bin/docker compose -f ${CONFIG_DIR}/app.yml restart
+ExecStart=/usr/bin/docker compose --env-file ${CONFIG_DIR}/.env -f ${CONFIG_DIR}/app.yml up -d --remove-orphans
+ExecStop=/usr/bin/docker compose --env-file ${CONFIG_DIR}/.env -f ${CONFIG_DIR}/app.yml stop
+ExecReload=/usr/bin/docker compose --env-file ${CONFIG_DIR}/.env -f ${CONFIG_DIR}/app.yml restart
 
 TimeoutStopSec=120
 

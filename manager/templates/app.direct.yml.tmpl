@@ -21,15 +21,17 @@ services:
       MONGO_INITDB_ROOT_USERNAME: ${MONGO_USER}
       MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASS}
       MONGO_INITDB_DATABASE: ${MONGODB_DB}
+      MONGO_USER_URI: ${MONGO_USER_URI}
+      MONGO_PASS_URI: ${MONGO_PASS_URI}
     volumes:
       - ${DATA_DIR}/mongo:/data/db
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "mongosh", "--quiet", "--eval", "db.runCommand({ping:1}).ok"]
+      test: ["CMD-SHELL", "mongosh --quiet \"mongodb://$${MONGO_USER_URI}:$${MONGO_PASS_URI}@localhost:27017/admin?authSource=admin&directConnection=true\" --eval 'db.runCommand({ping:1}).ok' | grep -q 1"]
       interval: 10s
       timeout: 5s
-      retries: 10
-      start_period: 10s
+      retries: 30
+      start_period: 30s
 
   mongo-init:
     image: mongo:8
@@ -41,7 +43,7 @@ services:
       - sh
       - -c
       - |
-        MONGO_URI="mongodb://${MONGO_USER_URI}:${MONGO_PASS_URI}@mongo:27017/admin?authSource=admin"
+        MONGO_URI="mongodb://${MONGO_USER_URI}:${MONGO_PASS_URI}@mongo:27017/admin?authSource=admin&directConnection=true"
         mongosh "$$MONGO_URI" --eval 'try { rs.status().ok } catch(e) { rs.initiate({_id:"rs0",members:[{_id:0,host:"mongo:27017"}]}) }'
         for i in 1 2 3 4 5 6 7 8 9 10; do
           sleep 1

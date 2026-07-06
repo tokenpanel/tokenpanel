@@ -94,6 +94,7 @@ The installer:
 - Stores config in `/etc/tokenpanel`
 - Stores MongoDB data, backups, and certificates in `/var/tokenpanel/shared`
 - Starts an interactive setup wizard for domain, HTTPS, MongoDB, and admin settings
+- Keeps prompts interactive even when launched as `curl | sudo bash`
 
 After install:
 

@@ -2,6 +2,7 @@
 # Backup system: mongodump with dynamic space check + smart retention.
 
 source "${SCRIPT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}/output.sh"
+source "${SCRIPT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}/prompt.sh"
 
 # URI-encoded Mongo credentials (MONGO_USER_URI / MONGO_PASS_URI) are derived
 # in config.sh (_ensure_uri_creds), which is always sourced before this file.
@@ -225,7 +226,7 @@ restore_backup() {
   size="$(($(stat -c %s "$backup_file" 2>/dev/null || stat -f %z "$backup_file") / 1048576))"
   warn "Backup: $backup_file (${size}MB)"
   echo
-  read -rp "Type the current domain name to confirm restore: " confirm
+  tp_read_required confirm "Type the current domain name to confirm restore: " || return 1
   [ "$confirm" = "$DOMAIN" ] || { err "confirmation failed — domain mismatch"; return 1; }
 
   # 1. Verify archive integrity BEFORE touching the live DB.
@@ -258,8 +259,6 @@ restore_backup() {
 
   # 3. Stop the API for the swap window. Install an EXIT trap so the API is
   #    ALWAYS restarted — even if the script aborts (set -e, signal, error).
-  local _prev_exit_trap
-  _prev_exit_trap="$(trap -p EXIT || true)"
   trap 'docker compose -f "$APP_YML" start api >/dev/null 2>&1 && echo "⚠ api restarted after aborted restore" || true' EXIT
 
   step "restore" "stopping api..."
@@ -274,9 +273,6 @@ restore_backup() {
   #    on a partial-swap failure (rc == 2) we deliberately leave the API
   #    STOPPED so no traffic hits a partially-restored database.
   trap - EXIT
-  if [ -n "$_prev_exit_trap" ]; then
-    eval "$_prev_exit_trap"
-  fi
 
   # _restore_into_temp exit codes: 0 = success; 1 = failed before swap (live
   # DB untouched); 2 = swap failed partway (live DB may be PARTIALLY restored).

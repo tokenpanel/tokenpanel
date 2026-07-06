@@ -8,7 +8,7 @@ require_config() {
   local missing=0
   for var in MONGO_USER MONGO_PASS MONGODB_DB DOMAIN ADMIN_EMAIL JWT_SECRET; do
     local val
-    eval "val=\"\${$var:-}\""
+    val="${!var:-}"
     if [ -z "$val" ]; then
       err "config missing: $var is not set. Check $ENV_FILE (re-run tokenpanel-setup to fix)."
       missing=1

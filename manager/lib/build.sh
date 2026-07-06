@@ -45,7 +45,7 @@ fetch_and_build() {
   new_version_tag="$(git -C "$INSTALL_DIR" describe --tags --always 2>/dev/null || echo "dev-$(date +%s)")"
   info "building image: tokenpanel/app:${new_version_tag}..."
 
-  docker build \
+  docker build --progress=plain \
     -f "$INSTALL_DIR/docker/prod.Dockerfile" \
     -t "tokenpanel/app:${new_version_tag}" \
     -t "tokenpanel/app:current" \

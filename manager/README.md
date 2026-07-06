@@ -32,7 +32,7 @@ manager/
 ## Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/tokenpanel/tokenpanel/refs/heads/main/manager/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/tokenpanel/tokenpanel/main/manager/install.sh | sudo bash
 ```
 
 ## Manual install

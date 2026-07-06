@@ -78,7 +78,7 @@ If LiteLLM is the provider gateway, TokenPanel is the open-source customer, bill
 Production install on a Linux server:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/tokenpanel/tokenpanel/refs/heads/main/manager/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/tokenpanel/tokenpanel/main/manager/install.sh | sudo bash
 ```
 
 The installer:

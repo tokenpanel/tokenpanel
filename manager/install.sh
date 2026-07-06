@@ -4,6 +4,7 @@ set -euo pipefail
 REPO_URL="https://github.com/tokenpanel/tokenpanel"
 BRANCH="main"
 INSTALL_DIR="${TOKENPANEL_INSTALL_DIR:-/opt/tokenpanel}"
+INSTALL_URL="https://raw.githubusercontent.com/tokenpanel/tokenpanel/main/manager/install.sh"
 
 err() {
   echo "ERROR: $*" >&2
@@ -23,7 +24,7 @@ read_tty() {
     IFS= read -r -p "$prompt" "$__var"
   else
     err "interactive input required but no TTY is available"
-    err "run from an interactive shell: curl -fsSL https://raw.githubusercontent.com/tokenpanel/tokenpanel/refs/heads/main/manager/install.sh -o install.sh && sudo bash install.sh"
+    err "run from an interactive shell: curl -fsSL ${INSTALL_URL} | sudo bash"
     return 1
   fi
 }
@@ -66,7 +67,7 @@ echo
 # ── 1. Root check ──
 if [ "$(id -u)" -ne 0 ]; then
   echo 'ERROR: Run as root (use sudo).'
-  echo '  curl -fsSL https://raw.githubusercontent.com/tokenpanel/tokenpanel/refs/heads/main/manager/install.sh | sudo bash'
+  echo "  curl -fsSL ${INSTALL_URL} | sudo bash"
   exit 1
 fi
 
@@ -162,7 +163,19 @@ fi
 # ── 8. Hand off to setup wizard ──
 echo
 echo '→ Starting setup wizard...'
+setup_cmd="${INSTALL_DIR}/manager/bin/tokenpanel-setup"
 if have_tty; then
-  exec </dev/tty
+  set +e
+  "$setup_cmd" </dev/tty >/dev/tty 2>&1
+  setup_status=$?
+  set -e
+  if [ "$setup_status" -ne 0 ] && [ "$setup_status" -ne 130 ]; then
+    err "setup wizard exited with status ${setup_status}"
+    err "resume setup manually: sudo ${setup_cmd}"
+  fi
+  exit "$setup_status"
 fi
-exec "$INSTALL_DIR/manager/bin/tokenpanel-setup"
+
+err "setup wizard is interactive but no TTY is available"
+err "run setup manually: sudo ${setup_cmd}"
+exit 1

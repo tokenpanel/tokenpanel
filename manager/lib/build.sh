@@ -33,14 +33,11 @@ fetch_and_build() {
       return 1
     fi
   else
-    info "pulling latest stable..."
-    if ! git_err="$(git -C "$INSTALL_DIR" pull origin stable 2>&1)"; then
-      info "stable branch not found, trying main..."
-      if ! git_err="$(git -C "$INSTALL_DIR" pull origin main 2>&1)"; then
-        err "git pull failed — aborting update (nothing changed):"
-        printf '%s\n' "$git_err" >&2
-        return 1
-      fi
+    info "pulling latest main (stable channel)..."
+    if ! git_err="$(git -C "$INSTALL_DIR" pull origin main 2>&1)"; then
+      err "git pull failed — aborting update (nothing changed):"
+      printf '%s\n' "$git_err" >&2
+      return 1
     fi
   fi
 

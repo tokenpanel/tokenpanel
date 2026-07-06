@@ -2,7 +2,7 @@
 set -euo pipefail
 
 REPO_URL="https://github.com/tokenpanel/tokenpanel"
-BRANCH="stable"
+BRANCH="main"
 INSTALL_DIR="${TOKENPANEL_INSTALL_DIR:-/opt/tokenpanel}"
 
 cat <<'BANNER'

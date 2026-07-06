@@ -78,7 +78,7 @@ If LiteLLM is the provider gateway, TokenPanel is the open-source customer, bill
 Production install on a Linux server:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/tokenpanel/tokenpanel/refs/heads/stable/manager/get.tokenpanel.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/tokenpanel/tokenpanel/refs/heads/main/manager/get.tokenpanel.sh | sudo bash
 ```
 
 Branded installer URL, once DNS is pointed at the repository-hosted script:
@@ -90,7 +90,7 @@ curl -fsSL https://get.tokenpanel.sh | sudo bash
 The installer:
 
 - Installs Docker if missing
-- Clones the stable TokenPanel release to `/opt/tokenpanel`
+- Clones the stable `main` branch to `/opt/tokenpanel`
 - Stores config in `/etc/tokenpanel`
 - Stores MongoDB data, backups, and certificates in `/var/tokenpanel/shared`
 - Starts an interactive setup wizard for domain, HTTPS, MongoDB, and admin settings

@@ -1,7 +1,17 @@
 {
   "name": "tokenpanel",
+  "description": "Open-source AI reseller gateway with customer billing, usage controls, and an admin dashboard.",
   "private": true,
+  "license": "AGPL-3.0-only",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tokenpanel/tokenpanel.git"
+  },
+  "homepage": "https://github.com/tokenpanel/tokenpanel#readme",
+  "bugs": {
+    "url": "https://github.com/tokenpanel/tokenpanel/issues"
+  },
   "workspaces": [
     "apps/*",
     "packages/*"

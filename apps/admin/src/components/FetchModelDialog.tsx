@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { memo, useCallback, useDeferredValue, useEffect, useMemo, useState } from "react";
 import { ApiError } from "../api/client.ts";
 import {
   listCatalogModels,
@@ -36,6 +36,66 @@ interface FetchModelDialogProps {
   onApply: (model: FetchedModel) => void;
 }
 
+interface SearchEntry {
+  model: FetchedModel;
+  key: string;
+  haystack: string;
+  price: string;
+}
+
+function formatPrice(m: FetchedModel): string {
+  return m.cost
+    ? `$${(m.cost.inputMinorPerMillion / 100).toFixed(2)} / $${(m.cost.outputMinorPerMillion / 100).toFixed(2)}`
+    : "no price";
+}
+
+function buildKey(m: FetchedModel): string {
+  return `${m.subProvider ?? ""}/${m.upstreamModelId}`;
+}
+
+function buildHaystack(m: FetchedModel): string {
+  return `${m.upstreamModelId} ${m.displayName} ${m.subProvider ?? ""}`.toLowerCase();
+}
+
+/**
+ * Memoized row. Re-renders only when its own model or selected flag changes,
+ * not on every keystroke. Without this, all 200 visible rows re-render on
+ * each query change because the parent re-renders.
+ */
+const ModelRow = memo(function ModelRow({
+  model,
+  price,
+  active,
+  onSelect,
+}: {
+  model: FetchedModel;
+  price: string;
+  active: boolean;
+  onSelect: (m: FetchedModel) => void;
+}): React.ReactElement {
+  return (
+    <li key={`${model.subProvider ?? ""}/${model.upstreamModelId}`}>
+      <button
+        type="button"
+        className={cn(
+          "flex w-full flex-col gap-0.5 px-3 py-2 text-left text-sm transition-colors hover:bg-muted",
+          active && "bg-primary/10",
+        )}
+        onClick={() => onSelect(model)}
+      >
+        <span className="flex items-center justify-between gap-2">
+          <span className="truncate font-medium">{model.displayName}</span>
+          <span className="shrink-0 text-xs text-muted-foreground">{price}</span>
+        </span>
+        <span className="flex items-center gap-2 text-xs text-muted-foreground">
+          <span className="truncate font-mono">{model.upstreamModelId}</span>
+          {model.subProvider ? <span className="shrink-0">via {model.subProvider}</span> : null}
+        </span>
+      </button>
+    </li>
+  );
+});
+
 export function FetchModelDialog({
   open,
   onOpenChange,
@@ -52,6 +112,11 @@ export function FetchModelDialog({
 
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<FetchedModel | null>(null);
+
+  // Defer the filter input so typing stays responsive even when the model
+  // list is huge. React yields back to the browser between keystrokes and
+  // renders the filtered list at lower priority.
+  const deferredQuery = useDeferredValue(query);
 
   useEffect(() => {
     if (!open) return;
@@ -102,33 +167,35 @@ export function FetchModelDialog({
     };
   }, [open, sourceId]);
 
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (q === "") return models;
-    const out: FetchedModel[] = [];
-    for (const m of models) {
-      const haystack = `${m.upstreamModelId} ${m.displayName} ${m.subProvider ?? ""}`.toLowerCase();
-      if (haystack.includes(q)) {
-        out.push(m);
-        if (out.length >= MAX_RENDERED) break;
-      }
-    }
-    return out;
-  }, [models, query]);
+  // Precompute search index ONCE per models change — not per keystroke.
+  // Each entry carries the lowercase haystack + precomputed display strings
+  // so the filter loop allocates nothing per keystroke.
+  const searchIndex = useMemo<SearchEntry[]>(() => {
+    return models.map((m) => ({
+      model: m,
+      key: buildKey(m),
+      haystack: buildHaystack(m),
+      price: formatPrice(m),
+    }));
+  }, [models]);
 
-  const truncated = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (q === "") return models.length > MAX_RENDERED;
-    let hits = 0;
-    for (const m of models) {
-      const haystack = `${m.upstreamModelId} ${m.displayName} ${m.subProvider ?? ""}`.toLowerCase();
-      if (haystack.includes(q)) {
-        hits++;
-        if (hits > MAX_RENDERED) return true;
+  // Single filter pass over the precomputed index. Replaces the prior double
+  // scan (filtered + truncated memos each did a full O(n) loop rebuilding
+  // haystacks). Now: one loop, cached haystacks, short-circuit at MAX_RENDERED.
+  const { visible, truncated } = useMemo(() => {
+    const q = deferredQuery.trim().toLowerCase();
+    const out: SearchEntry[] = [];
+    let totalHits = 0;
+    for (const entry of searchIndex) {
+      if (q === "" || entry.haystack.includes(q)) {
+        totalHits++;
+        if (out.length < MAX_RENDERED) {
+          out.push(entry);
+        }
       }
     }
-    return false;
-  }, [models, query]);
+    return { visible: out, truncated: totalHits > MAX_RENDERED };
+  }, [searchIndex, deferredQuery]);
 
   const handleApply = useCallback(() => {
     if (!selected) return;
@@ -146,6 +213,8 @@ export function FetchModelDialog({
     setModelsError(null);
     setSourcesError(null);
   }, []);
+
+  const selectedKey = selected ? buildKey(selected) : null;
 
   return (
     <Dialog
@@ -218,40 +287,21 @@ export function FetchModelDialog({
                 <Loader2 className="size-4 animate-spin" />
                 Loading models…
               </div>
-            ) : filtered.length === 0 ? (
+            ) : visible.length === 0 ? (
               <div className="px-3 py-6 text-center text-sm text-muted-foreground">
-                {query.trim() ? "No models match your search." : "No models returned."}
+                {deferredQuery.trim() ? "No models match your search." : "No models returned."}
               </div>
             ) : (
               <ul className="divide-y divide-border">
-                {filtered.map((m) => {
-                  const active = selected?.upstreamModelId === m.upstreamModelId
-                    && selected?.subProvider === m.subProvider;
-                  const price = m.cost
-                    ? `$${(m.cost.inputMinorPerMillion / 100).toFixed(2)} / $${(m.cost.outputMinorPerMillion / 100).toFixed(2)}`
-                    : "no price";
-                  return (
-                    <li key={`${m.subProvider ?? ""}/${m.upstreamModelId}`}>
-                      <button
-                        type="button"
-                        className={cn(
-                          "flex w-full flex-col gap-0.5 px-3 py-2 text-left text-sm transition-colors hover:bg-muted",
-                          active && "bg-primary/10",
-                        )}
-                        onClick={() => setSelected(m)}
-                      >
-                        <span className="flex items-center justify-between gap-2">
-                          <span className="truncate font-medium">{m.displayName}</span>
-                          <span className="shrink-0 text-xs text-muted-foreground">{price}</span>
-                        </span>
-                        <span className="flex items-center gap-2 text-xs text-muted-foreground">
-                          <span className="truncate font-mono">{m.upstreamModelId}</span>
-                          {m.subProvider ? <span className="shrink-0">via {m.subProvider}</span> : null}
-                        </span>
-                      </button>
-                    </li>
-                  );
-                })}
+                {visible.map((entry) => (
+                  <ModelRow
+                    key={entry.key}
+                    model={entry.model}
+                    price={entry.price}
+                    active={selectedKey === entry.key}
+                    onSelect={setSelected}
+                  />
+                ))}
                 {truncated ? (
                   <li className="px-3 py-2 text-center text-xs text-muted-foreground">
                     Showing the first {MAX_RENDERED} matches. Refine your search to narrow further.

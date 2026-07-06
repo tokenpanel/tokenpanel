@@ -23,7 +23,7 @@ read_tty() {
     IFS= read -r -p "$prompt" "$__var"
   else
     err "interactive input required but no TTY is available"
-    err "run from an interactive shell: curl -fsSL https://raw.githubusercontent.com/tokenpanel/tokenpanel/refs/heads/main/manager/get.tokenpanel.sh -o get.tokenpanel.sh && sudo bash get.tokenpanel.sh"
+    err "run from an interactive shell: curl -fsSL https://raw.githubusercontent.com/tokenpanel/tokenpanel/refs/heads/main/manager/install.sh -o install.sh && sudo bash install.sh"
     return 1
   fi
 }
@@ -66,7 +66,7 @@ echo
 # ── 1. Root check ──
 if [ "$(id -u)" -ne 0 ]; then
   echo 'ERROR: Run as root (use sudo).'
-  echo '  curl -fsSL https://get.tokenpanel.sh | sudo bash'
+  echo '  curl -fsSL https://raw.githubusercontent.com/tokenpanel/tokenpanel/refs/heads/main/manager/install.sh | sudo bash'
   exit 1
 fi
 

@@ -32,13 +32,7 @@ manager/
 ## Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/tokenpanel/tokenpanel/refs/heads/main/manager/get.tokenpanel.sh | sudo bash
-```
-
-After the branded installer domain is live, the equivalent short form is:
-
-```bash
-curl -fsSL https://get.tokenpanel.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/tokenpanel/tokenpanel/refs/heads/main/manager/install.sh | sudo bash
 ```
 
 ## Manual install

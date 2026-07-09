@@ -36,7 +36,7 @@ test("intervalLabel: singular vs plural", () => {
 test("subStatusLabel: replaces _ with space", () => {
   expect(subStatusLabel("past_due")).toBe("past due");
   expect(subStatusLabel("active")).toBe("active");
-  expect(subStatusLabel("trialing")).toBe("trialing");
+  expect(subStatusLabel("canceled")).toBe("canceled");
 });
 
 test("errorMessage: 409 subscription_already_active → specific message", () => {

@@ -8,15 +8,41 @@ import {
 import { limitDimension } from "./limit.ts";
 
 /**
+ * Who/what produced this usage record. Distinguishes human-customer traffic
+ * from server-to-server management calls so analytics can filter them, and so
+ * an internal management call (no customer) is recorded as audit data without
+ * debiting any balance.
+ *
+ * - `customer_key`: authenticated via a `tp_live_` customer API key.
+ * - `management_key`: authenticated via a `tp_mgmt_` management API key. May
+ *   attribute to a customer (customerId set) when the request carried a
+ *   customerEmail, or be org-internal (customerId null, billed false).
+ * - `playground`: an admin signed-in user using the in-panel playground.
+ */
+export const usageActorKind = z.enum(["customer_key", "management_key", "playground"]);
+export type UsageActorKind = z.infer<typeof usageActorKind>;
+
+/**
  * UsageRecord = one billable AI call made by a Customer through the proxy.
  * Append-only. Aggregated for rate-limit enforcement + analytics.
+ *
+ * customerId is null for org-internal management calls (actorKind
+ * "management_key" without a resolved customerEmail) — those are recorded as
+ * audit data without debiting any customer.
  */
 export const usageRecordDoc = z.object({
   _id: objectId,
   organizationId: objectId,
-  customerId: objectId,
-  /** Customer API key id used (for audit). */
+  /** Customer the usage is attributed to. Null for org-internal management calls. */
+  customerId: objectId.nullish(),
+  /** Customer API key id used (`tp_live_`). Null when actorKind is not customer_key. */
   apiKeyId: objectId.nullish(),
+  /** Kind of caller. See usageActorKind. */
+  actorKind: usageActorKind.default("customer_key"),
+  /** Management key id when actorKind="management_key". */
+  managementKeyId: objectId.nullish(),
+  /** Snapshot of customerEmail used for attribution, when provided. */
+  customerEmail: z.string().max(254).nullish(),
   /** The model alias the customer requested. */
   modelAliasId: z.string().min(1).max(80),
   /** The provider entry that actually served the call (failover target). */
@@ -51,8 +77,11 @@ export const usageRecordDoc = z.object({
 });
 
 export const usageRecordCreateInput = z.object({
-  customerId: objectIdFromString,
+  customerId: objectIdFromString.nullish(),
   apiKeyId: objectIdFromString.optional(),
+  actorKind: usageActorKind.optional(),
+  managementKeyId: objectIdFromString.optional(),
+  customerEmail: z.string().max(254).nullish(),
   modelAliasId: z.string().min(1).max(80),
   providerId: objectIdFromString,
   upstreamModelId: z.string().min(1).max(160),

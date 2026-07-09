@@ -7,6 +7,7 @@ export * from "./schemas/model.ts";
 export * from "./schemas/limit.ts";
 export * from "./schemas/usage.ts";
 export * from "./schemas/apikey.ts";
+export * from "./schemas/management-apikey.ts";
 export {
   getDb,
   getRawDb,

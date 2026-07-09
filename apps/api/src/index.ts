@@ -16,8 +16,15 @@ import inviteRoutes, { acceptInviteRoute } from "./routes/invites.ts";
 import organizationRoutes from "./routes/organizations.ts";
 import playgroundRoutes from "./routes/playground.ts";
 import catalogSourceRoutes from "./routes/catalog-sources.ts";
+import managementKeyRoutes from "./routes/management-keys.ts";
+import managementRead from "./routes/management/read.ts";
+import managementWrite from "./routes/management/write.ts";
 import publicOpenAI from "./routes/public/openai.ts";
 import publicAnthropic from "./routes/public/anthropic.ts";
+import { requirePublicPrincipal } from "./middleware/public-auth.ts";
+import {
+  requireManagementPrincipal,
+} from "./middleware/management-auth.ts";
 import "./providers/index.ts";
 
 if (!process.env.JWT_SECRET) {
@@ -63,9 +70,21 @@ app.route("/admin/invites", inviteRoutes);
 app.route("/admin/organizations", organizationRoutes);
 app.route("/admin/playground", playgroundRoutes);
 app.route("/admin/catalog-sources", catalogSourceRoutes);
+app.route("/admin/management-keys", managementKeyRoutes);
 
+// Public /v1 auth once — both OpenAI and Anthropic routers share this so a
+// request (e.g. POST /v1/messages) is not authenticated twice by each sub-app.
+app.use("/v1/*", requirePublicPrincipal);
 app.route("/", publicOpenAI);
 app.route("/", publicAnthropic);
+
+// Management server-to-server surface. Mounted at "/" because they self-scope
+// to /api/management/*. Auth once for the whole prefix; per-route scope gates
+// live on the handlers.
+app.use("/api/management/*", requirePublicPrincipal);
+app.use("/api/management/*", requireManagementPrincipal);
+app.route("/", managementRead);
+app.route("/", managementWrite);
 
 // --- Static admin SPA (built by apps/admin via `vite build`) ---
 // In prod the API serves the admin panel from the same port so you only need
@@ -125,11 +144,13 @@ try {
   }
 
   // Post-deploy (destructive) migrations are NOT run on API boot. They are
-  // executed exclusively by the manager's update flow (Phase 6, `tokenpanel
-  // update`) via `bun run db:migrate --phase=post` in the live container.
-  // Running them on every boot (a persisted RUN_POST_MIGRATIONS=1) would
-  // repeatedly re-scan destructive migrations — a footgun with no benefit,
-  // since the manager already drives them deterministically.
+  // executed exclusively by the manager's Discourse-style update flow:
+  //   Phase 4 pre (new image, old container serving)
+  //   → Phase 5 swap
+  //   → Phase 6 post (live new container)
+  // Applied migrations are tracked in `_migrations` (id + checksum); re-runs
+  // skip already-applied files. First install / local docker can also run
+  // `tokenpanel migrate post` (or relies on update Phase 6).
   console.log("mongodb ready");
 } catch (err) {
   console.error("mongodb migration failed:", err instanceof Error ? err.message : err);

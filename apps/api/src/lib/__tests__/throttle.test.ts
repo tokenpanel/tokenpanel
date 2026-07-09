@@ -86,3 +86,17 @@ test("retryAfterSeconds reflects remaining lockout time", () => {
   expect(gate.allowed).toBe(false);
   expect(gate.retryAfterSeconds).toBe(7); // 10000 - 3000 = 7000ms → 7s
 });
+
+// Auth buckets failures on the 16-char key prefix only (no legacy dual-length
+// path). Confirm independent prefixes do not share lockout state.
+test("distinct 16-char prefixes accumulate lockout independently", () => {
+  const c = clock();
+  const th = new FailureThrottle({ maxAttempts: 10, windowMs: 15 * 60 * 1000, lockoutMs: 15 * 60 * 1000, now: c.now });
+  const locked = "tp_live_abcd1234";
+  const other = "tp_live_abcd9999";
+
+  for (let i = 0; i < 10; i++) th.recordFailure(locked);
+
+  expect(th.check(locked).allowed).toBe(false);
+  expect(th.check(other).allowed).toBe(true);
+});

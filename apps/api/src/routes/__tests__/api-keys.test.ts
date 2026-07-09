@@ -44,6 +44,6 @@ test("KEY_PREFIX_LITERAL is 'tp_live_'", () => {
   expect(KEY_PREFIX_LITERAL).toBe("tp_live_");
 });
 
-test("PREFIX_LENGTH is 12", () => {
-  expect(PREFIX_LENGTH).toBe(12);
+test("PREFIX_LENGTH is 16 (8 literal + 8 random hex ≈ 4.3B combos)", () => {
+  expect(PREFIX_LENGTH).toBe(16);
 });

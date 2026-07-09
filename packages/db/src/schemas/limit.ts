@@ -112,7 +112,7 @@ export const subscriptionDoc = z.object({
   organizationId: objectId,
   customerId: objectId,
   planId: objectId,
-  status: z.enum(["trialing", "active", "past_due", "canceled", "ended"]),
+  status: z.enum(["active", "past_due", "canceled", "ended"]),
   periodStart: z.instanceof(Date),
   periodEnd: z.instanceof(Date),
   canceledAt: z.instanceof(Date).nullish(),

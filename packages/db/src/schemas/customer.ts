@@ -28,7 +28,19 @@ export const customerDoc = z.object({
 export const customerCreateInput = z.object({
   externalId: z.string().max(128).optional(),
   name: z.string().min(1).max(160),
-  email: z.string().email().max(254).optional(),
+  // Email is canonicalized to lowercase at parse time so storage and every
+  // attribution lookup (v1-chat-context, management lookup endpoint) agree on
+  // a single casing. Without this, a request-time `.toLowerCase()` lookup
+  // would miss an uppercase stored email, and case variants of one address
+  // could create duplicate customers within an org (the (orgId, email) index
+  // is unique after the post migration). Existing mixed-case rows are
+  // normalized by migration 2026-07-07T02-00-00Z__lowercase-customer-emails.
+  email: z
+    .string()
+    .email()
+    .max(254)
+    .optional()
+    .transform((v) => (typeof v === "string" ? v.toLowerCase() : v)),
   startingBalance: money.optional(),
   metadata: z.record(z.string(), z.unknown()).optional(),
 });
@@ -36,7 +48,13 @@ export const customerCreateInput = z.object({
 export const customerUpdateInput = z.object({
   externalId: z.string().max(128).nullish().optional(),
   name: z.string().min(1).max(160).optional(),
-  email: z.string().email().max(254).nullish().optional(),
+  email: z
+    .string()
+    .email()
+    .max(254)
+    .nullish()
+    .optional()
+    .transform((v) => (typeof v === "string" ? v.toLowerCase() : v)),
   status: z.enum(["active", "suspended", "closed"]).optional(),
   metadata: z.record(z.string(), z.unknown()).optional(),
 });

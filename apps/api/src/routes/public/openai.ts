@@ -2,7 +2,6 @@ import { Hono } from "hono";
 import { z } from "zod";
 import { getDb, type ModelDoc } from "@tokenpanel/db";
 import type { PublicAuthVariables } from "../../middleware/public-auth.ts";
-import { requireCustomerKey } from "../../middleware/public-auth.ts";
 import {
   preFlight,
   callWithFallback,
@@ -10,16 +9,24 @@ import {
   computeCharges,
   settleUsage,
   estimatePromptTokens,
+  resolveModel,
   BillingError,
 } from "../../lib/billing.ts";
+import {
+  resolveChatContext,
+  actorForChatContext,
+  billableCustomerId,
+  modelWhitelistForContext,
+  V1ChatError,
+  type ChatContext,
+} from "../../lib/v1-chat-context.ts";
+import { getEffectiveRules } from "../../lib/rate-limits.ts";
 import type { ChatRequest, ChatMessage, ContentPart } from "../../providers/index.ts";
 
 const publicOpenAI = new Hono<{ Variables: PublicAuthVariables }>();
-// Scope auth to /v1/* only. Mounting this sub-app at "/" in index.ts means a
-// "*" pattern would run auth on every path (including SPA routes like /login)
-// and 401 browser navigations before they reach the SPA fallback. Constrain to
-// the public API namespace so non-/v1 paths fall through to notFound/SPA.
-publicOpenAI.use("/v1/*", requireCustomerKey);
+// Auth is mounted once on the parent app for /v1/* (index.ts) so openai +
+// anthropic handlers do not double-authenticate. Handlers branch on the
+// resolved principal (tp_live_ vs tp_mgmt_).
 
 export function toOpenAIModel(m: ModelDoc) {
   return {
@@ -33,12 +40,28 @@ export function toOpenAIModel(m: ModelDoc) {
 publicOpenAI.get("/v1/models", async (c) => {
   const db = await getDb();
   const orgId = c.get("orgId");
-  const apiKey = c.get("apiKey");
+  const principal = c.get("principal");
+  // Management principals need an explicit scope to list models. We accept
+  // either models:read (the canonical "list models" scope) or chat:write (so
+  // a chat-only integration can discover model aliases to call /v1/chat with).
+  // Customer keys are unchanged — no scope system, model whitelist still
+  // applies.
+  if (principal && principal.kind === "management") {
+    const scopes = principal.managementKey.scopes;
+    const allowed = scopes.includes("models:read") || scopes.includes("chat:write");
+    if (!allowed) {
+      return c.json(formatOpenAIError("missing_scope", "Management key lacks models:read or chat:write"), 403 as 403);
+    }
+  }
   const models = await db.models
     .find({ organizationId: orgId, active: true })
     .toArray();
-  const filtered = apiKey.modelWhitelist.length > 0
-    ? models.filter((m) => apiKey.modelWhitelist.includes(m.aliasId))
+  // Model whitelist applies only to customer keys. Management keys have no
+  // per-key whitelist — scope (chat:write / models:read) is the gate.
+  const whitelist =
+    principal && principal.kind === "customer" ? principal.apiKey.modelWhitelist : [];
+  const filtered = whitelist.length > 0
+    ? models.filter((m) => whitelist.includes(m.aliasId))
     : models;
   return c.json({ object: "list", data: filtered.map(toOpenAIModel) });
 });
@@ -74,6 +97,13 @@ const chatCompletionBody = z.object({
   response_format: z.any().optional(),
   reasoning_effort: z.enum(["low", "medium", "high"]).optional(),
   n: z.number().int().positive().optional(),
+  /**
+   * Management-key-only attribute. When present, the call bills + meters the
+   * resolved customer inside the key's org. Ignored for customer keys (those
+   * already attribute to the key's owner). Stripped before forwarding upstream
+   * — providers reject unknown fields.
+   */
+  customerEmail: z.string().email().max(254).optional(),
 }).passthrough();
 
 export function translateMessage(m: z.infer<typeof openAIMessage>): ChatMessage {
@@ -110,6 +140,39 @@ export function formatOpenAIError(code: string, message: string, extra?: Record<
   };
 }
 
+/**
+ * Resolve the model + (optional) preflight rules for a chat request.
+ *
+ * Customer / management_attributed paths run full preFlight — model access,
+ * rate limits, and balance check — against the billable customer. Org-internal
+ * management calls skip balance + rate-limit checks (no customer to bill or
+ * meter) but still validate model existence + activeness via resolveModel.
+ */
+async function resolveModelAndRules(params: {
+  orgId: import("mongodb").ObjectId;
+  ctx: ChatContext;
+  aliasId: string;
+  estimatedPromptTokens: number;
+  maxCompletionTokens?: number;
+}): Promise<{ model: ModelDoc; rules: Awaited<ReturnType<typeof getEffectiveRules>> }> {
+  const customerId = billableCustomerId(params.ctx);
+  if (customerId === null) {
+    // Internal management call — no customer to bill or meter. Still validate
+    // the model exists + is active so 404s surface early.
+    const model = await resolveModel(params.orgId, params.aliasId);
+    return { model, rules: [] };
+  }
+  const result = await preFlight({
+    orgId: params.orgId,
+    customerId,
+    apiKeyModelWhitelist: modelWhitelistForContext(params.ctx),
+    aliasId: params.aliasId,
+    estimatedPromptTokens: params.estimatedPromptTokens,
+    maxCompletionTokens: params.maxCompletionTokens,
+  });
+  return result;
+}
+
 publicOpenAI.post("/v1/chat/completions", async (c) => {
   let body: z.infer<typeof chatCompletionBody>;
   try {
@@ -120,9 +183,24 @@ publicOpenAI.post("/v1/chat/completions", async (c) => {
   }
 
   const orgId = c.get("orgId");
-  const customer = c.get("customer");
-  const apiKey = c.get("apiKey");
+  const principal = c.get("principal");
+  if (!principal) {
+    return c.json(formatOpenAIError("unauthorized", "missing principal"), 401 as 401);
+  }
   const stream = body.stream ?? false;
+
+  let ctx: ChatContext;
+  try {
+    ctx = await resolveChatContext({
+      principal,
+      customerEmail: body.customerEmail,
+    });
+  } catch (err) {
+    if (err instanceof V1ChatError) {
+      return c.json(formatOpenAIError(err.code, err.message), err.status as 401 | 403 | 404);
+    }
+    throw err;
+  }
 
   const request: ChatRequest = {
     model: body.model,
@@ -138,15 +216,12 @@ publicOpenAI.post("/v1/chat/completions", async (c) => {
     reasoning: body.reasoning_effort ? { effort: body.reasoning_effort } : undefined,
   };
 
-  let preflightResult: { model: ModelDoc; rules: Awaited<ReturnType<typeof import("../../lib/rate-limits.ts").getEffectiveRules>> };
+  let preflightResult: { model: ModelDoc; rules: Awaited<ReturnType<typeof getEffectiveRules>> };
   try {
-    preflightResult = await preFlight({
+    preflightResult = await resolveModelAndRules({
       orgId,
-      customerId: customer._id,
-      apiKeyModelWhitelist: apiKey.modelWhitelist,
+      ctx,
       aliasId: body.model,
-      // Conservative pre-call estimate so balance + spend/token limits are
-      // enforced BEFORE the paid upstream call (previously 0/0 → no enforcement).
       estimatedPromptTokens: estimatePromptTokens(request.messages),
       maxCompletionTokens: body.max_tokens ?? body.max_completion_tokens,
     });
@@ -162,6 +237,7 @@ publicOpenAI.post("/v1/chat/completions", async (c) => {
   }
 
   const { model, rules } = preflightResult;
+  const actor = actorForChatContext(ctx);
   const start = Date.now();
 
   if (!stream) {
@@ -169,18 +245,21 @@ publicOpenAI.post("/v1/chat/completions", async (c) => {
       const outcome = await callWithFallback({ orgId, model, request });
       const durationMs = Date.now() - start;
       const charges = computeCharges({ entry: outcome.entry, model, usage: outcome.response.usage });
+      // Internal management calls are not billed — they record usage for
+      // analytics only (priceMinor 0). Attributed + customer paths bill
+      // normally via the resolved customer.
+      const priceMinor = ctx.kind === "management_internal" ? 0 : charges.priceMinor;
       try {
         await settleUsage({
           orgId,
-          customerId: customer._id,
-          apiKeyId: apiKey._id,
+          actor,
           model,
           entry: outcome.entry,
           provider: outcome.provider,
           protocol: "openai",
           usage: outcome.response.usage,
           costMinor: charges.costMinor,
-          priceMinor: charges.priceMinor,
+          priceMinor,
           currency: charges.currency,
           providerRequestId: outcome.response.providerRequestId,
           status: 200,
@@ -279,18 +358,12 @@ publicOpenAI.post("/v1/chat/completions", async (c) => {
           }
         }
         enqueue({
-          id,
-          object: "chat.completion.chunk",
-          created,
-          model: body.model,
+          id, object: "chat.completion.chunk", created, model: body.model,
           choices: [{ index: 0, delta: {}, finish_reason: finishReason }],
         });
         if (promptTokens > 0 || completionTokens > 0) {
           enqueue({
-            id,
-            object: "chat.completion.chunk",
-            created,
-            model: body.model,
+            id, object: "chat.completion.chunk", created, model: body.model,
             choices: [],
             usage: {
               prompt_tokens: promptTokens,
@@ -310,25 +383,22 @@ publicOpenAI.post("/v1/chat/completions", async (c) => {
         const totalTokens = promptTokens + completionTokens;
         const usage = { promptTokens, completionTokens, reasoningTokens, cacheReadTokens, cacheWriteTokens, totalTokens };
         if (activeEntry && activeProviderId && (promptTokens > 0 || completionTokens > 0)) {
-          // Stream-safe settlement: the client has already received [DONE], so a
-          // settlement failure cannot be surfaced to it. Wrap + log so failures
-          // are reliable to reconcile instead of silently lost (dxe).
           try {
             const db = await getDb();
             const providerDoc = await db.providers.findOne({ _id: activeProviderId });
             if (providerDoc && activeEntry) {
               const charges = computeCharges({ entry: activeEntry, model, usage });
+              const priceMinor = ctx.kind === "management_internal" ? 0 : charges.priceMinor;
               await settleUsage({
                 orgId,
-                customerId: customer._id,
-                apiKeyId: apiKey._id,
+                actor,
                 model,
                 entry: activeEntry,
                 provider: providerDoc,
                 protocol: "openai",
                 usage,
                 costMinor: charges.costMinor,
-                priceMinor: charges.priceMinor,
+                priceMinor,
                 currency: charges.currency,
                 status: 200,
                 durationMs,
@@ -343,10 +413,7 @@ publicOpenAI.post("/v1/chat/completions", async (c) => {
     },
   });
 
-  return new Response(body$, {
-    headers: c.res.headers,
-    status: 200,
-  });
+  return new Response(body$, { headers: c.res.headers, status: 200 });
 });
 
 export default publicOpenAI;

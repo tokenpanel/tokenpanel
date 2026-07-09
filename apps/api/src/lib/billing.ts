@@ -379,10 +379,34 @@ export function computeCharges(params: {
  */
 class SettlementGuardError extends Error {}
 
+/**
+ * Who is being settled for. `customerId` decides whether the customer balance
+ * is debited and counters are written:
+ *  - customerId set → billed path: insert usage record, debit balance, write
+ *    ledger + rate-limit counters (the standard customer-key path, plus the
+ *    management-attributed-to-customer path).
+ *  - customerId null → internal path: insert usage record for audit/analytics
+ *    only. No debit, no counters. Used for org-internal management calls and
+ *    playground-without-customer.
+ *
+ * `actorKind` is recorded verbatim on the usage record so analytics can split
+ * customer vs management vs playground traffic.
+ */
+export type SettlementActor = {
+  actorKind: "customer_key" | "management_key" | "playground";
+  /** Customer to bill. null for org-internal calls. */
+  customerId: ObjectId | null;
+  /** Customer API key (`tp_live_`) when actorKind is customer_key. */
+  apiKeyId?: ObjectId | null;
+  /** Management API key (`tp_mgmt_`) when actorKind is management_key. */
+  managementKeyId?: ObjectId | null;
+  /** Snapshot of the customerEmail used for management attribution, if any. */
+  customerEmail?: string | null;
+};
+
 export async function settleUsage(params: {
   orgId: ObjectId;
-  customerId: ObjectId;
-  apiKeyId: ObjectId | null;
+  actor: SettlementActor;
   model: ModelDoc;
   entry: ModelEntryDoc;
   provider: ProviderDoc;
@@ -401,11 +425,20 @@ export async function settleUsage(params: {
   const client = getClient();
   const now = new Date();
   const occurredAt = now;
+  const actor = params.actor;
+
+  // Resolve billing intent from the actor. Internal calls (customerId null)
+  // skip the debit + ledger + counter writes entirely.
+  const customerId = actor.customerId;
+  const billed = customerId !== null;
 
   const usageRecord: Omit<UsageRecordDoc, "_id" | "createdAt" | "updatedAt"> = {
     organizationId: params.orgId,
-    customerId: params.customerId,
-    apiKeyId: params.apiKeyId,
+    customerId,
+    apiKeyId: actor.apiKeyId ?? null,
+    actorKind: actor.actorKind,
+    managementKeyId: actor.managementKeyId ?? null,
+    customerEmail: actor.customerEmail ?? null,
     modelAliasId: params.model.aliasId,
     providerId: params.provider._id,
     upstreamModelId: params.entry.upstreamModelId,
@@ -420,24 +453,22 @@ export async function settleUsage(params: {
     priceMinor: params.priceMinor,
     currency: params.currency,
     providerRequestId: params.providerRequestId,
-    billed: true,
+    billed,
     errorCode: params.errorCode,
     status: params.status,
     durationMs: params.durationMs,
     occurredAt,
   };
 
-  // Wrap usage insert + balance debit + ledger entry + rate counters in ONE
-  // transaction so a failure can never leave a partial charge (debit without a
-  // usage record, or a successful stream left uncharged). The balance update
+  // Wrap usage insert + (optional) balance debit + (optional) ledger entry +
+  // (optional) rate counters in ONE transaction so a failure can never leave a
+  // partial charge. For internal calls, only the usage record is inserted
+  // (no debit, no counters) — analytics-only attribution. The balance update
   // carries org/currency/not-closed guards: if the customer was closed, moved
   // orgs, or changed currency mid-flight, the debit is refused and the whole
   // txn aborts atomically.
   const session = client.startSession();
   try {
-    // withTransaction commits when the callback resolves and rethrows (after
-    // its internal retries) when it cannot commit, so a resolved promise means
-    // the settlement committed atomically; a throw propagates to the catch.
     await session.withTransaction(async () => {
       await db.usageRecords.insertOne(
         {
@@ -449,10 +480,10 @@ export async function settleUsage(params: {
         { session },
       );
 
-      if (params.priceMinor > 0) {
+      if (billed && customerId !== null && params.priceMinor > 0) {
         const debit = await db.customers.updateOne(
           {
-            _id: params.customerId,
+            _id: customerId,
             organizationId: params.orgId,
             "balance.currency": params.currency,
             status: { $ne: "closed" },
@@ -471,7 +502,7 @@ export async function settleUsage(params: {
           {
             _id: new ObjectId(),
             organizationId: params.orgId,
-            customerId: params.customerId,
+            customerId,
             amountMinor: -params.priceMinor,
             currency: params.currency,
             reason: "usage_debit",
@@ -483,36 +514,57 @@ export async function settleUsage(params: {
         );
       }
 
-      await recordUsage({
-        db,
-        organizationId: params.orgId,
-        customerId: params.customerId,
-        rules: params.rules,
-        usage: {
-          tokens: params.usage.totalTokens,
-          requests: 1,
-          spendMinor: params.priceMinor,
-          currency: params.currency,
-          modelAliasId: params.model.aliasId,
-        },
-        occurredAt,
-        session,
-      });
+      if (billed && customerId !== null) {
+        await recordUsage({
+          db,
+          organizationId: params.orgId,
+          customerId,
+          rules: params.rules,
+          usage: {
+            tokens: params.usage.totalTokens,
+            requests: 1,
+            spendMinor: params.priceMinor,
+            currency: params.currency,
+            modelAliasId: params.model.aliasId,
+          },
+          occurredAt,
+          session,
+        });
+      }
     });
   } catch (err) {
     if (err instanceof SettlementGuardError) {
-      // Expected edge: customer closed / org or currency changed mid-call. The
-      // upstream call already succeeded; no charge is applied. Log so it can be
-      // reconciled, but do not surface to the caller (the AI response is valid).
       console.error("[settleUsage] balance guard failed — no charge applied", {
-        customerId: params.customerId.toHexString(),
+        customerId: customerId?.toHexString() ?? null,
         orgId: params.orgId.toHexString(),
         currency: params.currency,
         priceMinor: params.priceMinor,
       });
+      // The transaction above aborted, so the usage insert was rolled back.
+      // But the upstream call already succeeded and the caller already got a
+      // 200. Losing the audit record would make this free service invisible
+      // to analytics/operators and break attribution. Re-insert an audit-only
+      // copy of the usage record with billed:false so the event is visible
+      // (and distinguishable from a successful charge). Best-effort: a failure
+      // here is logged but never re-thrown — the caller already has its
+      // response and the guard condition is a downstream-state issue, not a
+      // caller error.
+      try {
+        await db.usageRecords.insertOne({
+          _id: new ObjectId(),
+          ...{ ...usageRecord, billed: false },
+          createdAt: now,
+          updatedAt: now,
+        } as UsageRecordDoc);
+      } catch (insertErr) {
+        console.error("[settleUsage] audit re-insert after guard failure also failed", {
+          customerId: customerId?.toHexString() ?? null,
+          orgId: params.orgId.toHexString(),
+          error: String(insertErr),
+        });
+      }
       return;
     }
-    // Transient/unknown error: propagate so the caller logs it reliably.
     throw err;
   } finally {
     await session.endSession();

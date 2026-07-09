@@ -111,9 +111,10 @@ test("subscriptionDoc status enum", () => {
     createdAt: new Date(),
     updatedAt: new Date(),
   };
-  for (const s of ["trialing", "active", "past_due", "canceled", "ended"]) {
+  for (const s of ["active", "past_due", "canceled", "ended"]) {
     expect(subscriptionDoc.safeParse({ ...b, status: s }).success).toBe(true);
   }
+  expect(subscriptionDoc.safeParse({ ...b, status: "trialing" }).success).toBe(false);
   expect(subscriptionDoc.safeParse({ ...b, status: "paused" }).success).toBe(false);
 });
 

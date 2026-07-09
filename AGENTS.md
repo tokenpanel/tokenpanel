@@ -37,13 +37,20 @@ turbo.json                       task pipeline (build/dev/lint/typecheck/clean)
 - Env: Bun auto-loads `.env`; no dotenv import. Required vars: `MONGODB_URI`, `MONGODB_DB`, optional `PORT`.
 - API fail-fast: server exits if MongoDB is unreachable on boot.
 - **Migrations**: ordered, timestamped migration files in `packages/db/migrations/{pre,post}/`.
-  `pre/` runs before `Bun.serve` (additive only); `post/` runs after deploy (destructive allowed,
-  gated by `RUN_POST_MIGRATIONS=1`). SafeMigrate lint rejects destructive ops (`drop`, `$unset`,
-  `$rename`, `collMod`, `dropIndex`) in `pre/` `up()` functions. Each migration runs in a
-  transaction (replica set required). Tracked in `_migrations` collection with checksum.
-  Lock via `_migration_lock` (TTL 5 min, renewed by a 60 s heartbeat while a
-  migration runs; dead holders still auto-expire). Commands: `bun run db:new-migration`,
-  `bun run db:migrate`, `bun run db:status` (run from `packages/db`).
+  Discourse-style deploy flow (manager `tokenpanel update`):
+  1. **pre/** from the *new* image (old container still serving) — additive only
+  2. **swap** to the new container
+  3. **post/** from the *live* new container — destructive allowed (data rewrites,
+     dropIndex, etc.)
+  API boot runs **pre only** (so a restart never re-runs destructive post work).
+  Applied migrations are tracked in `_migrations` (`_id` = migration id + checksum);
+  re-runs skip already-applied files and abort if a file was edited after apply.
+  SafeMigrate lint rejects destructive ops (`drop`, `$unset`, `$rename`, `collMod`,
+  `dropIndex`) in `pre/` `up()` functions. Each migration runs in a transaction
+  (replica set required) unless `transactional = false`. Lock via `_migration_lock`
+  (TTL 5 min, 60 s heartbeat). Commands: `bun run db:new-migration`,
+  `bun run db:migrate -- --phase=pre|post`, `bun run db:status` (from `packages/db`);
+  operator: `tokenpanel migrate pre|post`, `tokenpanel update`.
 
 ### Common commands
 

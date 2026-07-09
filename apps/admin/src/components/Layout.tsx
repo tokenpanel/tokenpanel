@@ -16,6 +16,7 @@ import {
   Building2,
   Check,
   Plus,
+  ShieldCheck,
 } from "lucide-react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext.tsx";
@@ -73,6 +74,7 @@ const NAV_ITEMS: readonly NavItem[] = [
   { to: "/playground", label: "Playground", icon: MessageSquare },
   { to: "/analytics", label: "Analytics", icon: BarChart3 },
   { to: "/api-keys", label: "API Keys", icon: KeyRound },
+  { to: "/management-keys", label: "Management Keys", icon: ShieldCheck },
   { to: "/organizations", label: "Organizations", icon: Building2 },
   { to: "/settings", label: "Settings", icon: Settings },
 ] as const;

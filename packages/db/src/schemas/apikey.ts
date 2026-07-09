@@ -12,7 +12,7 @@ export const apiKeyDoc = z.object({
   customerId: objectId,
   /** Display label. */
   name: z.string().min(1).max(120),
-  /** Key prefix used for lookup (first 12 chars, non-secret). */
+  /** Key prefix used for lookup (first 16 chars, non-secret). */
   prefix: z.string().min(8).max(20),
   /** Hash of the full key (argon2/scrypt). Never returned. */
   keyHash: z.string().min(1),

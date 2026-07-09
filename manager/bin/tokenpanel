@@ -121,6 +121,13 @@ cmd_start() {
   step "start" "bringing up containers..."
   docker compose -f "$APP_YML" up -d --remove-orphans
   wait_for_health api 60 || die "api did not become healthy"
+  # API boot applies pending pre/ migrations. Post/ (destructive) is not run on
+  # boot — apply any pending post/ here so first install and plain restarts still
+  # reach a fully-migrated schema. Already-applied ids are skipped via
+  # `_migrations` tracking (idempotent).
+  source "${SCRIPT_DIR}/../lib/migrate.sh"
+  step "start" "applying pending post-deploy migrations..."
+  run_migrations "post" || die "post-migration failed after start"
   ok "TokenPanel is up"
 }
 
@@ -378,10 +385,11 @@ cmd_update() {
   ok "new image built and tagged"
 
   # ── Phase 4: PRE-MIGRATE ──
-  # Run pre/ migrations from the NEW image (tokenpanel/app:${NEW_IMAGE_TAG})
-  # in a one-shot container — the old container keeps serving but lacks the
-  # new migration files, so we must NOT exec into it. Same compose
-  # network/env as the live api; mongo is untouched.
+  # Discourse-style: apply every pending pre/ migration from the NEW image
+  # (tokenpanel/app:${NEW_IMAGE_TAG}) in a one-shot container — the old
+  # container keeps serving but lacks the new migration files, so we must NOT
+  # exec into it. Same compose network/env as the live api; mongo is untouched.
+  # Already-applied migrations are skipped via `_migrations` (id + checksum).
   step "4/6" "running pre-deploy migrations from new image (old container still serving)..."
   run_migrations_image "pre" "$NEW_IMAGE_TAG" || die "pre-migration failed — aborting (old container serving, db rolled back per-txn, backup available)"
   ok "pre-deploy migrations applied (from tokenpanel/app:${NEW_IMAGE_TAG})"
@@ -392,6 +400,10 @@ cmd_update() {
   ok "new container is live and healthy"
 
   # ── Phase 6: POST-MIGRATE ──
+  # Always run post/ after a successful swap. There is no env-var gate: if this
+  # release ships no new post files, the runner reports 0 applied / N skipped.
+  # If a post migration fails, the new code is already live — restore from the
+  # Phase 2 backup if the data rewrite is unsafe to leave half-applied.
   step "6/6" "running post-deploy migrations..."
   run_migrations "post" || {
     err "post-migration failed!"

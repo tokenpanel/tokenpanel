@@ -63,6 +63,113 @@ test("usageRecordDoc defaults reasoning/cache tokens 0, billed true, durationMs 
   expect(r.cacheWriteTokens).toBe(0);
   expect(r.billed).toBe(true);
   expect(r.durationMs).toBe(0);
+  expect(r.actorKind).toBe("customer_key");
+  expect(r.customerId).toBeInstanceOf(ObjectId);
+  expect(r.managementKeyId).toBeUndefined();
+  expect(r.customerEmail).toBeUndefined();
+});
+
+test("usageRecordDoc allows null customerId for org-internal management calls", () => {
+  const b = {
+    _id: new ObjectId(),
+    organizationId: new ObjectId(),
+    customerId: null,
+    apiKeyId: null,
+    actorKind: "management_key" as const,
+    managementKeyId: new ObjectId(),
+    modelAliasId: "gpt",
+    providerId: new ObjectId(),
+    upstreamModelId: "gpt-4o",
+    protocol: "openai",
+    promptTokens: 100,
+    completionTokens: 50,
+    totalTokens: 150,
+    costMinor: 10,
+    priceMinor: 0,
+    currency: "USD",
+    status: 200,
+    billed: false,
+    occurredAt: new Date(),
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  };
+  const r = usageRecordDoc.parse(b);
+  expect(r.customerId).toBeNull();
+  expect(r.actorKind).toBe("management_key");
+  expect(r.managementKeyId).toBeInstanceOf(ObjectId);
+  expect(r.billed).toBe(false);
+});
+
+test("usageRecordDoc management-attributed call carries customerId + customerEmail snapshot", () => {
+  const r = usageRecordDoc.parse({
+    _id: new ObjectId(),
+    organizationId: new ObjectId(),
+    customerId: new ObjectId(),
+    actorKind: "management_key",
+    managementKeyId: new ObjectId(),
+    customerEmail: "alice@example.com",
+    modelAliasId: "gpt",
+    providerId: new ObjectId(),
+    upstreamModelId: "gpt-4o",
+    protocol: "openai",
+    promptTokens: 100,
+    completionTokens: 50,
+    totalTokens: 150,
+    costMinor: 10,
+    priceMinor: 20,
+    currency: "USD",
+    status: 200,
+    occurredAt: new Date(),
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  });
+  expect(r.actorKind).toBe("management_key");
+  expect(r.customerEmail).toBe("alice@example.com");
+});
+
+test("usageRecordDoc rejects unknown actorKind", () => {
+  expect(
+    usageRecordDoc.safeParse({
+      _id: new ObjectId(),
+      organizationId: new ObjectId(),
+      customerId: new ObjectId(),
+      actorKind: "anonymous",
+      modelAliasId: "gpt",
+      providerId: new ObjectId(),
+      upstreamModelId: "gpt-4o",
+      protocol: "openai",
+      promptTokens: 100,
+      completionTokens: 50,
+      totalTokens: 150,
+      costMinor: 10,
+      priceMinor: 20,
+      currency: "USD",
+      status: 200,
+      occurredAt: new Date(),
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    }).success,
+  ).toBe(false);
+});
+
+test("usageRecordCreateInput accepts null customerId", () => {
+  const r = usageRecordCreateInput.parse({
+    customerId: null,
+    actorKind: "management_key",
+    managementKeyId: new ObjectId().toHexString(),
+    modelAliasId: "gpt",
+    providerId: provId(),
+    upstreamModelId: "gpt-4o",
+    protocol: "anthropic",
+    promptTokens: 100,
+    completionTokens: 50,
+    costMinor: 0,
+    priceMinor: 0,
+    currency: "USD",
+    status: 200,
+  });
+  expect(r.customerId).toBeNull();
+  expect(r.actorKind).toBe("management_key");
 });
 
 test("usageRecordCreateInput coerces occurredAt from string, optional tokens default-free", () => {

@@ -48,6 +48,7 @@ export async function getDb(): Promise<TypedDb> {
     usageRecords: rawDb.collection(collections.usageRecords),
     rateLimitCounters: rawDb.collection(collections.rateLimitCounters),
     apiKeys: rawDb.collection(collections.apiKeys),
+    managementApiKeys: rawDb.collection(collections.managementApiKeys),
   };
   return typed;
 }

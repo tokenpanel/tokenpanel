@@ -4,6 +4,7 @@ import { zValidator } from "@hono/zod-validator";
 import { ObjectId } from "mongodb";
 import {
   getDb,
+  getClient,
   customerCreateInput,
   customerUpdateInput,
   type CustomerDoc,
@@ -13,10 +14,19 @@ import {
 } from "@tokenpanel/db";
 import type { Document, Filter } from "mongodb";
 import { requireAuth, requireRole, type AuthVariables } from "../middleware/auth.ts";
+import { isDuplicateKeyError } from "../lib/crypto.ts";
 
 const app = new Hono<{ Variables: AuthVariables }>();
 
 app.use("*", requireAuth);
+
+/**
+ * Sentinel thrown inside the balance-write transaction when the
+ * findOneAndUpdate matches no row (customer deleted between the existence
+ * check and the txn). Aborts the txn so the ledger insert rolls back; the
+ * caller maps it to a 404.
+ */
+class BalanceCustomerGone extends Error {}
 
 const listQuerySchema = z.object({
   limit: z.coerce.number().int().positive().max(500).default(50),
@@ -75,8 +85,9 @@ app.post("/", requireRole("admin"), zValidator("json", customerCreateInput), asy
     }
   }
 
+  const customerId = new ObjectId();
   const doc: CustomerDoc = {
-    _id: new ObjectId(),
+    _id: customerId,
     organizationId: orgId,
     externalId: body.externalId ?? null,
     name: body.name,
@@ -88,9 +99,39 @@ app.post("/", requireRole("admin"), zValidator("json", customerCreateInput), asy
     updatedAt: now,
   };
 
-  const insertResult = await db.customers.insertOne(doc);
-
-  const created = await db.customers.findOne({ _id: insertResult.insertedId });
+  // Non-zero opening balance must land in the ledger in the same transaction
+  // so balance never diverges from balance_adjustments.
+  const session = getClient().startSession();
+  let created: CustomerDoc | null = null;
+  try {
+    await session.withTransaction(async () => {
+      await db.customers.insertOne(doc, { session });
+      if (startingBalance.amountMinor !== 0) {
+        const adjustment: BalanceAdjustmentDoc = {
+          _id: new ObjectId(),
+          organizationId: orgId,
+          customerId,
+          amountMinor: startingBalance.amountMinor,
+          currency: startingBalance.currency,
+          reason: "topup",
+          usageRecordId: null,
+          note: "opening balance",
+          occurredAt: now,
+          createdAt: now,
+          updatedAt: now,
+        };
+        await db.balanceAdjustments.insertOne(adjustment, { session });
+      }
+      created = doc;
+    });
+  } catch (err) {
+    if (isDuplicateKeyError(err)) {
+      return c.json({ error: "duplicate_external_id_or_email" }, 409);
+    }
+    throw err;
+  } finally {
+    await session.endSession();
+  }
   if (!created) {
     return c.json({ error: "insert_failed" }, 500);
   }
@@ -184,6 +225,22 @@ app.post(
     });
     if (!customer) return c.json({ error: "not_found" }, 404);
 
+    // Never relabel an existing nonzero balance by overwriting currency.
+    // amountMinor: 0 + different currency would otherwise turn USD into EUR
+    // without conversion.
+    if (customer.balance.currency !== body.currency) {
+      if (customer.balance.amountMinor !== 0) {
+        return c.json(
+          {
+            error: "currency_mismatch",
+            balanceCurrency: customer.balance.currency,
+            requestCurrency: body.currency,
+          },
+          409,
+        );
+      }
+    }
+
     const now = new Date();
     const adjustment: BalanceAdjustmentDoc = {
       _id: new ObjectId(),
@@ -198,35 +255,45 @@ app.post(
       createdAt: now,
       updatedAt: now,
     };
-    await db.balanceAdjustments.insertOne(adjustment);
 
-    const updated = await db.customers.findOneAndUpdate(
-      { _id: oid, organizationId: orgId },
-      {
-        $inc: { "balance.amountMinor": body.amountMinor },
-        $set: {
-          "balance.currency": body.currency,
-          updatedAt: now,
-        },
-      },
-      { returnDocument: "after" },
-    );
+    // Insert the ledger entry and mutate the balance inside ONE transaction
+    // so a transient failure (or a customer deleted mid-call) cannot leave a
+    // ledger row without the matching balance mutation, or vice versa.
+    const session = getClient().startSession();
+    let updated: CustomerDoc | null = null;
+    try {
+      await session.withTransaction(async () => {
+        await db.balanceAdjustments.insertOne(adjustment, { session });
+        const setFields: Record<string, unknown> = { updatedAt: now };
+        if (
+          customer.balance.currency !== body.currency &&
+          customer.balance.amountMinor === 0
+        ) {
+          setFields["balance.currency"] = body.currency;
+        }
+        const res = await db.customers.findOneAndUpdate(
+          {
+            _id: oid,
+            organizationId: orgId,
+            "balance.currency": customer.balance.currency,
+          },
+          {
+            $inc: { "balance.amountMinor": body.amountMinor },
+            $set: setFields,
+          },
+          { returnDocument: "after", session },
+        );
+        if (!res) throw new BalanceCustomerGone();
+        updated = res as CustomerDoc;
+      });
+    } catch (err) {
+      if (!(err instanceof BalanceCustomerGone)) throw err;
+    } finally {
+      await session.endSession();
+    }
     if (!updated) return c.json({ error: "not_found" }, 404);
 
-    const adjustmentDoc = await db.balanceAdjustments.findOne(
-      {
-        organizationId: orgId,
-        customerId: oid,
-        occurredAt: now,
-        amountMinor: body.amountMinor,
-      },
-      { sort: { occurredAt: -1, _id: -1 } },
-    );
-
-    return c.json(
-      { customer: updated as CustomerDoc, adjustment: adjustmentDoc },
-      201,
-    );
+    return c.json({ customer: updated, adjustment }, 201);
   },
 );
 
@@ -319,7 +386,7 @@ app.post(
     const existing = await db.subscriptions.findOne({
       organizationId: orgId,
       customerId: oid,
-      status: { $in: ["active", "trialing"] },
+      status: "active",
     });
     if (existing) {
       return c.json(
@@ -348,14 +415,20 @@ app.post(
       updatedAt: now,
     };
 
-    const insertResult = await db.subscriptions.insertOne(subscription);
-
-    const created = await db.subscriptions.findOne({
-      _id: insertResult.insertedId,
-    });
-    if (!created) return c.json({ error: "insert_failed" }, 500);
-
-    return c.json(created as SubscriptionDoc, 201);
+    try {
+      const insertResult = await db.subscriptions.insertOne(subscription);
+      const created = await db.subscriptions.findOne({
+        _id: insertResult.insertedId,
+      });
+      if (!created) return c.json({ error: "insert_failed" }, 500);
+      return c.json(created as SubscriptionDoc, 201);
+    } catch (err) {
+      // Unique partial index on active status is the race safety net.
+      if (isDuplicateKeyError(err)) {
+        return c.json({ error: "subscription_already_active" }, 409);
+      }
+      throw err;
+    }
   },
 );
 
@@ -369,7 +442,7 @@ app.get("/:id/subscription", async (c) => {
     {
       organizationId: orgId,
       customerId: oid,
-      status: { $in: ["active", "trialing"] },
+      status: "active",
     },
     { sort: { createdAt: -1 } },
   );

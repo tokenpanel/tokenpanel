@@ -148,7 +148,7 @@ providerRoutes.delete("/:id", requireRole("admin"), async (c) => {
   return c.json({ ok: true });
 });
 
-providerRoutes.get("/:id/discover-models", requireRole("admin"), async (c) => {
+providerRoutes.post("/:id/discover-models", requireRole("admin"), async (c) => {
   const orgId = c.get("orgId");
   const oid = parseObjectIdParam(c.req.param("id"));
   if (!oid) return c.json({ error: "not_found" }, 404);

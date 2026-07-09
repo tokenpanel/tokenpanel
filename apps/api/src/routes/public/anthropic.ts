@@ -3,7 +3,6 @@ import { z } from "zod";
 import { ObjectId } from "mongodb";
 import { getDb, type ModelDoc, type ModelEntryDoc } from "@tokenpanel/db";
 import type { PublicAuthVariables } from "../../middleware/public-auth.ts";
-import { requireCustomerKey } from "../../middleware/public-auth.ts";
 import {
   preFlight,
   callWithFallback,
@@ -11,13 +10,23 @@ import {
   computeCharges,
   settleUsage,
   estimatePromptTokens,
+  resolveModel,
   BillingError,
 } from "../../lib/billing.ts";
+import {
+  resolveChatContext,
+  actorForChatContext,
+  billableCustomerId,
+  modelWhitelistForContext,
+  V1ChatError,
+  type ChatContext,
+} from "../../lib/v1-chat-context.ts";
+import { getEffectiveRules } from "../../lib/rate-limits.ts";
 import type { ChatRequest, ChatMessage } from "../../providers/index.ts";
 
 const publicAnthropic = new Hono<{ Variables: PublicAuthVariables }>();
-// Scope auth to /v1/* only (see openai.ts for the full rationale).
-publicAnthropic.use("/v1/*", requireCustomerKey);
+// Auth is mounted once on the parent app for /v1/* (index.ts) so openai +
+// anthropic handlers do not double-authenticate.
 
 const anthropicContentBlock = z.object({
   type: z.enum(["text", "image", "tool_use", "tool_result"]),
@@ -46,6 +55,11 @@ const messagesBody = z.object({
   stop_sequences: z.array(z.string()).optional(),
   tools: z.array(z.any()).optional(),
   tool_choice: z.any().optional(),
+  /**
+   * Management-key-only attribute (see openai.ts). Ignored for customer keys.
+   * Stripped before forwarding upstream.
+   */
+  customerEmail: z.string().email().max(254).optional(),
 }).passthrough();
 
 export function translateAnthropicMessage(m: z.infer<typeof anthropicMessage>): ChatMessage {
@@ -71,6 +85,33 @@ export function anthropicError(type: string, message: string, extra?: Record<str
   };
 }
 
+/**
+ * Resolve model + rules. Customer / management_attributed paths run full
+ * preFlight (model access + limits + balance). Internal management calls skip
+ * balance/limit checks (no customer) but still validate model existence.
+ */
+async function resolveModelAndRules(params: {
+  orgId: ObjectId;
+  ctx: ChatContext;
+  aliasId: string;
+  estimatedPromptTokens: number;
+  maxCompletionTokens?: number;
+}): Promise<{ model: ModelDoc; rules: Awaited<ReturnType<typeof getEffectiveRules>> }> {
+  const customerId = billableCustomerId(params.ctx);
+  if (customerId === null) {
+    const model = await resolveModel(params.orgId, params.aliasId);
+    return { model, rules: [] };
+  }
+  return preFlight({
+    orgId: params.orgId,
+    customerId,
+    apiKeyModelWhitelist: modelWhitelistForContext(params.ctx),
+    aliasId: params.aliasId,
+    estimatedPromptTokens: params.estimatedPromptTokens,
+    maxCompletionTokens: params.maxCompletionTokens,
+  });
+}
+
 publicAnthropic.post("/v1/messages", async (c) => {
   let body: z.infer<typeof messagesBody>;
   try {
@@ -81,9 +122,30 @@ publicAnthropic.post("/v1/messages", async (c) => {
   }
 
   const orgId = c.get("orgId");
-  const customer = c.get("customer");
-  const apiKey = c.get("apiKey");
+  const principal = c.get("principal");
+  if (!principal) {
+    return c.json(anthropicError("authentication_error", "missing principal"), 401 as 401);
+  }
   const stream = body.stream ?? false;
+
+  let ctx: ChatContext;
+  try {
+    ctx = await resolveChatContext({
+      principal,
+      customerEmail: body.customerEmail,
+    });
+  } catch (err) {
+    if (err instanceof V1ChatError) {
+      const type =
+        err.code === "missing_scope"
+          ? "permission_error"
+          : err.code === "customer_not_found"
+            ? "not_found_error"
+            : "invalid_request_error";
+      return c.json(anthropicError(type, err.message), err.status as 401 | 403 | 404);
+    }
+    throw err;
+  }
 
   const messages: ChatMessage[] = body.messages.map(translateAnthropicMessage);
   if (body.system) {
@@ -103,15 +165,12 @@ publicAnthropic.post("/v1/messages", async (c) => {
     stop: body.stop_sequences,
   };
 
-  let preflightResult: { model: ModelDoc; rules: Awaited<ReturnType<typeof import("../../lib/rate-limits.ts").getEffectiveRules>> };
+  let preflightResult: { model: ModelDoc; rules: Awaited<ReturnType<typeof getEffectiveRules>> };
   try {
-    preflightResult = await preFlight({
+    preflightResult = await resolveModelAndRules({
       orgId,
-      customerId: customer._id,
-      apiKeyModelWhitelist: apiKey.modelWhitelist,
+      ctx,
       aliasId: body.model,
-      // Conservative pre-call estimate so balance + spend/token limits are
-      // enforced BEFORE the paid upstream call (previously 0/0 → no enforcement).
       estimatedPromptTokens: estimatePromptTokens(request.messages),
       maxCompletionTokens: body.max_tokens,
     });
@@ -127,6 +186,7 @@ publicAnthropic.post("/v1/messages", async (c) => {
   }
 
   const { model, rules } = preflightResult;
+  const actor = actorForChatContext(ctx);
   const start = Date.now();
 
   if (!stream) {
@@ -134,18 +194,18 @@ publicAnthropic.post("/v1/messages", async (c) => {
       const outcome = await callWithFallback({ orgId, model, request });
       const durationMs = Date.now() - start;
       const charges = computeCharges({ entry: outcome.entry, model, usage: outcome.response.usage });
+      const priceMinor = ctx.kind === "management_internal" ? 0 : charges.priceMinor;
       try {
         await settleUsage({
           orgId,
-          customerId: customer._id,
-          apiKeyId: apiKey._id,
+          actor,
           model,
           entry: outcome.entry,
           provider: outcome.provider,
           protocol: "anthropic",
           usage: outcome.response.usage,
           costMinor: charges.costMinor,
-          priceMinor: charges.priceMinor,
+          priceMinor,
           currency: charges.currency,
           providerRequestId: outcome.response.providerRequestId,
           status: 200,
@@ -300,17 +360,17 @@ publicAnthropic.post("/v1/messages", async (c) => {
             const providerDoc = await db.providers.findOne({ _id: activeProviderId });
             if (providerDoc) {
               const charges = computeCharges({ entry: activeEntry, model, usage });
+              const priceMinor = ctx.kind === "management_internal" ? 0 : charges.priceMinor;
               await settleUsage({
                 orgId,
-                customerId: customer._id,
-                apiKeyId: apiKey._id,
+                actor,
                 model,
                 entry: activeEntry,
                 provider: providerDoc,
                 protocol: "anthropic",
                 usage,
                 costMinor: charges.costMinor,
-                priceMinor: charges.priceMinor,
+                priceMinor,
                 currency: charges.currency,
                 status: 200,
                 durationMs,

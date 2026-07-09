@@ -192,42 +192,34 @@ playground.post("/chat", zValidator("json", chatBody), async (c) => {
       const durationMs = Date.now() - start;
       const charges = computeCharges({ entry: outcome.entry, model, usage: outcome.response.usage });
 
-      // Only debit + meter when a real customer is selected.
-      if (ctx.customer) {
-        try {
-          await settleUsage({
-            orgId,
-            customerId: ctx.customer._id,
-            apiKeyId: null,
-            model,
-            entry: outcome.entry,
-            provider: outcome.provider,
-            protocol: "openai",
-            usage: outcome.response.usage,
-            costMinor: charges.costMinor,
-            priceMinor: charges.priceMinor,
-            currency: charges.currency,
-            providerRequestId: outcome.response.providerRequestId,
-            status: 200,
-            durationMs,
-            rules,
-          });
-        } catch (settleErr) {
-          console.error("[playground] settlement failed (non-stream):", settleErr);
-        }
-      } else {
-        await recordPlaygroundUsage({
+      // Only debit + meter when a real customer is selected. Without a
+      // customer, settleUsage still inserts a usage_record (actorKind
+      // "playground", billed=false) so admins see cost visibility without
+      // charging anyone — previously this used a sentinel ObjectId hack that
+      // the new nullable-customerId schema makes unnecessary.
+      try {
+        await settleUsage({
           orgId,
+          actor: {
+            actorKind: "playground",
+            customerId: ctx.customer?._id ?? null,
+            apiKeyId: null,
+          },
           model,
           entry: outcome.entry,
           provider: outcome.provider,
+          protocol: "openai",
           usage: outcome.response.usage,
           costMinor: charges.costMinor,
-          priceMinor: charges.priceMinor,
+          priceMinor: ctx.customer ? charges.priceMinor : 0,
           currency: charges.currency,
+          providerRequestId: outcome.response.providerRequestId,
           status: 200,
           durationMs,
+          rules,
         });
+      } catch (settleErr) {
+        console.error("[playground] settlement failed (non-stream):", settleErr);
       }
 
       const r = outcome.response;
@@ -350,40 +342,30 @@ playground.post("/chat", zValidator("json", chatBody), async (c) => {
         if (activeEntry && activeProvider && (promptTokens > 0 || completionTokens > 0)) {
           const usage = { promptTokens, completionTokens, reasoningTokens, cacheReadTokens, cacheWriteTokens, totalTokens };
           const charges = computeCharges({ entry: activeEntry, model, usage });
-          if (ctx.customer) {
-            try {
-              await settleUsage({
-                orgId,
-                customerId: ctx.customer._id,
-                apiKeyId: null,
-                model,
-                entry: activeEntry,
-                provider: activeProvider,
-                protocol: "openai",
-                usage,
-                costMinor: charges.costMinor,
-                priceMinor: charges.priceMinor,
-                currency: charges.currency,
-                status: 200,
-                durationMs: Date.now() - start,
-                rules,
-              });
-            } catch (settleErr) {
-              console.error("[playground] settlement failed (stream):", settleErr);
-            }
-          } else {
-            await recordPlaygroundUsage({
+          // Unified settlement: customer-attributed when a customer is
+          // selected (debited), otherwise internal (audit-only).
+          try {
+            await settleUsage({
               orgId,
+              actor: {
+                actorKind: "playground",
+                customerId: ctx.customer?._id ?? null,
+                apiKeyId: null,
+              },
               model,
               entry: activeEntry,
               provider: activeProvider,
+              protocol: "openai",
               usage,
               costMinor: charges.costMinor,
-              priceMinor: charges.priceMinor,
+              priceMinor: ctx.customer ? charges.priceMinor : 0,
               currency: charges.currency,
               status: 200,
               durationMs: Date.now() - start,
+              rules,
             });
+          } catch (settleErr) {
+            console.error("[playground] settlement failed (stream):", settleErr);
           }
           enqueue({
             id,
@@ -427,64 +409,6 @@ function pickExtras(body: z.infer<typeof chatBody>): Record<string, unknown> {
   if (body.presence_penalty !== undefined) extra.presence_penalty = body.presence_penalty;
   if (body.seed !== undefined) extra.seed = body.seed;
   return extra;
-}
-
-/**
- * Write a usage_record for a playground call that wasn't attributed to a
- * customer (admin test mode). customerId is required by the schema, so use a
- * deterministic synthetic id derived from the org — analytics can filter on
- * this sentinel if they want to exclude playground traffic.
- *
- * The synthetic id is the org id with its high nibble flipped to 0xff to make
- * it collision-proof against real customer ObjectIds (Mongo ObjectIds are 12
- * random bytes in v4+, so this never collides in practice).
- */
-async function recordPlaygroundUsage(params: {
-  orgId: ObjectId;
-  model: ModelDoc;
-  entry: ModelEntryDoc;
-  provider: ProviderDoc;
-  usage: { promptTokens: number; completionTokens: number; reasoningTokens?: number; cacheReadTokens?: number; cacheWriteTokens?: number; totalTokens: number };
-  costMinor: number;
-  priceMinor: number;
-  currency: string;
-  status: number;
-  durationMs: number;
-}): Promise<void> {
-  const db = await getDb();
-  const now = new Date();
-  // Build a sentinel ObjectId: org id bytes with the first byte set to 0xff.
-  const orgHex = params.orgId.toHexString();
-  const sentinelHex = "ff" + orgHex.slice(2);
-  const sentinelCustomerId = new ObjectId(sentinelHex);
-
-  await db.usageRecords.insertOne({
-    _id: new ObjectId(),
-    organizationId: params.orgId,
-    customerId: sentinelCustomerId,
-    apiKeyId: null,
-    modelAliasId: params.model.aliasId,
-    providerId: params.provider._id,
-    upstreamModelId: params.entry.upstreamModelId,
-    protocol: "openai",
-    promptTokens: params.usage.promptTokens,
-    completionTokens: params.usage.completionTokens,
-    reasoningTokens: params.usage.reasoningTokens ?? 0,
-    cacheReadTokens: params.usage.cacheReadTokens ?? 0,
-    cacheWriteTokens: params.usage.cacheWriteTokens ?? 0,
-    totalTokens: params.usage.totalTokens,
-    costMinor: params.costMinor,
-    priceMinor: params.priceMinor,
-    currency: params.currency,
-    providerRequestId: undefined,
-    billed: false,
-    errorCode: undefined,
-    status: params.status,
-    durationMs: params.durationMs,
-    occurredAt: now,
-    createdAt: now,
-    updatedAt: now,
-  } as import("@tokenpanel/db").UsageRecordDoc);
 }
 
 export default playground;

@@ -50,6 +50,7 @@ import type {
 import type {
   UsageRecordDoc,
   UsageRecordCreateInput,
+  UsageActorKind,
   RateLimitCounterDoc,
   RateLimitCounterCreateInput,
 } from "../schemas/usage.ts";
@@ -58,6 +59,12 @@ import type {
   ApiKeyCreateInput,
   ApiKeyUpdateInput,
 } from "../schemas/apikey.ts";
+import type {
+  ManagementApiKeyDoc,
+  ManagementApiKeyCreateInput,
+  ManagementApiKeyUpdateInput,
+  ManagementScope,
+} from "../schemas/management-apikey.ts";
 
 /**
  * Central registry of collection names and typed accessors.
@@ -79,6 +86,7 @@ export const collections = {
   usageRecords: "usage_records",
   rateLimitCounters: "rate_limit_counters",
   apiKeys: "api_keys",
+  managementApiKeys: "management_api_keys",
 } as const;
 
 export type Collections = typeof collections;
@@ -100,6 +108,7 @@ export interface TypedDb {
   usageRecords: Collection<UsageRecordDoc>;
   rateLimitCounters: Collection<RateLimitCounterDoc>;
   apiKeys: Collection<ApiKeyDoc>;
+  managementApiKeys: Collection<ManagementApiKeyDoc>;
 }
 
 export type CollectionInsert<T> = Omit<T, "_id" | "createdAt" | "updatedAt">;
@@ -145,9 +154,14 @@ export type {
   LimitScope,
   UsageRecordDoc,
   UsageRecordCreateInput,
+  UsageActorKind,
   RateLimitCounterDoc,
   RateLimitCounterCreateInput,
   ApiKeyDoc,
   ApiKeyCreateInput,
   ApiKeyUpdateInput,
+  ManagementApiKeyDoc,
+  ManagementApiKeyCreateInput,
+  ManagementApiKeyUpdateInput,
+  ManagementScope,
 };

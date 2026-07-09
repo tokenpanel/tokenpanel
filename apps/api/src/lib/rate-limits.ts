@@ -102,7 +102,7 @@ export async function getEffectiveRules(
   customerId: ObjectId,
 ): Promise<RateLimitRule[]> {
   const subscription = await db.subscriptions.findOne(
-    { customerId, status: { $in: ["trialing", "active"] } },
+    { customerId, status: "active" },
     { sort: { periodEnd: -1 } },
   );
 

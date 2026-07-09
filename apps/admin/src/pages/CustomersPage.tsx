@@ -112,7 +112,7 @@ interface PlansResponse {
 interface Subscription {
   _id: string;
   planId: string;
-  status: "trialing" | "active" | "past_due" | "canceled" | "ended";
+  status: "active" | "past_due" | "canceled" | "ended";
   periodStart: string;
   periodEnd: string;
   canceledAt: string | null;

@@ -23,6 +23,21 @@ export function randomToken(bytes = 32): string {
   return hex.join("");
 }
 
+/**
+ * Detect a MongoDB duplicate-key error (code 11000). Used by key-creation
+ * retry loops that regenerate a random prefix when the (unique) prefix index
+ * collides — vanishingly rare with a 16-char hex prefix (16^8 ≈ 4.3B combos)
+ * but handled defensively so a collision surfaces as a regenerated key rather
+ * than a 500 to the operator.
+ */
+export function isDuplicateKeyError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  // Mongo driver: MongoServerError with .code === 11000. The code is stable
+  // across driver versions; the name check is a defensive belt-and-braces.
+  const code = (err as { code?: unknown }).code;
+  return code === 11000 || err.name === "MongoServerError" && /E11000/.test(err.message);
+}
+
 export function hashToken(token: string): string {
   return createHash("sha256").update(token, "utf8").digest("hex");
 }

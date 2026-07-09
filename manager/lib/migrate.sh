@@ -1,12 +1,23 @@
 #!/usr/bin/env bash
 # Migration runner wrapper — calls the app's migrator CLI.
 #
+# Discourse-style update (tokenpanel update):
+#   Phase 4 → run_migrations_image pre  <new_tag>   (old container still serving)
+#   Phase 5 → swap containers
+#   Phase 6 → run_migrations post                     (live new container)
+#
+# Tracking: packages/db migrator writes each applied id+checksum into the
+# `_migrations` collection. Re-running pre or post is safe — already-applied
+# files are skipped; edited-after-apply files abort with a checksum error.
+# There is no RUN_POST_MIGRATIONS env gate: post always runs in Phase 6 / on
+# start; a release with no pending post files simply reports 0 applied.
+#
 # Two entry points:
 #   run_migrations <phase>
 #       exec into the currently-running api container. Used for post-deploy
-#       migrations (Phase 6, after the swap) and the standalone `tokenpanel
-#       migrate` command — in both cases the live container already runs the
-#       image whose migration files we want.
+#       migrations (Phase 6, after the swap), first-start post apply, and the
+#       standalone `tokenpanel migrate` command — in all cases the live
+#       container already runs the image whose migration files we want.
 #   run_migrations_image <phase> <image_tag>
 #       spawn a one-shot container from a *specific* pre-built image
 #       (tokenpanel/app:<tag>) on the same compose network/env, without

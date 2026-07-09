@@ -11,6 +11,7 @@ import PlansPage from "./pages/PlansPage.tsx";
 import DashboardPage from "./pages/DashboardPage.tsx";
 import AnalyticsPage from "./pages/AnalyticsPage.tsx";
 import ApiKeysPage from "./pages/ApiKeysPage.tsx";
+import ManagementKeysPage from "./pages/ManagementKeysPage.tsx";
 import PlaygroundPage from "./pages/PlaygroundPage.tsx";
 import SettingsPage from "./pages/SettingsPage.tsx";
 import OrganizationsPage from "./pages/OrganizationsPage.tsx";
@@ -62,6 +63,7 @@ export default function App(): React.ReactElement {
         <Route path="playground" element={<PlaygroundPage />} />
         <Route path="analytics" element={<AnalyticsPage />} />
         <Route path="api-keys" element={<ApiKeysPage />} />
+        <Route path="management-keys" element={<ManagementKeysPage />} />
         <Route path="organizations" element={<OrganizationsPage />} />
         <Route path="settings" element={<SettingsPage />} />
       </Route>

@@ -1,10 +1,21 @@
+<p align="center">
+  <img src="apps/admin/public/logo.png" alt="TokenPanel logo" width="112" height="112">
+</p>
+
 # TokenPanel
 
-Open-source AI reseller gateway with customer billing, usage controls, and a real admin dashboard.
+## Launch your own AI API business
 
-TokenPanel sits between AI providers and your customers. Connect upstream providers, create customer API keys, publish your own model aliases, set prices and limits, and track usage, revenue, cost, and profit from one self-hosted control plane.
+TokenPanel is an open-source, self-hosted AI reseller panel. Connect OpenAI-compatible or Anthropic-compatible providers, create customer API keys, set model prices, enforce limits, track balances, and see revenue, cost, and profit from one dashboard.
 
 No enterprise feature wall. No paid source tier for core features. TokenPanel is licensed under AGPLv3 so the platform stays open when modified and offered as a hosted service.
+
+## Who is this for?
+
+- Developers selling AI API access to customers
+- SaaS founders adding usage-based AI billing
+- Agencies managing client AI usage
+- Teams that need per-user or per-customer AI budgets
 
 ## Why TokenPanel
 
@@ -21,6 +32,16 @@ Use it when you need:
 - A self-hosted dashboard your team can actually run day to day
 
 If LiteLLM is the provider gateway, TokenPanel is the open-source customer, billing, and dashboard layer around AI resale.
+
+## Quick Start
+
+Install TokenPanel on a Linux server:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/tokenpanel/tokenpanel/main/manager/install.sh | sudo bash
+```
+
+Prefer local development? Jump to [Local Development](#local-development).
 
 ## Features
 
@@ -73,7 +94,7 @@ If LiteLLM is the provider gateway, TokenPanel is the open-source customer, bill
 - Pre/post migration flow with destructive-operation safety checks
 - Backups, restore, update, rollback, diagnostics, and optional Caddy HTTPS
 
-## Install
+## Production Install
 
 Production install on a Linux server:
 
@@ -171,6 +192,12 @@ Core data lives in MongoDB with zod-backed TypeScript schemas. Billing settlemen
 TokenPanel is built as an open-source alternative to closed feature tiers around AI gateway operations. The goal is simple: if the feature exists, self-hosted users should have it.
 
 You can self-host it, inspect it, modify it, and run it for your customers. If you modify TokenPanel and offer it as a hosted network service, AGPLv3 requires you to make the corresponding source code available to users of that service.
+
+## Project Status
+
+TokenPanel is under active development. Review release notes and back up production data before upgrades. APIs, configuration, and deployment behavior may change before the first stable release.
+
+Security reports should follow [SECURITY.md](SECURITY.md). Contributions are welcome through [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 

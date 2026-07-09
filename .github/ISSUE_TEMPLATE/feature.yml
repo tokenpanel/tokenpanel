@@ -1,0 +1,43 @@
+name: Feature request
+description: Propose a focused improvement to TokenPanel
+title: "[Feature]: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What operator or customer problem should this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Describe desired behavior, not only UI shape.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Affected areas
+      options:
+        - label: Admin console
+        - label: Admin API
+        - label: Public OpenAI/Anthropic API
+        - label: Billing or rate limits
+        - label: Database or migrations
+        - label: Deployment manager
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checklist
+      options:
+        - label: I searched existing issues and discussions.
+          required: true
+        - label: This request does not contain secrets or customer data.
+          required: true

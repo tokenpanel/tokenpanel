@@ -107,7 +107,7 @@ if (hasAdminDist) {
       },
     }),
   );
-  app.get("/favicon.svg", serveStatic({ root: adminDistDir }));
+  app.get("/logo.png", serveStatic({ root: adminDistDir }));
   app.get("/icons.svg", serveStatic({ root: adminDistDir }));
   console.log(`admin SPA: serving from ${adminDistDir}`);
 } else {

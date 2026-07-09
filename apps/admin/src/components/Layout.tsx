@@ -58,6 +58,7 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar";
 import { cn } from "@/lib/utils";
+import BrandLogo from "@/components/BrandLogo";
 
 interface NavItem {
   to: string;
@@ -221,9 +222,7 @@ function BrandHeader(): React.ReactElement {
         collapsed ? "justify-center px-0" : "px-2",
       )}
     >
-      <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-primary to-primary/70 text-sm font-bold text-primary-foreground shadow-sm">
-        T
-      </div>
+      <BrandLogo className="size-8 shadow-sm" />
       <div
         className={cn(
           "flex flex-col leading-tight whitespace-nowrap overflow-hidden transition-[width,opacity] duration-200 ease-linear",

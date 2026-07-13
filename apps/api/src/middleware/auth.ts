@@ -11,6 +11,45 @@ export type AuthVariables = {
   role: UserRole;
 };
 
+type AuthMiddleware = MiddlewareHandler<{ Variables: AuthVariables }>;
+
+/** Test-only override so route integration tests can inject org/role without JWT. */
+let requireAuthForTests: AuthMiddleware | null = null;
+
+/**
+ * Hard gate for test hooks. Production (NODE_ENV=production) always rejects.
+ * Outside production, TOKENPANEL_TEST_HOOKS=1 must be set by the test process
+ * so a stray import cannot silently bypass JWT auth.
+ */
+function assertTestHooksAllowed(action: string): void {
+  if (process.env.NODE_ENV === "production") {
+    throw new Error(`${action} is forbidden when NODE_ENV=production`);
+  }
+  if (process.env.TOKENPANEL_TEST_HOOKS !== "1") {
+    throw new Error(
+      `${action} requires TOKENPANEL_TEST_HOOKS=1 (test processes only)`,
+    );
+  }
+}
+
+function testAuthHookActive(): boolean {
+  return (
+    process.env.NODE_ENV !== "production" &&
+    process.env.TOKENPANEL_TEST_HOOKS === "1" &&
+    requireAuthForTests !== null
+  );
+}
+
+/**
+ * Install/clear a test-only requireAuth override.
+ * Requires TOKENPANEL_TEST_HOOKS=1 and is forbidden in production.
+ * Pass `null` to restore JWT-backed auth.
+ */
+export function setRequireAuthForTests(fn: AuthMiddleware | null): void {
+  assertTestHooksAllowed("setRequireAuthForTests");
+  requireAuthForTests = fn;
+}
+
 export function getToken(c: { req: { header: (name: string) => string | undefined } }): string | null {
   const h = c.req.header("Authorization");
   if (!h) return null;
@@ -21,9 +60,12 @@ export function getToken(c: { req: { header: (name: string) => string | undefine
   return token;
 }
 
-export const requireAuth: MiddlewareHandler<{
-  Variables: AuthVariables;
-}> = async (c, next) => {
+export const requireAuth: AuthMiddleware = async (c, next) => {
+  if (testAuthHookActive()) {
+    return requireAuthForTests!(c, next);
+  }
+  // Drop a leaked override if env was cleared so production paths stay pure.
+  requireAuthForTests = null;
   const token = getToken(c);
   if (!token) {
     return c.json({ error: "unauthorized" }, 401);

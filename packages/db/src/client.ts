@@ -5,6 +5,33 @@ let client: MongoClient | null = null;
 let typed: TypedDb | null = null;
 let rawDb: Db | null = null;
 
+/** Test-only override so HTTP integration tests can inject an in-memory TypedDb. */
+let getDbForTests: (() => Promise<TypedDb>) | null = null;
+
+/**
+ * Hard gate for test hooks. Production (NODE_ENV=production) always rejects.
+ * Outside production, TOKENPANEL_TEST_HOOKS=1 must be set by the test process
+ * so a stray import cannot silently swap the DB accessor.
+ */
+function assertTestHooksAllowed(action: string): void {
+  if (process.env.NODE_ENV === "production") {
+    throw new Error(`${action} is forbidden when NODE_ENV=production`);
+  }
+  if (process.env.TOKENPANEL_TEST_HOOKS !== "1") {
+    throw new Error(
+      `${action} requires TOKENPANEL_TEST_HOOKS=1 (test processes only)`,
+    );
+  }
+}
+
+function testHooksActive(): boolean {
+  return (
+    process.env.NODE_ENV !== "production" &&
+    process.env.TOKENPANEL_TEST_HOOKS === "1" &&
+    getDbForTests !== null
+  );
+}
+
 /**
  * Connection URI. Bun loads `.env` automatically; no dotenv import needed.
  * Default points to a local MongoDB for development.
@@ -23,8 +50,21 @@ export function getDbName(): string {
   return process.env.MONGODB_DB ?? "tokenpanel";
 }
 
+/**
+ * Install/clear a test-only getDb override.
+ * Requires TOKENPANEL_TEST_HOOKS=1 and is forbidden in production.
+ * Pass `null` to restore the real Mongo-backed accessor.
+ */
+export function setGetDbForTests(fn: (() => Promise<TypedDb>) | null): void {
+  assertTestHooksAllowed("setGetDbForTests");
+  getDbForTests = fn;
+}
+
 /** Connect once and cache. Returns a typed accessor for our collections. */
 export async function getDb(): Promise<TypedDb> {
+  if (testHooksActive()) return getDbForTests!();
+  // Drop a leaked override if env was cleared so production paths stay pure.
+  getDbForTests = null;
   if (typed) return typed;
 
   client = new MongoClient(getMongoUri(), {

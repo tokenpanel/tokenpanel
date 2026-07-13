@@ -1,9 +1,10 @@
 import { test, expect } from "bun:test";
 import { ObjectId } from "mongodb";
-import type { CustomerDoc } from "@tokenpanel/db";
+import type { CustomerDoc, ModelDoc } from "@tokenpanel/db";
 import {
   maybeRedactCustomer,
   principalHasScope,
+  toModelCapability,
 } from "../management/read.ts";
 
 function customer(over: Partial<CustomerDoc> = {}): CustomerDoc {
@@ -81,4 +82,40 @@ test("principalHasScope: false when scope absent", () => {
 test("principalHasScope: false when principal missing (defensive)", () => {
   const c = { get: () => undefined as unknown as import("../../middleware/public-auth.ts").PublicPrincipal };
   expect(principalHasScope(c, "balances:read")).toBe(false);
+});
+
+function modelDoc(over: Partial<ModelDoc> = {}): ModelDoc {
+  return {
+    _id: new ObjectId(),
+    organizationId: new ObjectId(),
+    aliasId: "my-gpt",
+    displayName: "My GPT",
+    description: null,
+    entries: [{ id: "e1", providerId: new ObjectId(), upstreamModelId: "gpt-4o", priority: 0, active: true }],
+    reasoning: false,
+    toolCall: false,
+    structuredOutput: undefined,
+    temperature: undefined,
+    attachment: false,
+    interleaved: undefined,
+    limits: { context: 128000 },
+    modalities: { input: ["text"], output: ["text"] },
+    status: undefined,
+    price: { inputMinorPerMillion: 300, outputMinorPerMillion: 600 },
+    marginBps: 0,
+    currency: "USD",
+    active: true,
+    metadata: { tier: "gold", internal: "secret-ish" },
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    ...over,
+  };
+}
+
+test("toModelCapability: omits metadata from management model DTO", () => {
+  const out = toModelCapability(modelDoc());
+  expect("metadata" in out).toBe(false);
+  expect(out.aliasId).toBe("my-gpt");
+  expect(out.displayName).toBe("My GPT");
+  expect(out.active).toBe(true);
 });

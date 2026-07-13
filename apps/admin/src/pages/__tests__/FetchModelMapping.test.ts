@@ -24,6 +24,9 @@ function baseForm(over: Partial<FormState> = {}): FormState {
     marginBps: "0",
     firstProviderId: "p1",
     firstUpstreamModelId: "",
+    metadataRows: [],
+    metadataSourceMalformed: false,
+    metadataCorruptReason: null,
     ...over,
   } as FormState;
 }
@@ -107,4 +110,14 @@ test("formFromFetched: empty modalities fall back to base", () => {
   const f = formFromFetched(m, baseForm({ inputModalities: "text", outputModalities: "text, audio" }));
   expect(f.inputModalities).toBe("text");
   expect(f.outputModalities).toBe("text, audio");
+});
+
+test("formFromFetched: preserves metadata rows already entered in form", () => {
+  const rows = [
+    { id: "r1", key: "tier", value: "gold" },
+    { id: "r2", key: "label", value: "smart" },
+  ];
+  const f = formFromFetched(mkModel(), baseForm({ metadataRows: rows }));
+  expect(f.metadataRows).toEqual(rows);
+  expect(f.aliasId).toBe("openai-gpt-5");
 });

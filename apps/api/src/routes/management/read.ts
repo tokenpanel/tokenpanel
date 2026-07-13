@@ -67,7 +67,8 @@ function parseObjectIdParam(id: string): ObjectId | null {
 // Models
 // ---------------------------------------------------------------------------
 
-function toModelCapability(m: ModelDoc) {
+/** Public management model DTO — deliberately omits metadata (not a public API extension). */
+export function toModelCapability(m: ModelDoc) {
   return {
     aliasId: m.aliasId,
     displayName: m.displayName,

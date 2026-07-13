@@ -100,9 +100,175 @@ interface Model {
   marginBps: number;
   currency: string;
   active: boolean;
+  /** String key/value configuration; may be legacy non-string until post-migration. */
   metadata: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
+}
+
+/** Client-only metadata editor row (stable id for React keys / incomplete rows). */
+export interface MetadataRow {
+  id: string;
+  key: string;
+  value: string;
+}
+
+const METADATA_MAX_ENTRIES = 50;
+const METADATA_KEY_MAX_LEN = 80;
+const METADATA_VALUE_MAX_LEN = 2000;
+const METADATA_RESERVED_KEYS = new Set(["__proto__", "prototype", "constructor"]);
+
+let metadataRowSeq = 0;
+export function newMetadataRowId(): string {
+  metadataRowSeq += 1;
+  return `meta-${metadataRowSeq}-${Math.random().toString(36).slice(2, 9)}`;
+}
+
+/** Deterministic string coercion for defensive rehydrate during deploy window. */
+export function coerceMetadataValue(v: unknown): string {
+  if (typeof v === "string") return v;
+  if (typeof v === "number" || typeof v === "boolean" || v === null) return String(v);
+  if (Array.isArray(v)) {
+    try {
+      return JSON.stringify(v);
+    } catch {
+      return String(v);
+    }
+  }
+  if (v !== null && typeof v === "object") {
+    try {
+      return JSON.stringify(v);
+    } catch {
+      return String(v);
+    }
+  }
+  return String(v);
+}
+
+/**
+ * Map saved/fetched metadata object → editor rows.
+ * Missing / undefined → empty ok rows.
+ * Malformed (null, array, non-object) → corrupt flag so save will not
+ * accidentally replace the stored map with {}.
+ */
+export function metadataToRows(
+  metadata: Record<string, unknown> | null | undefined,
+): { rows: MetadataRow[]; corrupt: boolean; corruptReason?: string } {
+  if (metadata === undefined) {
+    return { rows: [], corrupt: false };
+  }
+  if (metadata === null) {
+    return {
+      rows: [],
+      corrupt: true,
+      corruptReason: "Stored metadata is null (expected an object).",
+    };
+  }
+  if (typeof metadata !== "object" || Array.isArray(metadata)) {
+    return {
+      rows: [],
+      corrupt: true,
+      corruptReason: Array.isArray(metadata)
+        ? "Stored metadata is an array (expected an object)."
+        : `Stored metadata has unexpected type ${typeof metadata}.`,
+    };
+  }
+  const rows = Object.entries(metadata).map(([key, value]) => ({
+    id: newMetadataRowId(),
+    key,
+    value: coerceMetadataValue(value),
+  }));
+  return { rows, corrupt: false };
+}
+
+export function isValidMetadataKey(key: string): boolean {
+  if (key.length < 1 || key.length > METADATA_KEY_MAX_LEN) return false;
+  if (key.includes("\0")) return false;
+  if (/[\r\n]/.test(key)) return false;
+  if (key.startsWith("$")) return false;
+  if (METADATA_RESERVED_KEYS.has(key)) return false;
+  return true;
+}
+
+export interface MetadataFieldErrors {
+  key?: string;
+  value?: string;
+}
+
+/** Per-field validation messages for a metadata row (for inline a11y errors). */
+export function metadataRowFieldErrors(
+  row: MetadataRow,
+  allRows: MetadataRow[],
+): MetadataFieldErrors {
+  const keyTrimmed = row.key.trim();
+  const blankKey = keyTrimmed === "";
+  const blankValue = row.value === "";
+  if (blankKey && blankValue) return {};
+
+  const errors: MetadataFieldErrors = {};
+  if (blankKey) {
+    errors.key = "Name is required when a value is set.";
+  } else if (/[\r\n]/.test(keyTrimmed)) {
+    errors.key = "Name cannot contain line breaks.";
+  } else if (!isValidMetadataKey(keyTrimmed)) {
+    errors.key =
+      "Name must be 1–80 characters, no leading $, and not a reserved name.";
+  } else {
+    const dup = allRows.some(
+      (r) => r.id !== row.id && r.key.trim() === keyTrimmed && keyTrimmed !== "",
+    );
+    if (dup) errors.key = `Duplicate name: ${keyTrimmed}`;
+  }
+  // Length is checked after CR/CRLF → LF so UI matches the API write contract
+  // (e.g. "\r\n".repeat(1001) is 1001 chars after normalize, not 2002).
+  const normalizedLen = normalizeMetadataValueNewlines(row.value).length;
+  if (normalizedLen > METADATA_VALUE_MAX_LEN) {
+    errors.value = `Value must be at most ${METADATA_VALUE_MAX_LEN} characters.`;
+  }
+  return errors;
+}
+
+/**
+ * Contract-wide newline normalization matching `<textarea>` (CR/CRLF → LF).
+ */
+export function normalizeMetadataValueNewlines(value: string): string {
+  return value.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+}
+
+/**
+ * Convert UI rows to a metadata object for create/update.
+ * Fully blank rows (empty key and value) are omitted; any row with content
+ * requires a name. Keys are trimmed; values use LF-normalized newlines.
+ */
+export function rowsToMetadata(
+  rows: MetadataRow[],
+): { ok: true; metadata: Record<string, string> } | { ok: false; error: string } {
+  const metadata: Record<string, string> = {};
+  const seen = new Set<string>();
+
+  for (const row of rows) {
+    const fieldErrs = metadataRowFieldErrors(row, rows);
+    if (fieldErrs.key) return { ok: false, error: fieldErrs.key };
+    if (fieldErrs.value) return { ok: false, error: fieldErrs.value };
+
+    const keyTrimmed = row.key.trim();
+    const blankKey = keyTrimmed === "";
+    const blankValue = row.value === "";
+    if (blankKey && blankValue) continue;
+
+    seen.add(keyTrimmed);
+    // Match browser textarea + API write contract (CR/CRLF → LF).
+    metadata[keyTrimmed] = normalizeMetadataValueNewlines(row.value);
+  }
+
+  if (Object.keys(metadata).length > METADATA_MAX_ENTRIES) {
+    return {
+      ok: false,
+      error: `At most ${METADATA_MAX_ENTRIES} metadata pairs allowed.`,
+    };
+  }
+
+  return { ok: true, metadata };
 }
 
 interface Provider {
@@ -189,6 +355,15 @@ export interface FormState {
   marginBps: string;
   firstProviderId: string;
   firstUpstreamModelId: string;
+  /** Metadata editor rows (client-only ids; may be incomplete before save). */
+  metadataRows: MetadataRow[];
+  /**
+   * True when loaded metadata was malformed (null/array/non-object). While set,
+   * save omits `metadata` so an unrelated edit cannot overwrite stored data with {}.
+   * Cleared when the user edits metadata (add/clear/change rows).
+   */
+  metadataSourceMalformed: boolean;
+  metadataCorruptReason: string | null;
 }
 
 function emptyForm(): FormState {
@@ -213,10 +388,14 @@ function emptyForm(): FormState {
     marginBps: "0",
     firstProviderId: "",
     firstUpstreamModelId: "",
+    metadataRows: [],
+    metadataSourceMalformed: false,
+    metadataCorruptReason: null,
   };
 }
 
-function formFromModel(m: Model): FormState {
+export function formFromModel(m: Model): FormState {
+  const mapped = metadataToRows(m.metadata);
   return {
     aliasId: m.aliasId,
     displayName: m.displayName,
@@ -238,6 +417,9 @@ function formFromModel(m: Model): FormState {
     marginBps: String(m.marginBps),
     firstProviderId: "",
     firstUpstreamModelId: "",
+    metadataRows: mapped.rows,
+    metadataSourceMalformed: mapped.corrupt,
+    metadataCorruptReason: mapped.corruptReason ?? null,
   };
 }
 
@@ -250,10 +432,11 @@ export function slugifyModelId(id: string): string {
 
 /**
  * Map a fetched catalog model onto the Add Model form state. Preserves fields
- * the catalog doesn't know about (currency, marginBps, firstProviderId) so the
- * admin's existing choices aren't clobbered. The fetched upstreamModelId is
- * dropped into the primary-entry upstream field as a convenience; the admin
- * still picks which of their configured providers serves it.
+ * the catalog doesn't know about (currency, marginBps, firstProviderId,
+ * metadataRows) so the admin's existing choices aren't clobbered. The fetched
+ * upstreamModelId is dropped into the primary-entry upstream field as a
+ * convenience; the admin still picks which of their configured providers
+ * serves it.
  */
 export function formFromFetched(m: FetchedModel, base: FormState): FormState {
   return {
@@ -274,6 +457,7 @@ export function formFromFetched(m: FetchedModel, base: FormState): FormState {
     inputMinor: m.cost ? String(m.cost.inputMinorPerMillion) : base.inputMinor,
     outputMinor: m.cost ? String(m.cost.outputMinorPerMillion) : base.outputMinor,
     firstUpstreamModelId: m.upstreamModelId,
+    // metadataRows preserved via ...base
   };
 }
 
@@ -337,6 +521,25 @@ export function buildModelPayload(f: FormState, isCreate: boolean):
     marginBps,
     currency,
   };
+
+  // Malformed stored metadata: omit so PATCH preserves the server map until
+  // the user explicitly edits/clears metadata (clears metadataSourceMalformed).
+  if (f.metadataSourceMalformed) {
+    // create still needs a valid default; cannot create with corrupt source.
+    if (isCreate) {
+      return {
+        ok: false,
+        error:
+          f.metadataCorruptReason ??
+          "Metadata is malformed and must be cleared before create.",
+      };
+    }
+  } else {
+    const meta = rowsToMetadata(f.metadataRows);
+    if (!meta.ok) return { ok: false, error: meta.error };
+    // Always send metadata so removing the final row persists as {}.
+    payload.metadata = meta.metadata;
+  }
 
   if (isCreate) {
     const providerId = f.firstProviderId.trim();
@@ -773,6 +976,8 @@ function ModelEditor({
           </>
         ) : null}
 
+        <MetadataSection form={form} setForm={setForm} saving={saving} />
+
         {formError ? (
           <Alert variant="destructive">
             <AlertDescription>{formError}</AlertDescription>
@@ -803,6 +1008,197 @@ function SectionTitle({ children }: { children: React.ReactNode }): React.ReactE
     <div className="border-b border-border pb-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
       {children}
     </div>
+  );
+}
+
+function MetadataSection({
+  form,
+  setForm,
+  saving,
+}: {
+  form: FormState;
+  setForm: React.Dispatch<React.SetStateAction<FormState>>;
+  saving: boolean;
+}): React.ReactElement {
+  const rows = form.metadataRows;
+  const atMax = rows.length >= METADATA_MAX_ENTRIES;
+  const corrupt = form.metadataSourceMalformed;
+
+  /** Any metadata mutation means the user is intentionally setting the map. */
+  const touchMetadata = (
+    updater: (prev: FormState) => Pick<FormState, "metadataRows">,
+  ) => {
+    setForm((prev) => ({
+      ...prev,
+      ...updater(prev),
+      metadataSourceMalformed: false,
+      metadataCorruptReason: null,
+    }));
+  };
+
+  const addRow = () => {
+    if (atMax || saving) return;
+    touchMetadata((prev) => ({
+      metadataRows: [
+        ...prev.metadataRows,
+        { id: newMetadataRowId(), key: "", value: "" },
+      ],
+    }));
+  };
+
+  const clearAll = () => {
+    if (saving) return;
+    touchMetadata(() => ({ metadataRows: [] }));
+  };
+
+  const removeRow = (id: string) => {
+    if (saving) return;
+    touchMetadata((prev) => ({
+      metadataRows: prev.metadataRows.filter((r) => r.id !== id),
+    }));
+  };
+
+  const updateRow = (id: string, field: "key" | "value", value: string) => {
+    touchMetadata((prev) => ({
+      metadataRows: prev.metadataRows.map((r) =>
+        r.id === id ? { ...r, [field]: value } : r,
+      ),
+    }));
+  };
+
+  return (
+    <>
+      <SectionTitle>Metadata</SectionTitle>
+      <div className="flex flex-col gap-3">
+        <p className="text-sm text-muted-foreground">
+          Custom string properties for this model (for example cost tier or
+          intelligence label). Metadata is plain configuration, visible to
+          organization members — do not store secrets, API keys, or passwords.
+          Names are single-line; values may include line breaks.
+        </p>
+        {corrupt ? (
+          <Alert variant="destructive">
+            <AlertDescription>
+              {form.metadataCorruptReason ??
+                "Stored metadata is malformed and cannot be edited safely."}{" "}
+              Saving other fields will not change metadata. Use Clear all or Add
+              metadata, then Save, to replace it.
+            </AlertDescription>
+          </Alert>
+        ) : null}
+        <div className="flex flex-wrap gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={addRow}
+            disabled={saving || atMax}
+            aria-label="Add metadata row"
+          >
+            <Plus className="size-4" />
+            Add metadata
+          </Button>
+          {rows.length > 0 || corrupt ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={clearAll}
+              disabled={saving}
+              aria-label="Clear all metadata"
+            >
+              Clear all
+            </Button>
+          ) : null}
+        </div>
+        {rows.length === 0 ? (
+          <p className="text-xs text-muted-foreground">
+            {corrupt ? "No editable rows (source malformed)." : "No metadata pairs yet."}
+          </p>
+        ) : (
+          <div className="flex flex-col gap-3">
+            {rows.map((row, index) => {
+              const fieldErrs = metadataRowFieldErrors(row, rows);
+              const keyErrorId = `m-meta-key-err-${row.id}`;
+              const valErrorId = `m-meta-val-err-${row.id}`;
+              return (
+                <div
+                  key={row.id}
+                  className="grid grid-cols-1 items-start gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)_auto]"
+                >
+                  <div className="flex flex-col gap-1">
+                    <Label htmlFor={`m-meta-key-${row.id}`} className="sr-only">
+                      Metadata name {index + 1}
+                    </Label>
+                    <Input
+                      id={`m-meta-key-${row.id}`}
+                      type="text"
+                      value={row.key}
+                      placeholder="Name"
+                      maxLength={METADATA_KEY_MAX_LEN + 8}
+                      onChange={(e) => updateRow(row.id, "key", e.target.value)}
+                      disabled={saving}
+                      aria-label={`Metadata name ${index + 1}`}
+                      aria-invalid={fieldErrs.key ? true : undefined}
+                      aria-describedby={fieldErrs.key ? keyErrorId : undefined}
+                      className={cn(fieldErrs.key && "border-destructive")}
+                    />
+                    {fieldErrs.key ? (
+                      <p id={keyErrorId} className="text-xs text-destructive" role="alert">
+                        {fieldErrs.key}
+                      </p>
+                    ) : null}
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    <Label htmlFor={`m-meta-val-${row.id}`} className="sr-only">
+                      Metadata value {index + 1}
+                    </Label>
+                    <Textarea
+                      id={`m-meta-val-${row.id}`}
+                      rows={2}
+                      value={row.value}
+                      placeholder="Value"
+                      // No maxLength: browser counts raw CR/LF; limit is enforced
+                      // on the normalized (LF) length in metadataRowFieldErrors.
+                      onChange={(e) => updateRow(row.id, "value", e.target.value)}
+                      disabled={saving}
+                      aria-label={`Metadata value ${index + 1}`}
+                      aria-invalid={fieldErrs.value ? true : undefined}
+                      aria-describedby={fieldErrs.value ? valErrorId : undefined}
+                      className={cn(
+                        "min-h-[2.5rem] resize-y",
+                        fieldErrs.value && "border-destructive",
+                      )}
+                    />
+                    {fieldErrs.value ? (
+                      <p id={valErrorId} className="text-xs text-destructive" role="alert">
+                        {fieldErrs.value}
+                      </p>
+                    ) : null}
+                  </div>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-sm"
+                    className="text-destructive hover:text-destructive sm:mt-0.5"
+                    onClick={() => removeRow(row.id)}
+                    disabled={saving}
+                    aria-label={`Remove metadata row ${index + 1}`}
+                  >
+                    <Trash2 className="size-4" />
+                  </Button>
+                </div>
+              );
+            })}
+          </div>
+        )}
+        {atMax ? (
+          <p className="text-xs text-muted-foreground">
+            Maximum of {METADATA_MAX_ENTRIES} metadata pairs reached.
+          </p>
+        ) : null}
+      </div>
+    </>
   );
 }
 

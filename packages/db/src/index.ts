@@ -15,6 +15,7 @@ export {
   getMongoUri,
   getDbName,
   closeDb,
+  setGetDbForTests,
 } from "./client.ts";
 export { runMigrations, getMigrationStatus, executeMigration, validateMigrationMeta } from "./migrator/runner.ts";
 export { createMigrationDb } from "./migrator/migration-db.ts";

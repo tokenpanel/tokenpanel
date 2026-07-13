@@ -39,6 +39,12 @@ test("toOpenAIModel: maps aliasId → id, object 'model', created from createdAt
   expect(m.created).toBe(Math.floor(new Date("2026-01-01T00:00:00Z").getTime() / 1000));
 });
 
+test("toOpenAIModel: omits model metadata (not exposed on /v1/models)", () => {
+  const m = toOpenAIModel(model({ metadata: { tier: "gold", secret: "nope" } }));
+  expect("metadata" in m).toBe(false);
+  expect(Object.keys(m).sort()).toEqual(["created", "id", "object", "owned_by"]);
+});
+
 test("translateMessage: string content passthrough", () => {
   const m = translateMessage({ role: "user", content: "hello" });
   expect(m.role).toBe("user");

@@ -17,6 +17,10 @@ import {
   requireManagementScope,
 } from "../../middleware/management-auth.ts";
 import { isDuplicateKeyError } from "../../lib/crypto.ts";
+import { parseObjectIdParam } from "../route-utils.ts";
+import { addInterval } from "../../services/subscription-interval.ts";
+
+export { addInterval };
 
 type ManagementAuthVariables = PublicAuthVariables;
 
@@ -34,11 +38,6 @@ type ManagementAuthVariables = PublicAuthVariables;
  * on the parent app for /api/management/* — this router only adds scope gates.
  */
 const managementWrite = new Hono<{ Variables: ManagementAuthVariables }>();
-
-function parseObjectIdParam(id: string): ObjectId | null {
-  if (!ObjectId.isValid(id)) return null;
-  return new ObjectId(id);
-}
 
 const NOTE_MAX = 280;
 
@@ -84,7 +83,12 @@ managementWrite.post(
     const db = await getDb();
 
     const now = new Date();
-    const startingBalance = body.startingBalance ?? { amountMinor: 0, currency: "USD" };
+    const starting = body.startingBalance ?? { amountMinor: 0, currency: "USD" };
+    const startingBalance = {
+      amountMinor: starting.amountMinor,
+      currency: starting.currency,
+      reservedMinor: 0,
+    };
 
     // Non-zero opening balance is a money write. Require balances:write so
     // customers:write alone cannot mint unledgered credit.
@@ -359,26 +363,6 @@ managementWrite.post(
 const subscribeBody = z.object({
   planId: z.string().min(1).max(64),
 });
-
-export function addInterval(date: Date, interval: string, count: number): Date {
-  const d = new Date(date);
-  switch (interval) {
-    case "day":
-      d.setUTCDate(d.getUTCDate() + count);
-      return d;
-    case "week":
-      d.setUTCDate(d.getUTCDate() + count * 7);
-      return d;
-    case "month":
-      d.setUTCMonth(d.getUTCMonth() + count);
-      return d;
-    case "year":
-      d.setUTCFullYear(d.getUTCFullYear() + count);
-      return d;
-    default:
-      return d;
-  }
-}
 
 managementWrite.post(
   "/api/management/customers/:id/subscribe",

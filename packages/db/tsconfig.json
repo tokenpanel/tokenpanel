@@ -4,7 +4,11 @@
     "lib": ["ES2022"],
     "types": ["bun"],
     "declaration": true,
-    "declarationMap": true
+    "declarationMap": true,
+    "paths": {
+      "@tokenpanel/contracts": ["../contracts/src/index.ts"],
+      "@tokenpanel/contracts/*": ["../contracts/src/*"]
+    }
   },
   "include": ["src"],
   "exclude": ["dist", "node_modules"]

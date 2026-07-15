@@ -5,7 +5,9 @@ import {
   objectIdFromString,
   currencyCode,
   moneyMinor,
+  tokenCount,
   money,
+  customerBalance,
   tokenPriceSchedule,
   tokenLimits,
   modalitySchema,
@@ -58,11 +60,33 @@ test("moneyMinor accepts non-negative ints, rejects negatives/floats/NaN", () =>
   expect(moneyMinor.safeParse("100").success).toBe(false);
 });
 
+test("tokenCount accepts safe non-negative ints, rejects unsafe/overflow values", () => {
+  expect(tokenCount.safeParse(0).success).toBe(true);
+  expect(tokenCount.safeParse(Number.MAX_SAFE_INTEGER).success).toBe(true);
+  expect(tokenCount.safeParse(-1).success).toBe(false);
+  expect(tokenCount.safeParse(1.5).success).toBe(false);
+  expect(tokenCount.safeParse(Infinity).success).toBe(false);
+  // Beyond MAX_SAFE_INTEGER is not a safe integer representable distinctly.
+  expect(tokenCount.safeParse(Number.MAX_SAFE_INTEGER + 1).success).toBe(false);
+});
+
 test("money object requires amountMinor + currency", () => {
   expect(money.safeParse({ amountMinor: 100, currency: "USD" }).success).toBe(true);
   expect(money.safeParse({ amountMinor: 100 }).success).toBe(false);
   expect(money.safeParse({ amountMinor: -1, currency: "USD" }).success).toBe(false);
   expect(money.safeParse({ amountMinor: 100, currency: "us" }).success).toBe(false);
+});
+
+test("customerBalance defaults reservedMinor to 0", () => {
+  const r = customerBalance.parse({ amountMinor: 100, currency: "USD" });
+  expect(r.reservedMinor).toBe(0);
+  expect(
+    customerBalance.safeParse({
+      amountMinor: 100,
+      reservedMinor: 25,
+      currency: "USD",
+    }).success,
+  ).toBe(true);
 });
 
 test("tokenPriceSchedule requires input+output, optional rest", () => {

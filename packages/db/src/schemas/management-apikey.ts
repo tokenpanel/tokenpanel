@@ -1,26 +1,21 @@
 import { z } from "zod";
+import {
+  managementScopeSchema,
+  MANAGEMENT_SCOPES as CONTRACT_MANAGEMENT_SCOPES,
+  type ManagementScope,
+} from "@tokenpanel/contracts";
 import { objectId, timestampFields } from "./common.ts";
 
 /**
- * Fine-grained scopes for management API keys. Each scope gates one category
- * of management operation. The set is intentionally small and coarse — adding
- * a new capability means appending to this tuple (and to the docs), never
- * loosening an existing scope.
+ * Fine-grained scopes for management API keys.
+ * Live values/descriptors: @tokenpanel/contracts (MANAGEMENT_SCOPE_DEFINITIONS).
+ * Adding a capability means appending there, never loosening an existing scope.
  */
-export const managementScope = z.enum([
-  "models:read",
-  "customers:read",
-  "customers:write",
-  "balances:read",
-  "balances:write",
-  "usage:read",
-  "plans:read",
-  "subscriptions:write",
-  "chat:write",
-]);
-export type ManagementScope = z.infer<typeof managementScope>;
+export const managementScope = managementScopeSchema;
+export type { ManagementScope };
 
-export const MANAGEMENT_SCOPES: readonly ManagementScope[] = managementScope.options;
+export const MANAGEMENT_SCOPES: readonly ManagementScope[] =
+  CONTRACT_MANAGEMENT_SCOPES;
 
 /**
  * Org-scoped management API key (`tp_mgmt_` prefix). Bound to an organization

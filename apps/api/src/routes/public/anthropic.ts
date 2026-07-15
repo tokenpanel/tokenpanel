@@ -1,18 +1,22 @@
 import { Hono } from "hono";
 import { z } from "zod";
-import { ObjectId } from "mongodb";
-import { getDb, type ModelDoc, type ModelEntryDoc } from "@tokenpanel/db";
+import type { ObjectId } from "mongodb";
+import type { ModelDoc, ModelEntryDoc, ProviderDoc } from "@tokenpanel/db";
 import type { PublicAuthVariables } from "../../middleware/public-auth.ts";
 import {
   preFlight,
   callWithFallback,
   streamWithFallback,
+  cacheAccountingForProtocol,
   computeCharges,
-  settleUsage,
+  settleUsageOrOutbox,
   estimatePromptTokens,
   resolveModel,
+  releasePreFlightReservation,
   BillingError,
+  type BalanceReservation,
 } from "../../lib/billing.ts";
+import { normalizeProcessedTotalTokens } from "../../providers/provider-usage.ts";
 import {
   resolveChatContext,
   actorForChatContext,
@@ -23,6 +27,7 @@ import {
 } from "../../lib/v1-chat-context.ts";
 import { getEffectiveRules } from "../../lib/rate-limits.ts";
 import type { ChatRequest, ChatMessage } from "../../providers/index.ts";
+import { newGatewayRequestId } from "../../services/settlement-outbox.ts";
 
 const publicAnthropic = new Hono<{ Variables: PublicAuthVariables }>();
 // Auth is mounted once on the parent app for /v1/* (index.ts) so openai +
@@ -96,11 +101,15 @@ async function resolveModelAndRules(params: {
   aliasId: string;
   estimatedPromptTokens: number;
   maxCompletionTokens?: number;
-}): Promise<{ model: ModelDoc; rules: Awaited<ReturnType<typeof getEffectiveRules>> }> {
+}): Promise<{
+  model: ModelDoc;
+  rules: Awaited<ReturnType<typeof getEffectiveRules>>;
+  reservation: BalanceReservation | null;
+}> {
   const customerId = billableCustomerId(params.ctx);
   if (customerId === null) {
     const model = await resolveModel(params.orgId, params.aliasId);
-    return { model, rules: [] };
+    return { model, rules: [], reservation: null };
   }
   return preFlight({
     orgId: params.orgId,
@@ -165,7 +174,11 @@ publicAnthropic.post("/v1/messages", async (c) => {
     stop: body.stop_sequences,
   };
 
-  let preflightResult: { model: ModelDoc; rules: Awaited<ReturnType<typeof getEffectiveRules>> };
+  let preflightResult: {
+    model: ModelDoc;
+    rules: Awaited<ReturnType<typeof getEffectiveRules>>;
+    reservation: BalanceReservation | null;
+  };
   try {
     preflightResult = await resolveModelAndRules({
       orgId,
@@ -185,9 +198,12 @@ publicAnthropic.post("/v1/messages", async (c) => {
     throw err;
   }
 
-  const { model, rules } = preflightResult;
+  const { model, rules, reservation } = preflightResult;
+  const reservedMinor = reservation?.reservedMinor ?? 0;
   const actor = actorForChatContext(ctx);
   const start = Date.now();
+  // One stable id for this gateway request — shared by settle + outbox retries.
+  const gatewayRequestId = newGatewayRequestId();
 
   if (!stream) {
     try {
@@ -195,28 +211,25 @@ publicAnthropic.post("/v1/messages", async (c) => {
       const durationMs = Date.now() - start;
       const charges = computeCharges({ entry: outcome.entry, model, usage: outcome.response.usage });
       const priceMinor = ctx.kind === "management_internal" ? 0 : charges.priceMinor;
-      try {
-        await settleUsage({
-          orgId,
-          actor,
-          model,
-          entry: outcome.entry,
-          provider: outcome.provider,
-          protocol: "anthropic",
-          usage: outcome.response.usage,
-          costMinor: charges.costMinor,
-          priceMinor,
-          currency: charges.currency,
-          providerRequestId: outcome.response.providerRequestId,
-          status: 200,
-          durationMs,
-          rules,
-        });
-      } catch (settleErr) {
-        // The upstream call already succeeded; a settlement failure must not
-        // turn a 200 into a 502. Log so it can be reconciled (dxe).
-        console.error("[messages] settlement failed (non-stream):", settleErr);
-      }
+      // Enqueue failures must not be swallowed — they surface as 502 so the
+      // request is not treated as free completed work.
+      await settleUsageOrOutbox({
+        orgId,
+        actor,
+        model,
+        entry: outcome.entry,
+        provider: outcome.provider,
+        protocol: "anthropic",
+        response: outcome.response,
+        providerRequestId: outcome.response.providerRequestId,
+        gatewayRequestId,
+        status: 200,
+        durationMs,
+        rules,
+        priceMinorOverride: priceMinor,
+        occurredAt: new Date(start),
+        reservedMinor,
+      });
 
       const r = outcome.response;
       const choice = r.choices[0];
@@ -251,6 +264,7 @@ publicAnthropic.post("/v1/messages", async (c) => {
         },
       });
     } catch (err) {
+      await releasePreFlightReservation(reservation);
       if (err instanceof BillingError) {
         return c.json(anthropicError(err.code === "rate_limited" ? "rate_limit_error" : err.code === "insufficient_balance" ? "billing_error" : "invalid_request_error", err.message, err.extra), err.status as 400 | 402 | 403 | 404 | 429 | 502);
       }
@@ -269,10 +283,19 @@ publicAnthropic.post("/v1/messages", async (c) => {
   let reasoningTokens = 0;
   let cacheReadTokens = 0;
   let cacheWriteTokens = 0;
+  /** Provider-reported total from chunk.usage (may exceed prompt+completion). */
+  let reportedTotalTokens: number | undefined;
+  let cacheAccounting = cacheAccountingForProtocol("anthropic");
   let stopReason = "end_turn";
   let activeEntry: ModelEntryDoc | null = null;
-  let activeProviderId: ObjectId | null = null;
+  // Retain the yielded ProviderDoc (do not re-fetch — concurrent delete would
+  // silently skip settlement/outbox).
+  let activeProvider: ProviderDoc | null = null;
   let blockStarted = false;
+  /** Only true when adapter observed message_stop (not truncated EOF). */
+  let streamComplete = false;
+  /** Exactly one terminal error event per stream (yielded, truncation, or catch). */
+  let terminalErrorEmitted = false;
 
   const encoder = new TextEncoder();
   const streamGen = streamWithFallback({ orgId, model, request });
@@ -281,6 +304,17 @@ publicAnthropic.post("/v1/messages", async (c) => {
     async start(controller) {
       const enqueue = (event: string, obj: unknown) => {
         controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(obj)}\n\n`));
+      };
+      const closeOpenBlock = () => {
+        if (!blockStarted) return;
+        enqueue("content_block_stop", { type: "content_block_stop", index: 0 });
+        blockStarted = false;
+      };
+      const enqueueTerminalError = (type: string, message: string) => {
+        if (terminalErrorEmitted) return;
+        terminalErrorEmitted = true;
+        closeOpenBlock();
+        enqueue("error", { type: "error", error: { type, message } });
       };
       try {
         enqueue("message_start", {
@@ -305,7 +339,7 @@ publicAnthropic.post("/v1/messages", async (c) => {
 
         for await (const { entry, provider, chunk } of streamGen) {
           activeEntry = entry;
-          activeProviderId = provider._id;
+          activeProvider = provider;
           if (chunk.type === "delta") {
             if (chunk.delta?.content !== undefined) {
               enqueue("content_block_delta", {
@@ -322,63 +356,120 @@ publicAnthropic.post("/v1/messages", async (c) => {
               });
             }
           } else if (chunk.type === "done") {
+            if (chunk.streamComplete) streamComplete = true;
             if (chunk.finishReason) stopReason = chunk.finishReason;
-            if (chunk.usage) {
+            if (chunk.streamComplete && chunk.usage) {
               promptTokens = chunk.usage.promptTokens;
               completionTokens = chunk.usage.completionTokens;
               reasoningTokens = chunk.usage.reasoningTokens ?? 0;
               cacheReadTokens = chunk.usage.cacheReadTokens ?? 0;
               cacheWriteTokens = chunk.usage.cacheWriteTokens ?? 0;
+              // Retain provider total for the normalizer (do not drop totalTokens).
+              reportedTotalTokens =
+                typeof chunk.usage.totalTokens === "number"
+                  ? chunk.usage.totalTokens
+                  : undefined;
+              if (
+                chunk.usage.cacheAccounting === "subset" ||
+                chunk.usage.cacheAccounting === "additive"
+              ) {
+                cacheAccounting = chunk.usage.cacheAccounting;
+              }
             }
           } else if (chunk.type === "error") {
-            enqueue("error", { type: "error", error: { type: "upstream_error", message: chunk.error?.message ?? "stream error" } });
+            enqueueTerminalError(
+              "upstream_error",
+              chunk.error?.message ?? "stream error",
+            );
           }
         }
 
-        if (blockStarted) {
-          enqueue("content_block_stop", { type: "content_block_stop", index: 0 });
+        if (!streamComplete) {
+          // Truncated / failed stream: one error only (skip if already emitted).
+          // Never stop_reason "error" + message_stop.
+          enqueueTerminalError(
+            "stream_truncated",
+            "Upstream stream ended without message_stop; response may be incomplete",
+          );
+        } else {
+          closeOpenBlock();
+          enqueue("message_delta", {
+            type: "message_delta",
+            delta: { stop_reason: stopReason, stop_sequence: null },
+            usage: { output_tokens: completionTokens },
+          });
+          enqueue("message_stop", { type: "message_stop" });
         }
-        enqueue("message_delta", {
-          type: "message_delta",
-          delta: { stop_reason: stopReason, stop_sequence: null },
-          usage: { output_tokens: completionTokens },
-        });
-        enqueue("message_stop", { type: "message_stop" });
       } catch (err) {
-        enqueue("error", { type: "error", error: { type: "upstream_error", message: err instanceof Error ? err.message : "stream failed" } });
+        // Error path: no message_stop / success-style terminal. One error only.
+        enqueueTerminalError(
+          "upstream_error",
+          err instanceof Error ? err.message : "stream failed",
+        );
       } finally {
         controller.close();
         const durationMs = Date.now() - start;
-        const totalTokens = promptTokens + completionTokens;
-        const usage = { promptTokens, completionTokens, reasoningTokens, cacheReadTokens, cacheWriteTokens, totalTokens };
-        if (activeEntry && activeProviderId && (promptTokens > 0 || completionTokens > 0)) {
-          // Stream-safe settlement: the client has already received message_stop,
-          // so a settlement failure cannot be surfaced to it. Wrap + log so
-          // failures are reliable to reconcile instead of silently lost (dxe).
+        const normalizedTotal = normalizeProcessedTotalTokens({
+          promptTokens,
+          completionTokens,
+          cacheReadTokens,
+          cacheWriteTokens,
+          totalTokens: reportedTotalTokens,
+          cacheAccounting,
+        });
+        const usage = {
+          promptTokens,
+          completionTokens,
+          reasoningTokens,
+          cacheReadTokens,
+          cacheWriteTokens,
+          totalTokens: normalizedTotal ?? 0,
+          cacheAccounting,
+        };
+        if (activeEntry && activeProvider) {
           try {
-            const db = await getDb();
-            const providerDoc = await db.providers.findOne({ _id: activeProviderId });
-            if (providerDoc) {
-              const charges = computeCharges({ entry: activeEntry, model, usage });
-              const priceMinor = ctx.kind === "management_internal" ? 0 : charges.priceMinor;
-              await settleUsage({
-                orgId,
-                actor,
-                model,
-                entry: activeEntry,
-                provider: providerDoc,
-                protocol: "anthropic",
-                usage,
-                costMinor: charges.costMinor,
-                priceMinor,
-                currency: charges.currency,
-                status: 200,
-                durationMs,
-                rules,
-              });
-            }
+            const charges = computeCharges({
+              entry: activeEntry,
+              model,
+              usage,
+              cacheAccounting,
+            });
+            const priceMinor =
+              ctx.kind === "management_internal" ? 0 : charges.priceMinor;
+            // Truncated streams / overflow must not settle partial usage as reported.
+            const hasAuthoritativeUsage =
+              streamComplete &&
+              normalizedTotal !== null &&
+              (promptTokens > 0 || completionTokens > 0);
+            await settleUsageOrOutbox({
+              orgId,
+              actor,
+              model,
+              entry: activeEntry,
+              provider: activeProvider,
+              protocol: "anthropic",
+              gatewayRequestId,
+              providerUsage: hasAuthoritativeUsage
+                ? { status: "reported", usage }
+                : {
+                    status: "missing",
+                    reason: !streamComplete
+                      ? "stream_truncated"
+                      : normalizedTotal === null
+                        ? "usage_overflow"
+                        : "stream_usage_absent",
+                  },
+              status: 200,
+              durationMs,
+              rules,
+              priceMinorOverride: priceMinor,
+              occurredAt: new Date(start),
+              reservedMinor,
+            });
           } catch (settleErr) {
-            console.error("[messages] settlement failed (stream):", settleErr);
+            // Stream already committed to client; outbox enqueue must still
+            // surface in logs (settleUsageOrOutbox does not swallow enqueue fails).
+            console.error("[messages] stream settlement/outbox failed:", settleErr);
           }
         }
       }

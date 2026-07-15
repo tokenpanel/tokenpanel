@@ -36,6 +36,15 @@ test("usageRecordDoc requires non-negative token counts + status range + protoco
   expect(usageRecordDoc.safeParse({ ...b, status: 600 }).success).toBe(false);
   expect(usageRecordDoc.safeParse({ ...b, protocol: "gemini" }).success).toBe(false);
   expect(usageRecordDoc.safeParse({ ...b, costMinor: -1 }).success).toBe(false);
+  // Safe-integer bound: reject values that would poison counters/sums.
+  expect(
+    usageRecordDoc.safeParse({ ...b, promptTokens: Number.MAX_SAFE_INTEGER + 1 })
+      .success,
+  ).toBe(false);
+  expect(
+    usageRecordDoc.safeParse({ ...b, totalTokens: Number.MAX_SAFE_INTEGER })
+      .success,
+  ).toBe(true);
 });
 
 test("usageRecordDoc defaults reasoning/cache tokens 0, billed true, durationMs 0", () => {

@@ -23,6 +23,7 @@ apps/
   api/        @tokenpanel/api     Hono backend (Bun.serve)
   admin/      @tokenpanel/admin   Vite + React admin panel
 packages/
+  contracts/  @tokenpanel/contracts  Browser-safe shared product contracts (Zod)
   db/         @tokenpanel/db      MongoDB driver + zod schemas
 tsconfig.base.json                shared TS config
 turbo.json                       task pipeline (build/dev/lint/typecheck/clean)
@@ -30,12 +31,13 @@ turbo.json                       task pipeline (build/dev/lint/typecheck/clean)
 
 ### Conventions
 
-- Workspace package names are scoped: `@tokenpanel/{api,admin,db}`.
-- Cross-package imports use `workspace:*` in `package.json` and path aliases in `tsconfig.json` (`@tokenpanel/db`).
-- DB schemas live in `packages/db/src/schemas/*.ts`. Each domain exports `…Doc` (stored shape, with `_id`, `createdAt`, `updatedAt`) and `…CreateInput` (input shape, ObjectId as string → coerced). Use `getDb()` to get a `TypedDb` whose collections are already typed; never call `db.collection("string")` directly outside `packages/db`.
+- Workspace package names are scoped: `@tokenpanel/{api,admin,db,contracts}`.
+- Cross-package imports use `workspace:*` in `package.json` and path aliases in `tsconfig.json` (`@tokenpanel/db`, `@tokenpanel/contracts`).
+- **`@tokenpanel/contracts`**: pure TypeScript/Zod product contracts (model modality/status/metadata policy, management scopes). No env, I/O, Node, Mongo, or UI. Admin may import it; never import `@tokenpanel/db` into admin. Migrations must not import live contracts (keep frozen snapshots).
+- DB schemas live in `packages/db/src/schemas/*.ts`. Each domain exports `…Doc` (stored shape, with `_id`, `createdAt`, `updatedAt`) and `…CreateInput` (input shape, ObjectId as string → coerced). Use `getDb()` to get a `TypedDb` whose collections are already typed; never call `db.collection("string")` directly outside `packages/db`. Call `configureDb({ uri, databaseName })` before `getDb()` from executables (API boot, migrator CLI).
 - Money is stored as integer minor units (`amountMinor`) + ISO currency code, never floats.
-- Env: Bun auto-loads `.env`; no dotenv import. Required vars: `MONGODB_URI`, `MONGODB_DB`, optional `PORT`.
-- API fail-fast: server exits if MongoDB is unreachable on boot.
+- Env: Bun auto-loads `.env`; no dotenv import. API parses once via `parseApiRuntimeConfig` (`apps/api/src/config/runtime.ts`). Required: `JWT_SECRET`, `MONGODB_URI`; optional `MONGODB_DB` (default `tokenpanel`), `PORT`, `CORS_ORIGINS`, `NODE_ENV`. See `docs/configuration.md`.
+- API fail-fast: server exits if config invalid or MongoDB is unreachable on boot.
 - **Migrations**: ordered, timestamped migration files in `packages/db/migrations/{pre,post}/`.
   Discourse-style deploy flow (manager `tokenpanel update`):
   1. **pre/** from the *new* image (old container still serving) — additive only
@@ -130,4 +132,3 @@ cp -rf source dest          # NOT: cp -r source dest
 - `ssh` - use `-o BatchMode=yes` to fail instead of prompting
 - `apt-get` - use `-y` flag
 - `brew` - use `HOMEBREW_NO_AUTO_UPDATE=1` env var
-

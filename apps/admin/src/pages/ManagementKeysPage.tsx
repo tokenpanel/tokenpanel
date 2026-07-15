@@ -28,32 +28,22 @@ import { KeyRound, Copy, Check, Plus, ShieldCheck } from "lucide-react";
 import { PageHeader } from "@/components/PageHeader";
 import { EmptyState } from "@/components/EmptyState";
 import { FadeIn } from "@/components/anim";
+import {
+  MANAGEMENT_SCOPES,
+  MANAGEMENT_SCOPES_META,
+} from "@tokenpanel/contracts";
 
-const ALL_SCOPES = [
-  "models:read",
-  "customers:read",
-  "customers:write",
-  "balances:read",
-  "balances:write",
-  "usage:read",
-  "plans:read",
-  "subscriptions:write",
-  "chat:write",
-] as const;
+const ALL_SCOPES = MANAGEMENT_SCOPES;
 
 type ScopeToggle = { scope: string; label: string; group: string; description: string };
 
-const SCOPE_META_FALLBACK: ScopeToggle[] = [
-  { scope: "models:read", label: "Read models", group: "Models", description: "List models + capabilities / pricing" },
-  { scope: "customers:read", label: "Read customers", group: "Customers", description: "Lookup by email, read details" },
-  { scope: "customers:write", label: "Write customers", group: "Customers", description: "Create / update / suspend" },
-  { scope: "balances:read", label: "Read balances", group: "Balances", description: "Balance + ledger history" },
-  { scope: "balances:write", label: "Write balances", group: "Balances", description: "Top up / adjust / refund" },
-  { scope: "usage:read", label: "Read usage", group: "Usage", description: "Per-customer usage summaries" },
-  { scope: "plans:read", label: "Read plans", group: "Plans", description: "List subscription plans" },
-  { scope: "subscriptions:write", label: "Assign subscriptions", group: "Plans", description: "Change a customer's plan" },
-  { scope: "chat:write", label: "Chat (call /v1)", group: "Chat", description: "POST /v1/chat/completions + /v1/messages" },
-];
+/** Offline fallback when the scopes meta endpoint is unavailable. */
+const SCOPE_META_FALLBACK: ScopeToggle[] = MANAGEMENT_SCOPES_META.map((m) => ({
+  scope: m.scope,
+  label: m.description,
+  group: m.group,
+  description: m.description,
+}));
 
 function scopeToggles(meta: ManagementScopeMeta[] | null): ScopeToggle[] {
   if (!meta || meta.length === 0) return SCOPE_META_FALLBACK;

@@ -1,10 +1,68 @@
+/**
+ * ISO 4217 minor-unit exponents for currencies we format.
+ * amountMinor is always integer minor units (JPY yen=1, USD cent=1, KWD fils=1).
+ *
+ * Sources: ISO 4217 + common payment-processor tables (Stripe zero-decimal list).
+ * Unknown codes default to 2 (ISO majority) — not a signal of validity.
+ */
+const ZERO_DECIMAL = new Set([
+  "BIF",
+  "CLP",
+  "DJF",
+  "GNF",
+  "ISK",
+  "JPY",
+  "KMF",
+  "KRW",
+  "PYG",
+  "RWF",
+  "UGX",
+  "UYI",
+  "VND",
+  "VUV",
+  "XAF",
+  "XOF",
+  "XPF",
+]);
+
+const THREE_DECIMAL = new Set([
+  "BHD",
+  "IQD",
+  "JOD",
+  "KWD",
+  "LYD",
+  "OMR",
+  "TND",
+]);
+
+const FOUR_DECIMAL = new Set([
+  "CLF", // Unidad de Fomento
+  "UYW", // Unidad Previsional
+]);
+
+export function currencyExponent(currency: string): number {
+  const code = currency.toUpperCase();
+  if (ZERO_DECIMAL.has(code)) return 0;
+  if (THREE_DECIMAL.has(code)) return 3;
+  if (FOUR_DECIMAL.has(code)) return 4;
+  return 2;
+}
+
+/**
+ * Format minor units as display money. Always includes the ISO currency code so
+ * dollar-symbol currencies (USD/AUD/CAD/…) are never ambiguous in multi-currency UIs.
+ */
 export function formatMoney(amountMinor: number, currency: string): string {
   const sign = amountMinor < 0 ? "-" : "";
   const abs = Math.abs(amountMinor);
-  const major = Math.floor(abs / 100);
-  const minor = abs % 100;
-  const minorStr = minor < 10 ? `0${minor}` : String(minor);
   const code = currency.toUpperCase();
+  const exp = currencyExponent(code);
+  const divisor = 10 ** exp;
+  const major = Math.floor(abs / divisor);
+  const frac = abs % divisor;
+  const fracStr =
+    exp === 0 ? "" : `.${String(frac).padStart(exp, "0")}`;
+
   switch (code) {
     case "USD":
     case "AUD":
@@ -12,17 +70,23 @@ export function formatMoney(amountMinor: number, currency: string): string {
     case "NZD":
     case "HKD":
     case "SGD":
-      return `${sign}$${major}.${minorStr}`;
+      return `${sign}$${major}${fracStr} ${code}`;
     case "EUR":
-      return `${sign}\u20ac${major}.${minorStr}`;
+      return `${sign}\u20ac${major}${fracStr} ${code}`;
     case "GBP":
-      return `${sign}\u00a3${major}.${minorStr}`;
+      return `${sign}\u00a3${major}${fracStr} ${code}`;
     case "JPY":
-      return `${sign}\u00a5${major}`;
+      return `${sign}\u00a5${major} ${code}`;
     case "INR":
-      return `${sign}\u20b9${major}.${minorStr}`;
+      return `${sign}\u20b9${major}${fracStr} ${code}`;
+    case "KRW":
+      return `${sign}\u20a9${major} ${code}`;
+    case "KWD":
+    case "BHD":
+    case "OMR":
+      return `${sign}${major}${fracStr} ${code}`;
     default:
-      return `${sign}${major}.${minorStr} ${code}`;
+      return `${sign}${major}${fracStr} ${code}`;
   }
 }
 

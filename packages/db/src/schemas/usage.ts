@@ -4,6 +4,8 @@ import {
   objectIdFromString,
   currencyCode,
   timestampFields,
+  tokenCount,
+  moneyMinor,
 } from "./common.ts";
 import { limitDimension } from "./limit.ts";
 
@@ -51,19 +53,24 @@ export const usageRecordDoc = z.object({
   /** Request shape the customer used. */
   protocol: z.enum(["openai", "anthropic"]),
   /** Tokens consumed, split by role for prompt caching analysis. */
-  promptTokens: z.number().int().nonnegative(),
-  completionTokens: z.number().int().nonnegative(),
-  reasoningTokens: z.number().int().nonnegative().default(0),
-  cacheReadTokens: z.number().int().nonnegative().default(0),
-  cacheWriteTokens: z.number().int().nonnegative().default(0),
-  totalTokens: z.number().int().nonnegative(),
+  promptTokens: tokenCount,
+  completionTokens: tokenCount,
+  reasoningTokens: tokenCount.default(0),
+  cacheReadTokens: tokenCount.default(0),
+  cacheWriteTokens: tokenCount.default(0),
+  totalTokens: tokenCount,
   /** Cost charged to the org (minor units) — what we paid upstream. */
-  costMinor: z.number().int().nonnegative(),
+  costMinor: moneyMinor,
   /** Price charged to the customer (minor units) — what we billed. */
-  priceMinor: z.number().int().nonnegative(),
+  priceMinor: moneyMinor,
   currency: currencyCode,
   /** Request id from the upstream provider for correlation. */
   providerRequestId: z.string().max(200).nullish(),
+  /**
+   * Gateway idempotency key (unique when set). Prevents double-charge when
+   * recon retries after settle commits but before outbox mark-reconciled.
+   */
+  gatewayRequestId: z.string().min(1).max(80).nullish(),
   /** Whether the customer's balance was successfully debited. */
   billed: z.boolean().default(true),
   /** Error code from upstream, if the call failed. */
@@ -71,7 +78,7 @@ export const usageRecordDoc = z.object({
   /** HTTP status returned to the customer. */
   status: z.number().int().min(100).max(599),
   /** Latency in milliseconds. */
-  durationMs: z.number().int().nonnegative().default(0),
+  durationMs: tokenCount.default(0),
   occurredAt: z.instanceof(Date),
   ...timestampFields,
 });
@@ -86,19 +93,19 @@ export const usageRecordCreateInput = z.object({
   providerId: objectIdFromString,
   upstreamModelId: z.string().min(1).max(160),
   protocol: z.enum(["openai", "anthropic"]),
-  promptTokens: z.number().int().nonnegative(),
-  completionTokens: z.number().int().nonnegative(),
-  reasoningTokens: z.number().int().nonnegative().optional(),
-  cacheReadTokens: z.number().int().nonnegative().optional(),
-  cacheWriteTokens: z.number().int().nonnegative().optional(),
-  costMinor: z.number().int().nonnegative(),
-  priceMinor: z.number().int().nonnegative(),
+  promptTokens: tokenCount,
+  completionTokens: tokenCount,
+  reasoningTokens: tokenCount.optional(),
+  cacheReadTokens: tokenCount.optional(),
+  cacheWriteTokens: tokenCount.optional(),
+  costMinor: moneyMinor,
+  priceMinor: moneyMinor,
   currency: currencyCode,
   providerRequestId: z.string().max(200).optional(),
   billed: z.boolean().optional(),
   errorCode: z.string().max(80).optional(),
   status: z.number().int().min(100).max(599),
-  durationMs: z.number().int().nonnegative().optional(),
+  durationMs: tokenCount.optional(),
   occurredAt: z.coerce.date().optional(),
 });
 
@@ -120,7 +127,7 @@ export const rateLimitCounterDoc = z.object({
   /** Bucket start timestamp (floored to window). */
   bucketStart: z.instanceof(Date),
   /** Counted value in the dimension's unit. */
-  count: z.number().int().nonnegative().default(0),
+  count: tokenCount.default(0),
   /** Optional scope target (model alias / endpoint path). */
   scopeTarget: z.string().max(120).nullish(),
   ...timestampFields,
@@ -131,7 +138,7 @@ export const rateLimitCounterCreateInput = z.object({
   dimension: limitDimension,
   windowSeconds: z.number().int().positive(),
   bucketStart: z.coerce.date(),
-  count: z.number().int().nonnegative().optional(),
+  count: tokenCount.optional(),
   scopeTarget: z.string().max(120).nullish().optional(),
 });
 

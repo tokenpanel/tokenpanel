@@ -5,6 +5,7 @@ import { ObjectId } from "mongodb";
 import { getDb } from "@tokenpanel/db";
 import type { AuthVariables } from "../middleware/auth.ts";
 import { hashPassword, signJwt, randomToken } from "../lib/crypto.ts";
+import { requireJwtSecret } from "../config/state.ts";
 
 export const signupBody = z
   .object({
@@ -42,8 +43,10 @@ signupRoutes.post(
       return c.json({ error: "setup_already_complete" }, 409);
     }
 
-    const secret = process.env.JWT_SECRET;
-    if (!secret) {
+    let secret: string;
+    try {
+      secret = requireJwtSecret();
+    } catch {
       return c.json({ error: "server_misconfigured" }, 500);
     }
 

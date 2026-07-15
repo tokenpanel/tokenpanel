@@ -70,7 +70,7 @@ services:
         condition: service_completed_successfully
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "bun", "-e", "const r = await fetch('http://127.0.0.1:3000/health'); process.exit(r.ok ? 0 : 1)"]
+      test: ["CMD", "bun", "-e", "const r = await fetch('http://127.0.0.1:3000/ready'); process.exit(r.ok ? 0 : 1)"]
       interval: 10s
       timeout: 5s
       retries: 5

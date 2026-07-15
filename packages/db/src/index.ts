@@ -8,6 +8,7 @@ export * from "./schemas/limit.ts";
 export * from "./schemas/usage.ts";
 export * from "./schemas/apikey.ts";
 export * from "./schemas/management-apikey.ts";
+export * from "./schemas/settlement-outbox.ts";
 export {
   getDb,
   getRawDb,
@@ -15,8 +16,12 @@ export {
   getMongoUri,
   getDbName,
   closeDb,
-  setGetDbForTests,
+  configureDb,
+  clearDbConfig,
+  isDbConfigured,
+  getMongoConnectionConfig,
 } from "./client.ts";
+export type { MongoConnectionConfig } from "./config.ts";
 export { runMigrations, getMigrationStatus, executeMigration, validateMigrationMeta } from "./migrator/runner.ts";
 export { createMigrationDb } from "./migrator/migration-db.ts";
 export type {

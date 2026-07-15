@@ -113,12 +113,14 @@ test("formatWindow: fallback seconds", () => {
   expect(formatWindow(7260)).toBe("7260s");
 });
 
-test("formatAmountMinor: integer major → 0 decimals", () => {
-  expect(formatAmountMinor(1000, "USD")).toBe("USD 10");
-  expect(formatAmountMinor(0, "USD")).toBe("USD 0");
+test("formatAmountMinor: uses ISO-aware formatMoney (USD cents)", () => {
+  expect(formatAmountMinor(1000, "USD")).toBe("$10.00 USD");
+  expect(formatAmountMinor(0, "USD")).toBe("$0.00 USD");
+  expect(formatAmountMinor(12345, "USD")).toBe("$123.45 USD");
+  expect(formatAmountMinor(5, "USD")).toBe("$0.05 USD");
 });
 
-test("formatAmountMinor: decimal major → 2 decimals", () => {
-  expect(formatAmountMinor(12345, "USD")).toBe("USD 123.45");
-  expect(formatAmountMinor(5, "USD")).toBe("USD 0.05");
+test("formatAmountMinor: zero-decimal JPY / BIF not divided by 100", () => {
+  expect(formatAmountMinor(1234, "JPY")).toBe("\u00a51234 JPY");
+  expect(formatAmountMinor(500, "BIF")).toBe("500 BIF");
 });

@@ -1,6 +1,10 @@
 import { createHash, createHmac, timingSafeEqual, randomBytes, createCipheriv, createDecipheriv } from "node:crypto";
 import { ObjectId } from "mongodb";
 import type { UserRole } from "@tokenpanel/db";
+import {
+  getApiRuntimeConfig,
+  isApiRuntimeConfigSet,
+} from "../config/state.ts";
 
 export async function hashPassword(plain: string): Promise<string> {
   return Bun.password.hash(plain, { algorithm: "argon2id" });
@@ -187,10 +191,30 @@ export function verifyJwt(token: string, secret: string): JwtPayload {
  * Symmetric encryption for secrets at rest (provider API keys).
  * AES-256-GCM. Key = first 32 bytes of SHA-256(JWT_SECRET) so no extra env var.
  * Output format: base64(iv|ciphertext|tag).
+ *
+ * Secret source (in order):
+ * 1. Explicit override via setJwtSecretForCrypto (tests)
+ * 2. API runtime config set at boot (production path)
+ * Never logs the secret. Exact bytes are preserved (no trim).
  */
-function encryptionKey(): Buffer {
+let jwtSecretOverride: string | null = null;
+
+/** Test/boot helper: pin the exact JWT secret used for encrypt/decrypt. */
+export function setJwtSecretForCrypto(secret: string | null): void {
+  jwtSecretOverride = secret;
+}
+
+function resolveJwtSecret(): string {
+  if (jwtSecretOverride !== null) return jwtSecretOverride;
+  if (isApiRuntimeConfigSet()) return getApiRuntimeConfig().jwtSecret;
+  // Transitional fallback for unit tests that only set process.env.
   const secret = process.env.JWT_SECRET;
   if (!secret) throw new Error("JWT_SECRET not set");
+  return secret;
+}
+
+function encryptionKey(): Buffer {
+  const secret = resolveJwtSecret();
   return createHash("sha256").update(secret, "utf8").digest().subarray(0, 32) as Buffer;
 }
 

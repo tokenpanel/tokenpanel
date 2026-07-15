@@ -65,6 +65,11 @@ export type ChatContext =
 export async function resolveChatContext(params: {
   principal: PublicPrincipal;
   customerEmail?: string;
+  /**
+   * Optional DB accessor for tests (same pattern as createModelRoutes).
+   * Production callers omit this and use the process-local getDb().
+   */
+  getDb?: typeof getDb;
 }): Promise<ChatContext> {
   const { principal } = params;
 
@@ -92,7 +97,7 @@ export async function resolveChatContext(params: {
     };
   }
 
-  const db = await getDb();
+  const db = await (params.getDb ?? getDb)();
   // Org-scoped lookup — a same-email customer in another org can NEVER be
   // resolved by this key. Sparse index on (organizationId, email) makes this
   // O(1).

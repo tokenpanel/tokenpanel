@@ -15,6 +15,11 @@ import {
 import type { Document, Filter } from "mongodb";
 import { requireAuth, requireRole, type AuthVariables } from "../middleware/auth.ts";
 import { isDuplicateKeyError } from "../lib/crypto.ts";
+import { parseObjectIdParam, escapeRegExp } from "./route-utils.ts";
+import { addInterval } from "../services/subscription-interval.ts";
+
+export { parseObjectIdParam };
+export { addInterval };
 
 const app = new Hono<{ Variables: AuthVariables }>();
 
@@ -43,7 +48,7 @@ app.get("/", zValidator("query", listQuerySchema), async (c) => {
   const filter: Filter<CustomerDoc> = { organizationId: orgId };
   if (q.status !== undefined) filter["status"] = q.status;
   if (q.q !== undefined && q.q.length > 0) {
-    const esc = q.q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const esc = escapeRegExp(q.q);
     filter["$or"] = [
       { name: { $regex: esc, $options: "i" } },
       { email: { $regex: esc, $options: "i" } },
@@ -69,8 +74,12 @@ app.post("/", requireRole("admin"), zValidator("json", customerCreateInput), asy
   const db = await getDb();
 
   const now = new Date();
-  const startingBalance =
-    body.startingBalance ?? { amountMinor: 0, currency: "USD" };
+  const starting = body.startingBalance ?? { amountMinor: 0, currency: "USD" };
+  const startingBalance = {
+    amountMinor: starting.amountMinor,
+    currency: starting.currency,
+    reservedMinor: 0,
+  };
 
   const or: Filter<CustomerDoc>[] = [];
   if (body.externalId !== undefined) or.push({ externalId: body.externalId });
@@ -137,11 +146,6 @@ app.post("/", requireRole("admin"), zValidator("json", customerCreateInput), asy
   }
   return c.json(created as CustomerDoc, 201);
 });
-
-export function parseObjectIdParam(id: string): ObjectId | null {
-  if (!ObjectId.isValid(id)) return null;
-  return new ObjectId(id);
-}
 
 app.get("/:id", async (c) => {
   const orgId = c.get("orgId");
@@ -333,26 +337,6 @@ app.get(
 const subscribeBodySchema = z.object({
   planId: z.string().min(1).max(64),
 });
-
-export function addInterval(date: Date, interval: string, count: number): Date {
-  const d = new Date(date);
-  switch (interval) {
-    case "day":
-      d.setUTCDate(d.getUTCDate() + count);
-      return d;
-    case "week":
-      d.setUTCDate(d.getUTCDate() + count * 7);
-      return d;
-    case "month":
-      d.setUTCMonth(d.getUTCMonth() + count);
-      return d;
-    case "year":
-      d.setUTCFullYear(d.getUTCFullYear() + count);
-      return d;
-    default:
-      return d;
-  }
-}
 
 app.post(
   "/:id/subscribe",

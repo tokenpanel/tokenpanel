@@ -148,6 +148,17 @@ test("mapUsage: extracts cache + reasoning tokens", () => {
   expect(u.cacheReadTokens).toBe(30);
   expect(u.cacheWriteTokens).toBe(10);
   expect(u.reasoningTokens).toBe(200);
+  // additive total: 100+50+30+10 = 190 (reasoning not added)
+  expect(u.totalTokens).toBe(190);
+});
+
+test("mapUsage: additive cache total input 1000 + output 100 + cache-read 500 = 1600", () => {
+  const u = mapUsage({
+    input_tokens: 1000,
+    output_tokens: 100,
+    cache_read_input_tokens: 500,
+  });
+  expect(u.totalTokens).toBe(1600);
 });
 
 test("assembleMessage: text blocks concatenated into content", () => {
@@ -267,26 +278,191 @@ test("adapter.streamChat: parses anthropic SSE events (message_start, content_bl
     const deltas = chunks.filter((c) => (c as { type: string }).type === "delta");
     expect(deltas).toHaveLength(2);
     expect((deltas[0] as { delta?: { content?: string } }).delta?.content).toBe("hel");
-    const done = chunks[chunks.length - 1] as { type: string; finishReason?: string; usage?: { promptTokens: number; completionTokens: number } };
+    const done = chunks[chunks.length - 1] as {
+      type: string;
+      finishReason?: string;
+      usage?: { promptTokens: number; completionTokens: number };
+      streamComplete?: boolean;
+    };
     expect(done.type).toBe("done");
     expect(done.finishReason).toBe("end_turn");
+    expect(done.streamComplete).toBe(true);
     expect(done.usage?.completionTokens).toBe(5);
   } finally {
     globalThis.fetch = origFetch;
   }
 });
 
-test("adapter.streamChat: yields error chunk on non-2xx", async () => {
+test("adapter.streamChat: later malformed usage invalidates prior complete usage", async () => {
+  // message_start + message_delta establish complete usage, then a second
+  // message_delta carries a fractional output_tokens — must not settle stale.
+  const sse = [
+    `event: message_start`,
+    `data: {"type":"message_start","message":{"usage":{"input_tokens":10}}}`,
+    `event: content_block_delta`,
+    `data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"hi"}}`,
+    `event: message_delta`,
+    `data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":5}}`,
+    `event: message_delta`,
+    `data: {"type":"message_delta","delta":{},"usage":{"output_tokens":1.5}}`,
+    `event: message_stop`,
+    `data: {"type":"message_stop"}`,
+    "",
+  ].join("\n");
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    new Response(sse, {
+      status: 200,
+      headers: { "content-type": "text/event-stream" },
+    })) as unknown as typeof fetch;
+  try {
+    const chunks: Array<{
+      type: string;
+      streamComplete?: boolean;
+      usage?: unknown;
+    }> = [];
+    for await (const c of createAnthropicCompatibleAdapter().streamChat(ctx(), {
+      model: "x",
+      messages: [],
+    })) {
+      chunks.push(c as { type: string; streamComplete?: boolean; usage?: unknown });
+    }
+    const done = chunks[chunks.length - 1];
+    expect(done?.type).toBe("done");
+    expect(done?.streamComplete).toBe(false);
+    expect(done?.usage).toBeUndefined();
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+test("adapter.streamChat: non-object usage string after complete invalidates 10/5", async () => {
+  // Complete usage 10/5 then usage:"bad" must not settle stale 10/5.
+  const sse = [
+    `event: message_start`,
+    `data: {"type":"message_start","message":{"usage":{"input_tokens":10}}}`,
+    `event: content_block_delta`,
+    `data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"hi"}}`,
+    `event: message_delta`,
+    `data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":5}}`,
+    `event: message_delta`,
+    `data: {"type":"message_delta","delta":{},"usage":"bad"}`,
+    `event: message_stop`,
+    `data: {"type":"message_stop"}`,
+    "",
+  ].join("\n");
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    new Response(sse, {
+      status: 200,
+      headers: { "content-type": "text/event-stream" },
+    })) as unknown as typeof fetch;
+  try {
+    const chunks: Array<{
+      type: string;
+      streamComplete?: boolean;
+      usage?: unknown;
+    }> = [];
+    for await (const c of createAnthropicCompatibleAdapter().streamChat(ctx(), {
+      model: "x",
+      messages: [],
+    })) {
+      chunks.push(c as { type: string; streamComplete?: boolean; usage?: unknown });
+    }
+    const done = chunks[chunks.length - 1];
+    expect(done?.type).toBe("done");
+    expect(done?.streamComplete).toBe(false);
+    expect(done?.usage).toBeUndefined();
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+test("adapter.streamChat: empty usage object after complete invalidates", async () => {
+  const sse = [
+    `event: message_start`,
+    `data: {"type":"message_start","message":{"usage":{"input_tokens":10}}}`,
+    `event: message_delta`,
+    `data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":5}}`,
+    `event: message_delta`,
+    `data: {"type":"message_delta","delta":{},"usage":{}}`,
+    `event: message_stop`,
+    `data: {"type":"message_stop"}`,
+    "",
+  ].join("\n");
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    new Response(sse, {
+      status: 200,
+      headers: { "content-type": "text/event-stream" },
+    })) as unknown as typeof fetch;
+  try {
+    let done: { streamComplete?: boolean; usage?: unknown } | undefined;
+    for await (const c of createAnthropicCompatibleAdapter().streamChat(ctx(), {
+      model: "x",
+      messages: [],
+    })) {
+      if ((c as { type: string }).type === "done") {
+        done = c as { streamComplete?: boolean; usage?: unknown };
+      }
+    }
+    expect(done?.streamComplete).toBe(false);
+    expect(done?.usage).toBeUndefined();
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+test("adapter.streamChat: EOF without message_stop is streamComplete false", async () => {
+  const sse = [
+    `event: message_start`,
+    `data: {"type":"message_start","message":{"usage":{"input_tokens":10}}}`,
+    `event: content_block_delta`,
+    `data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"x"}}`,
+    "",
+  ].join("\n");
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    new Response(sse, {
+      status: 200,
+      headers: { "content-type": "text/event-stream" },
+    })) as unknown as typeof fetch;
+  try {
+    const chunks: Array<{ type: string; streamComplete?: boolean; usage?: unknown }> = [];
+    for await (const c of createAnthropicCompatibleAdapter().streamChat(ctx(), {
+      model: "x",
+      messages: [],
+    })) {
+      chunks.push(c as { type: string; streamComplete?: boolean; usage?: unknown });
+    }
+    const done = chunks[chunks.length - 1];
+    expect(done?.type).toBe("done");
+    expect(done?.streamComplete).toBe(false);
+    expect(done?.usage).toBeUndefined();
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+test("adapter.streamChat: throws ProviderError on non-2xx (pre-stream)", async () => {
   const origFetch = globalThis.fetch;
   globalThis.fetch = (async () => new Response("err", { status: 429 })) as unknown as typeof fetch;
   try {
-    const chunks: unknown[] = [];
-    for await (const c of createAnthropicCompatibleAdapter().streamChat(ctx(), { model: "x", messages: [] })) {
-      chunks.push(c);
+    let threw: unknown;
+    try {
+      for await (const _c of createAnthropicCompatibleAdapter().streamChat(ctx(), {
+        model: "x",
+        messages: [],
+      })) {
+        /* should not yield */
+      }
+    } catch (e) {
+      threw = e;
     }
-    expect(chunks).toHaveLength(1);
-    expect((chunks[0] as { type: string }).type).toBe("error");
-    expect((chunks[0] as { error?: { code?: string } }).error?.code).toBe("http_429");
+    expect(threw).toBeInstanceOf(Error);
+    expect((threw as Error).name).toBe("ProviderError");
+    expect((threw as { httpStatus?: number }).httpStatus).toBe(429);
+    expect((threw as { fallbackEligible?: boolean }).fallbackEligible).toBe(true);
   } finally {
     globalThis.fetch = origFetch;
   }

@@ -3,7 +3,19 @@ import { cors } from "hono/cors";
 import { serveStatic } from "hono/bun";
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { getDb, getRawDb, getClient, runMigrations } from "@tokenpanel/db";
+import {
+  configureDb,
+  getDb,
+  getRawDb,
+  getClient,
+  runMigrations,
+} from "@tokenpanel/db";
+import {
+  parseApiRuntimeConfig,
+  ConfigValidationError,
+} from "./config/runtime.ts";
+import { setApiRuntimeConfig } from "./config/state.ts";
+import { setJwtSecretForCrypto } from "./lib/crypto.ts";
 import type { AuthVariables } from "./middleware/auth.ts";
 import authRoutes from "./routes/auth.ts";
 import signupRoutes from "./routes/signup.ts";
@@ -19,6 +31,8 @@ import catalogSourceRoutes from "./routes/catalog-sources.ts";
 import managementKeyRoutes from "./routes/management-keys.ts";
 import managementRead from "./routes/management/read.ts";
 import managementWrite from "./routes/management/write.ts";
+import dashboardRoutes from "./routes/dashboard.ts";
+import analyticsSummaryRoutes from "./routes/analytics-summary.ts";
 import publicOpenAI from "./routes/public/openai.ts";
 import publicAnthropic from "./routes/public/anthropic.ts";
 import { requirePublicPrincipal } from "./middleware/public-auth.ts";
@@ -26,11 +40,28 @@ import {
   requireManagementPrincipal,
 } from "./middleware/management-auth.ts";
 import "./providers/index.ts";
+import { startSettlementReconcileWorker } from "./services/settlement-reconcile.ts";
 
-if (!process.env.JWT_SECRET) {
-  console.error("JWT_SECRET not set. Add it to .env (random 32+ char string).");
+// Parse once at the executable boundary before app/DB init.
+let runtimeConfig: ReturnType<typeof parseApiRuntimeConfig>;
+try {
+  runtimeConfig = parseApiRuntimeConfig(process.env);
+} catch (err) {
+  if (err instanceof ConfigValidationError) {
+    for (const issue of err.issues) {
+      console.error(`config: ${issue.variable}: ${issue.reason}`);
+    }
+  } else {
+    console.error(err instanceof Error ? err.message : err);
+  }
   process.exit(1);
 }
+setApiRuntimeConfig(runtimeConfig);
+setJwtSecretForCrypto(runtimeConfig.jwtSecret);
+configureDb({
+  uri: runtimeConfig.database.uri,
+  databaseName: runtimeConfig.database.name,
+});
 
 const app = new Hono<{ Variables: AuthVariables }>();
 
@@ -38,9 +69,8 @@ const app = new Hono<{ Variables: AuthVariables }>();
 // (e.g. localhost:5173 -> localhost:3000). Auth is JWT Bearer in Authorization
 // header (no cookies), so reflecting the request Origin is safe and lets the
 // browser read responses cross-origin. Restrict via CORS_ORIGINS in prod.
-const allowedOrigins = process.env.CORS_ORIGINS
-  ? process.env.CORS_ORIGINS.split(",").map((s) => s.trim()).filter(Boolean)
-  : null;
+// corsOrigins null → reflect any (dev). empty → fail closed. list → allowlist.
+const allowedOrigins = runtimeConfig.corsOrigins;
 app.use(
   "*",
   cors({
@@ -56,12 +86,31 @@ app.use(
   }),
 );
 
+// Legacy combined health (kept for existing probes). Prefer /live + /ready.
 app.get("/health", (c) => c.json({ status: "ok" }));
+
+/** Process liveness only — no dependency checks. */
+app.get("/live", (c) => c.json({ status: "live" }));
+
+/** Readiness: bounded Mongo ping. Used for rollout / compose health. */
+app.get("/ready", async (c) => {
+  try {
+    await getDb();
+    const raw = getRawDb();
+    await raw.command({ ping: 1 });
+    return c.json({ status: "ready" });
+  } catch {
+    // Never leak raw Mongo/driver error text to unauthenticated callers.
+    return c.json({ status: "not_ready", reason: "dependency_unavailable" }, 503);
+  }
+});
 
 app.route("/admin/auth", authRoutes);
 app.route("/admin/auth", signupRoutes);
 app.route("/admin/auth", acceptInviteRoute);
 app.route("/admin/customers", customers);
+app.route("/admin/dashboard", dashboardRoutes);
+app.route("/admin/analytics", analyticsSummaryRoutes);
 app.route("/admin/providers", providers);
 app.route("/admin/models", models);
 app.route("/admin/plans", plans);
@@ -131,7 +180,7 @@ app.onError((err, c) => {
   return c.json({ error: "internal_server_error" }, 500);
 });
 
-const port = Number(process.env.PORT ?? 3000);
+const port = runtimeConfig.port;
 
 try {
   await getDb();
@@ -159,5 +208,8 @@ try {
 
 Bun.serve({ port, fetch: app.fetch });
 console.log(`api listening on http://localhost:${port}`);
+
+// Drain settlement_outbox (missing usage / settle failures) with bounded backoff.
+startSettlementReconcileWorker();
 
 export { app };

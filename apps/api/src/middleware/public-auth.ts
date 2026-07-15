@@ -9,6 +9,11 @@ import {
 } from "@tokenpanel/db";
 import { hashToken, safeHashEqual } from "../lib/crypto.ts";
 import { apiKeyThrottle } from "../lib/throttle.ts";
+import {
+  API_KEY_LOOKUP_PREFIX_CHARS,
+  CUSTOMER_KEY_PREFIX_LITERAL,
+  MANAGEMENT_KEY_PREFIX_LITERAL,
+} from "../services/api-key-issuer.ts";
 
 /**
  * Discriminated public principal. Both kinds carry orgId (always owned by the
@@ -49,14 +54,12 @@ export type PublicAuthVariables = {
 };
 
 /**
- * Token prefix length used for lookup and display. New keys store exactly this
- * many chars (8 literal + 8 random hex = 16^8 ≈ 4.3B combos, birthday-collision
- * around ~65K keys). There is no legacy shorter prefix — keys are re-issued if
- * an environment still has older 12-char prefixes.
+ * Token prefix length used for lookup and display. Owned by api-key-issuer;
+ * re-exported for auth dispatchers and tests.
  */
-export const PREFIX_LENGTH = 16;
-export const CUSTOMER_KEY_PREFIX = "tp_live_";
-export const MANAGEMENT_KEY_PREFIX = "tp_mgmt_";
+export const PREFIX_LENGTH = API_KEY_LOOKUP_PREFIX_CHARS;
+export const CUSTOMER_KEY_PREFIX = CUSTOMER_KEY_PREFIX_LITERAL;
+export const MANAGEMENT_KEY_PREFIX = MANAGEMENT_KEY_PREFIX_LITERAL;
 
 /** Minimum full-key length we'll consider for auth (paranoia floor). */
 const MIN_FULL_KEY_LENGTH = PREFIX_LENGTH;

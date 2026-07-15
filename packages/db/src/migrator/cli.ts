@@ -1,8 +1,20 @@
 import { join } from "node:path";
 import { mkdirSync, writeFileSync } from "node:fs";
-import { getDb, getRawDb, getClient, closeDb } from "../client.ts";
+import {
+  configureDb,
+  getDb,
+  getRawDb,
+  getClient,
+  closeDb,
+} from "../client.ts";
+import { parseMigratorEnv } from "./env.ts";
 import { runMigrations, getMigrationStatus } from "./runner.ts";
 import type { MigrationPhase } from "./types.ts";
+
+function bootDbFromEnv(): void {
+  const cfg = parseMigratorEnv(process.env);
+  configureDb({ uri: cfg.uri, databaseName: cfg.databaseName });
+}
 
 async function main(): Promise<void> {
   const cmd = process.argv[2] ?? "";
@@ -15,6 +27,7 @@ async function main(): Promise<void> {
         console.error(`Invalid phase: ${phase}. Use 'pre' or 'post'.`);
         process.exit(1);
       }
+      bootDbFromEnv();
       await getDb();
       const db = getRawDb();
       const client = getClient();
@@ -28,6 +41,7 @@ async function main(): Promise<void> {
       break;
     }
     case "status": {
+      bootDbFromEnv();
       await getDb();
       const db = getRawDb();
       const status = await getMigrationStatus(db);

@@ -11,6 +11,7 @@ import {
 } from "@tokenpanel/db";
 import { requireAuth, type AuthVariables } from "../middleware/auth.ts";
 import { signJwt, randomToken } from "../lib/crypto.ts";
+import { requireJwtSecret } from "../config/state.ts";
 
 export const organizationRoutes = new Hono<{ Variables: AuthVariables }>();
 
@@ -85,8 +86,12 @@ organizationRoutes.post(
   async (c) => {
     const user = c.get("user");
     const body = c.req.valid("json");
-    const secret = process.env.JWT_SECRET;
-    if (!secret) return c.json({ error: "server_misconfigured" }, 500);
+    let secret: string;
+    try {
+      secret = requireJwtSecret();
+    } catch {
+      return c.json({ error: "server_misconfigured" }, 500);
+    }
 
     const db = await getDb();
     const now = new Date();
@@ -275,8 +280,12 @@ organizationRoutes.post("/switch", async (c) => {
     { $set: { activeOrganizationId: oid, updatedAt: new Date() } },
   );
 
-  const secret = process.env.JWT_SECRET;
-  if (!secret) return c.json({ error: "server_misconfigured" }, 500);
+  let secret: string;
+  try {
+    secret = requireJwtSecret();
+  } catch {
+    return c.json({ error: "server_misconfigured" }, 500);
+  }
   const token = signJwt(
     {
       sub: user._id.toHexString(),

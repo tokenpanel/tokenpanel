@@ -1,9 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { getJson } from "../api/client.ts";
-import type {
-  CustomerListResponse,
-  CustomerUsageResponse,
-} from "../api/types.ts";
+import { useCallback, useEffect, useState } from "react";
+import {
+  getAnalyticsSummary,
+  type AnalyticsSummary,
+} from "../api/analytics.ts";
 import { formatMoney, formatNumber } from "../utils/format.ts";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -23,15 +22,7 @@ import { StatCard } from "@/components/StatCard";
 import { FadeIn, StaggerItem } from "@/components/anim";
 import { cn } from "@/lib/utils";
 
-const TOP_N = 20;
 const DEFAULT_RANGE_DAYS = 30;
-
-interface Row {
-  customerId: string;
-  customerName: string;
-  usage: CustomerUsageResponse | null;
-  error: string | null;
-}
 
 export function isoDate(d: Date): string {
   const y = d.getFullYear();
@@ -53,130 +44,74 @@ export function defaultTo(): string {
 export default function AnalyticsPage(): React.ReactElement {
   const [from, setFrom] = useState(defaultFrom);
   const [to, setTo] = useState(defaultTo);
-  const [customers, setCustomers] = useState<CustomerListResponse | null>(null);
-  const [rows, setRows] = useState<Row[]>([]);
-  const [loadingCustomers, setLoadingCustomers] = useState(true);
-  const [loadingUsage, setLoadingUsage] = useState(false);
+  const [summary, setSummary] = useState<AnalyticsSummary | null>(null);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    let cancelled = false;
-    async function load() {
-      setLoadingCustomers(true);
-      setError(null);
-      try {
-        const res = await getJson<CustomerListResponse>(
-          `/admin/customers?limit=${TOP_N}&skip=0`,
-        );
-        if (cancelled) return;
-        setCustomers(res);
-      } catch (err) {
-        if (cancelled) return;
-        setError(err instanceof Error ? err.message : "Failed to load customers.");
-      } finally {
-        if (!cancelled) setLoadingCustomers(false);
-      }
-    }
-    void load();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  const fetchUsage = useCallback(async () => {
-    if (!customers || customers.items.length === 0) return;
-    setLoadingUsage(true);
+  const load = useCallback(async () => {
+    setLoading(true);
     setError(null);
-    const fromIso = new Date(from).toISOString();
-    const toIso = new Date(`${to}T23:59:59`).toISOString();
-    const next: Row[] = await Promise.all(
-      customers.items.map(async (c): Promise<Row> => {
-        try {
-          const usage = await getJson<CustomerUsageResponse>(
-            `/admin/customers/${c._id}/usage?from=${encodeURIComponent(fromIso)}&to=${encodeURIComponent(toIso)}`,
-          );
-          return { customerId: c._id, customerName: c.name, usage, error: null };
-        } catch (err) {
-          return {
-            customerId: c._id,
-            customerName: c.name,
-            usage: null,
-            error: err instanceof Error ? err.message : "usage fetch failed",
-          };
-        }
-      }),
-    );
-    setRows(next);
-    setLoadingUsage(false);
-  }, [customers, from, to]);
+    try {
+      const fromIso = new Date(from).toISOString();
+      const toIso = new Date(`${to}T23:59:59`).toISOString();
+      const res = await getAnalyticsSummary({
+        from: fromIso,
+        to: toIso,
+        top: 50,
+      });
+      setSummary(res);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load analytics.");
+      setSummary(null);
+    } finally {
+      setLoading(false);
+    }
+  }, [from, to]);
 
   useEffect(() => {
-    if (customers) void fetchUsage();
-  }, [customers, fetchUsage]);
+    void load();
+  }, [load]);
 
-  const totals = useMemo(() => {
-    let totalRequests = 0;
-    let totalTokens = 0;
-    let totalCostMinor = 0;
-    let totalPriceMinor = 0;
-    const byCurrency = new Map<string, { cost: number; price: number }>();
-    for (const r of rows) {
-      if (!r.usage) continue;
-      totalRequests += r.usage.totalRequests;
-      totalTokens += r.usage.totalTokens;
-      totalCostMinor += r.usage.totalCostMinor;
-      totalPriceMinor += r.usage.totalPriceMinor;
-      const cur = r.usage.currency;
-      const existing = byCurrency.get(cur);
-      if (existing) {
-        existing.cost += r.usage.totalCostMinor;
-        existing.price += r.usage.totalPriceMinor;
-      } else {
-        byCurrency.set(cur, {
-          cost: r.usage.totalCostMinor,
-          price: r.usage.totalPriceMinor,
-        });
-      }
-    }
-    return {
-      totalRequests,
-      totalTokens,
-      totalCostMinor,
-      totalPriceMinor,
-      totalProfitMinor: totalPriceMinor - totalCostMinor,
-      byCurrency,
-    };
-  }, [rows]);
-
-  const chartRows = useMemo(() => {
-    return rows
-      .filter((r) => r.usage && r.usage.totalPriceMinor > 0)
-      .map((r) => ({
-        customerId: r.customerId,
-        customerName: r.customerName,
-        costMinor: r.usage ? r.usage.totalCostMinor : 0,
-        priceMinor: r.usage ? r.usage.totalPriceMinor : 0,
-        currency: r.usage ? r.usage.currency : "USD",
-      }))
-      .sort((a, b) => b.priceMinor - a.priceMinor)
-      .slice(0, 10);
-  }, [rows]);
-
-  const maxPriceMinor = useMemo(() => {
-    return chartRows.reduce((max, r) => Math.max(max, r.priceMinor), 0);
-  }, [chartRows]);
-
-  const primaryCurrency = useMemo(() => {
-    if (totals.byCurrency.size === 0) return "USD";
-    const entries = [...totals.byCurrency.entries()];
-    return entries.sort((a, b) => b[1].price - a[1].price)[0]?.[0] ?? "USD";
-  }, [totals]);
-
-  const profitPositive = totals.totalProfitMinor >= 0;
+  const totals = summary?.totals;
+  const primaryCurrency = totals?.byCurrency[0]?.currency ?? "USD";
+  const costMinor = totals?.byCurrency.reduce((s, r) => s + r.costMinor, 0) ?? 0;
+  const priceMinor =
+    totals?.byCurrency.reduce((s, r) => s + r.priceMinor, 0) ?? 0;
+  const multiCurrency = (totals?.byCurrency.length ?? 0) > 1;
+  // Share bars compare within currency only — never mix USD/AUD/CAD minors.
+  const maxPriceByCurrency = new Map<string, number>();
+  for (const r of summary?.topCustomers ?? []) {
+    const prev = maxPriceByCurrency.get(r.currency) ?? 0;
+    if (r.priceMinor > prev) maxPriceByCurrency.set(r.currency, r.priceMinor);
+  }
 
   return (
     <div className="flex flex-col gap-6 p-6 lg:p-8">
-      <PageHeader title="Analytics" description="Customer usage and revenue for the selected range." />
+      <PageHeader
+        title="Analytics"
+        description="Organization usage over a date range (server aggregates)."
+      />
+
+      <div className="flex flex-wrap items-end gap-4">
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="from">From</Label>
+          <Input
+            id="from"
+            type="date"
+            value={from}
+            onChange={(e) => setFrom(e.target.value)}
+          />
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="to">To</Label>
+          <Input
+            id="to"
+            type="date"
+            value={to}
+            onChange={(e) => setTo(e.target.value)}
+          />
+        </div>
+      </div>
 
       {error ? (
         <Alert variant="destructive">
@@ -184,166 +119,117 @@ export default function AnalyticsPage(): React.ReactElement {
         </Alert>
       ) : null}
 
-      <div className="flex items-end gap-3">
-        <div className="flex flex-col gap-1">
-          <Label htmlFor="analytics-from" className="text-xs">From</Label>
-          <Input id="analytics-from" type="date" value={from} onChange={(e) => setFrom(e.target.value)} className="w-auto" />
-        </div>
-        <div className="flex flex-col gap-1">
-          <Label htmlFor="analytics-to" className="text-xs">To</Label>
-          <Input id="analytics-to" type="date" value={to} onChange={(e) => setTo(e.target.value)} className="w-auto" />
-        </div>
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <StaggerItem index={0}>
+          <StatCard
+            label="Requests"
+            value={loading ? "…" : formatNumber(totals?.requests ?? 0)}
+            icon={<Hash className="size-4" />}
+          />
+        </StaggerItem>
+        <StaggerItem index={1}>
+          <StatCard
+            label="Tokens"
+            value={loading ? "…" : formatNumber(totals?.tokens ?? 0)}
+            icon={<Activity className="size-4" />}
+          />
+        </StaggerItem>
+        <StaggerItem index={2}>
+          <StatCard
+            label={multiCurrency ? "Cost (sum*)" : "Cost"}
+            value={
+              loading
+                ? "…"
+                : multiCurrency
+                  ? totals!.byCurrency
+                      .map((r) => formatMoney(r.costMinor, r.currency))
+                      .join(" · ")
+                  : formatMoney(costMinor, primaryCurrency)
+            }
+            icon={<TrendingDown className="size-4" />}
+          />
+        </StaggerItem>
+        <StaggerItem index={3}>
+          <StatCard
+            label={multiCurrency ? "Revenue (by currency)" : "Revenue"}
+            value={
+              loading
+                ? "…"
+                : multiCurrency
+                  ? totals!.byCurrency
+                      .map((r) => formatMoney(r.priceMinor, r.currency))
+                      .join(" · ")
+                  : formatMoney(priceMinor, primaryCurrency)
+            }
+            icon={<TrendingUp className="size-4" />}
+          />
+        </StaggerItem>
       </div>
 
-      {loadingCustomers ? null : (
-        <>
-          <FadeIn className="flex flex-col gap-3" delay={0.05}>
-            <div className="flex items-baseline justify-between">
-              <h2 className="text-base font-semibold">Org Totals</h2>
-              <span className="text-xs text-muted-foreground">
-                Aggregated across {rows.filter((r) => r.usage).length} of {rows.length} customers.
-              </span>
-            </div>
-            <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
-              <StaggerItem index={0} step={0.04}>
-                <StatCard
-                  label="Requests"
-                  value={formatNumber(totals.totalRequests)}
-                  icon={<Hash className="size-4" />}
-                  tone="default"
-                />
-              </StaggerItem>
-              <StaggerItem index={1} step={0.04}>
-                <StatCard
-                  label="Tokens"
-                  value={formatNumber(totals.totalTokens)}
-                  icon={<Activity className="size-4" />}
-                  tone="default"
-                />
-              </StaggerItem>
-              <StaggerItem index={2} step={0.04}>
-                <StatCard
-                  label="Cost"
-                  value={formatMoney(totals.totalCostMinor, primaryCurrency)}
-                  icon={<Coins className="size-4" />}
-                  tone="muted"
-                />
-              </StaggerItem>
-              <StaggerItem index={3} step={0.04}>
-                <StatCard
-                  label="Revenue"
-                  value={formatMoney(totals.totalPriceMinor, primaryCurrency)}
-                  icon={<TrendingUp className="size-4" />}
-                  tone="success"
-                />
-              </StaggerItem>
-              <StaggerItem index={4} step={0.04}>
-                <StatCard
-                  label="Profit"
-                  value={formatMoney(totals.totalProfitMinor, primaryCurrency)}
-                  icon={profitPositive ? <TrendingUp className="size-4" /> : <TrendingDown className="size-4" />}
-                  tone={profitPositive ? "success" : "destructive"}
-                />
-              </StaggerItem>
-            </div>
-          </FadeIn>
-
-          <FadeIn className="flex flex-col gap-3" delay={0.1}>
-            <div className="flex items-baseline justify-between">
-              <h2 className="text-base font-semibold">Top Customers by Spend</h2>
-            </div>
-            {chartRows.length === 0 ? (
-              <Card className="p-6 text-center text-sm text-muted-foreground">No usage data for the selected range.</Card>
-            ) : (
-              <Card className="flex flex-col gap-4 p-6">
-                <div className="flex gap-4 text-xs">
-                  <span className="inline-flex items-center gap-1.5">
-                    <span className="size-3 rounded-sm bg-destructive/50" /> Cost
-                  </span>
-                  <span className="inline-flex items-center gap-1.5">
-                    <span className="size-3 rounded-sm bg-success/60" /> Profit
-                  </span>
-                </div>
-                <div className="flex flex-col gap-3">
-                  {chartRows.map((r, i) => {
-                    const pricePct = maxPriceMinor > 0 ? (r.priceMinor / maxPriceMinor) * 100 : 0;
-                    const costPct = maxPriceMinor > 0 ? (r.costMinor / maxPriceMinor) * 100 : 0;
-                    const profitPct = Math.max(0, pricePct - costPct);
-                    return (
-                      <StaggerItem key={r.customerId} index={i} step={0.03}>
-                        <div className="grid grid-cols-[160px_1fr_110px] items-center gap-3">
-                          <div className="truncate text-sm">{r.customerName}</div>
-                          <div className="flex h-5 overflow-hidden rounded bg-muted">
-                            <div className="bg-destructive/50 transition-all duration-500" style={{ width: `${costPct}%` }} />
-                            <div className="bg-success/60 transition-all duration-500" style={{ width: `${profitPct}%` }} />
-                          </div>
-                          <div className="text-right text-sm font-semibold tabular-nums">{formatMoney(r.priceMinor, r.currency)}</div>
-                        </div>
-                      </StaggerItem>
-                    );
-                  })}
-                </div>
-              </Card>
-            )}
-          </FadeIn>
-
-          <FadeIn className="flex flex-col gap-3" delay={0.15}>
-            <div className="flex items-baseline justify-between">
-              <h2 className="text-base font-semibold">Per-Customer Usage</h2>
-              {customers && customers.total > TOP_N ? (
-                <span className="text-xs text-muted-foreground">
-                  Showing first {TOP_N} of {customers.total} customers.
-                </span>
+      <FadeIn className="flex flex-col gap-3">
+        <h2 className="text-base font-semibold">Top customers by spend</h2>
+        <Card className="overflow-hidden">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Customer</TableHead>
+                <TableHead className="text-right">Requests</TableHead>
+                <TableHead className="text-right">Tokens</TableHead>
+                <TableHead className="text-right">Spend</TableHead>
+                <TableHead className="w-[30%]">Share</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {(summary?.topCustomers ?? []).map((row) => (
+                <TableRow key={`${row.customerId}:${row.currency}`}>
+                  <TableCell className="font-medium">{row.customerName}</TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {formatNumber(row.requests)}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {formatNumber(row.tokens)}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {formatMoney(row.priceMinor, row.currency)}
+                  </TableCell>
+                  <TableCell>
+                    <div className="h-2 w-full rounded-full bg-muted overflow-hidden">
+                      <div
+                        className={cn(
+                          "h-full rounded-full bg-primary transition-all duration-500",
+                        )}
+                        style={{
+                          width: `${Math.round(
+                            (row.priceMinor /
+                              Math.max(
+                                1,
+                                maxPriceByCurrency.get(row.currency) ?? 1,
+                              )) *
+                              100,
+                          )}%`,
+                        }}
+                      />
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ))}
+              {!loading && (summary?.topCustomers.length ?? 0) === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={5} className="text-center text-muted-foreground">
+                    No usage in this range.
+                  </TableCell>
+                </TableRow>
               ) : null}
-            </div>
-            {loadingUsage ? null : rows.length === 0 ? (
-              <Card className="p-6 text-center text-sm text-muted-foreground">No customers found.</Card>
-            ) : (
-              <FadeIn>
-                <Card className="overflow-hidden p-0">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Customer</TableHead>
-                        <TableHead className="text-right">Requests</TableHead>
-                        <TableHead className="text-right">Tokens</TableHead>
-                        <TableHead className="text-right">Cost</TableHead>
-                        <TableHead className="text-right">Price</TableHead>
-                        <TableHead className="text-right">Profit</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {rows.map((r) => {
-                        const profitMinor = r.usage ? r.usage.totalPriceMinor - r.usage.totalCostMinor : 0;
-                        return (
-                          <TableRow key={r.customerId}>
-                            <TableCell>{r.customerName}</TableCell>
-                            {r.usage ? (
-                              <>
-                                <TableCell className="text-right tabular-nums">{formatNumber(r.usage.totalRequests)}</TableCell>
-                                <TableCell className="text-right tabular-nums">{formatNumber(r.usage.totalTokens)}</TableCell>
-                                <TableCell className="text-right tabular-nums">{formatMoney(r.usage.totalCostMinor, r.usage.currency)}</TableCell>
-                                <TableCell className="text-right tabular-nums">{formatMoney(r.usage.totalPriceMinor, r.usage.currency)}</TableCell>
-                                <TableCell className={cn("text-right tabular-nums", profitMinor >= 0 ? "text-success" : "text-destructive")}>
-                                  {formatMoney(profitMinor, r.usage.currency)}
-                                </TableCell>
-                              </>
-                            ) : (
-                              <TableCell className="text-right text-muted-foreground" colSpan={5}>
-                                {r.error ?? "No usage data"}
-                              </TableCell>
-                            )}
-                          </TableRow>
-                        );
-                      })}
-                    </TableBody>
-                  </Table>
-                </Card>
-              </FadeIn>
-            )}
-          </FadeIn>
-        </>
-      )}
+            </TableBody>
+          </Table>
+        </Card>
+        {totals ? (
+          <p className="text-xs text-muted-foreground flex items-center gap-1">
+            <Coins className="size-3" />
+            Org totals are server-side over all customers, not limited to the table page size.
+          </p>
+        ) : null}
+      </FadeIn>
     </div>
   );
 }

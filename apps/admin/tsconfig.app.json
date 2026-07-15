@@ -8,7 +8,9 @@
     "ignoreDeprecations": "6.0",
     "baseUrl": ".",
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": ["./src/*"],
+      "@tokenpanel/contracts": ["../../packages/contracts/src/index.ts"],
+      "@tokenpanel/contracts/*": ["../../packages/contracts/src/*"]
     }
   },
   "include": ["src"]

@@ -1,9 +1,11 @@
+import { adminPublicConfig } from "../config/public.ts";
+
 const TOKEN_KEY = "tp_admin_token";
 
 // Empty string = same-origin. In dev Vite proxies /admin, /v1, /health to the
 // api service. In prod the api serves the admin SPA itself. Override only when
-// the admin and api must live on different origins.
-const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
+// the admin and api must live on different origins (see adminPublicConfig).
+const API_BASE = adminPublicConfig.apiBaseUrl;
 
 export const AUTH_TOKEN_KEY = TOKEN_KEY;
 

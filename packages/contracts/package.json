@@ -1,0 +1,24 @@
+{
+  "name": "@tokenpanel/contracts",
+  "version": "0.0.0",
+  "private": true,
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "main": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "bun build src/index.ts --target=browser --outdir dist --format esm",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "clean": "rm -rf dist .turbo node_modules/.tmp"
+  },
+  "dependencies": {
+    "zod": "^3.25"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "sideEffects": false
+}

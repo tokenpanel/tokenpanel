@@ -1,24 +1,20 @@
 /**
- * HTTP integration for model metadata against the **production** models router
- * (apps/api/src/routes/models.ts) with injected getDb + requireAuth.
+ * HTTP integration for model metadata against createModelRoutes with
+ * injected getDb + requireAuth (no production test-hook env seam).
  *
  * Exercises persistence, clear/preserve PATCH semantics, 400 validation,
  * member 403, and cross-org isolation without a live MongoDB.
  */
-import { test, expect, beforeEach, afterEach } from "bun:test";
+import { test, expect, beforeEach } from "bun:test";
 import { Hono } from "hono";
 import { ObjectId } from "mongodb";
 import {
-  setGetDbForTests,
   type ModelDoc,
   type ModelEntryDoc,
   type TypedDb,
 } from "@tokenpanel/db";
-import modelRoutes from "../models.ts";
-import {
-  setRequireAuthForTests,
-  type AuthVariables,
-} from "../../middleware/auth.ts";
+import { createModelRoutes } from "../models.ts";
+import type { AuthVariables } from "../../middleware/auth.ts";
 
 type MemModel = ModelDoc;
 type MemProvider = {
@@ -133,38 +129,32 @@ function seed(): void {
   providers = [{ _id: providerA, organizationId: orgA, name: "OpenAI" }];
 }
 
-function installTestHooks(): void {
-  setGetDbForTests(async () => makeDb());
-  setRequireAuthForTests(async (c, next) => {
-    c.set(
-      "user",
-      {
-        _id: new ObjectId(),
-        email: "a@b.com",
-        username: "admin",
-        passwordHash: "x",
-        status: "active",
-        activeOrganizationId: activeOrg,
-        memberships: [{ organizationId: activeOrg, role }],
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      } as AuthVariables["user"],
-    );
-    c.set("orgId", activeOrg);
-    c.set("role", role);
-    await next();
-  });
-}
-
-function clearTestHooks(): void {
-  setGetDbForTests(null);
-  setRequireAuthForTests(null);
-}
-
-/** Production models router mounted at the same path as apps/api. */
+/** DI models router mounted at the same path as apps/api. */
 function buildApp(): Hono {
   const app = new Hono();
-  app.route("/admin/models", modelRoutes);
+  const routes = createModelRoutes({
+    getDb: async () => makeDb(),
+    requireAuth: async (c, next) => {
+      c.set(
+        "user",
+        {
+          _id: new ObjectId(),
+          email: "a@b.com",
+          username: "admin",
+          passwordHash: "x",
+          status: "active",
+          activeOrganizationId: activeOrg,
+          memberships: [{ organizationId: activeOrg, role }],
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        } as AuthVariables["user"],
+      );
+      c.set("orgId", activeOrg);
+      c.set("role", role);
+      await next();
+    },
+  });
+  app.route("/admin/models", routes);
   return app;
 }
 
@@ -185,19 +175,7 @@ const createBody = (over: Record<string, unknown> = {}) => ({
 });
 
 beforeEach(() => {
-  // Required by setGetDbForTests / setRequireAuthForTests hard gates.
-  process.env.TOKENPANEL_TEST_HOOKS = "1";
-  // Ensure we are not treated as production during the suite.
-  if (process.env.NODE_ENV === "production") {
-    process.env.NODE_ENV = "test";
-  }
   seed();
-  installTestHooks();
-});
-
-afterEach(() => {
-  clearTestHooks();
-  delete process.env.TOKENPANEL_TEST_HOOKS;
 });
 
 test("production router: create → set → omit preserves → clear → round-trip", async () => {

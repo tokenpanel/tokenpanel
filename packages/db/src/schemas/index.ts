@@ -65,6 +65,10 @@ import type {
   ManagementApiKeyUpdateInput,
   ManagementScope,
 } from "../schemas/management-apikey.ts";
+import type {
+  SettlementOutboxDoc,
+  SettlementOutboxStatus,
+} from "../schemas/settlement-outbox.ts";
 
 /**
  * Central registry of collection names and typed accessors.
@@ -87,6 +91,7 @@ export const collections = {
   rateLimitCounters: "rate_limit_counters",
   apiKeys: "api_keys",
   managementApiKeys: "management_api_keys",
+  settlementOutbox: "settlement_outbox",
 } as const;
 
 export type Collections = typeof collections;
@@ -109,6 +114,7 @@ export interface TypedDb {
   rateLimitCounters: Collection<RateLimitCounterDoc>;
   apiKeys: Collection<ApiKeyDoc>;
   managementApiKeys: Collection<ManagementApiKeyDoc>;
+  settlementOutbox: Collection<SettlementOutboxDoc>;
 }
 
 export type CollectionInsert<T> = Omit<T, "_id" | "createdAt" | "updatedAt">;
@@ -164,4 +170,6 @@ export type {
   ManagementApiKeyCreateInput,
   ManagementApiKeyUpdateInput,
   ManagementScope,
+  SettlementOutboxDoc,
+  SettlementOutboxStatus,
 };

@@ -24,7 +24,7 @@ function customerPrincipal(over: Partial<{ orgId: ObjectId; customerId: ObjectId
       externalId: null,
       name: "alice",
       email: "alice@example.com",
-      balance: { amountMinor: 1000, currency: "USD" },
+      balance: { amountMinor: 1000, reservedMinor: 0, currency: "USD" },
       status: "active" as const,
       metadata: {},
       createdAt: new Date(),
@@ -96,11 +96,9 @@ test("resolveChatContext: management without customerEmail → management_intern
   expect(ctx.managementKeyId).toBe(p.managementKey._id);
 });
 
-test("resolveChatContext: management with unknown customerEmail → 404 V1ChatError (requires live DB)", async () => {
-  // The 404 path issues a real org-scoped findOne against customers; that
-  // needs a running replica set (the migration runner + transactions require
-  // one). Covered by route/integration tests against a live DB. Here we only
-  // assert the error shape the no-DB paths cannot reach is well-formed.
+test("resolveChatContext: management with unknown customerEmail → 404 V1ChatError", async () => {
+  // Full DB path with injected getDb: see v1-mgmt-auth.integration.test.ts.
+  // Here we only assert the error shape is well-formed for route translators.
   const e = new V1ChatError(404, "customer_not_found", "no such customer");
   expect(e.status).toBe(404);
   expect(e.code).toBe("customer_not_found");

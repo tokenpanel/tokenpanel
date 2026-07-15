@@ -6,12 +6,16 @@ import {
   preFlight,
   callWithFallback,
   streamWithFallback,
+  cacheAccountingForProtocol,
   computeCharges,
-  settleUsage,
+  settleUsageOrOutbox,
   estimatePromptTokens,
   resolveModel,
+  releasePreFlightReservation,
   BillingError,
+  type BalanceReservation,
 } from "../../lib/billing.ts";
+import { normalizeProcessedTotalTokens } from "../../providers/provider-usage.ts";
 import {
   resolveChatContext,
   actorForChatContext,
@@ -22,6 +26,7 @@ import {
 } from "../../lib/v1-chat-context.ts";
 import { getEffectiveRules } from "../../lib/rate-limits.ts";
 import type { ChatRequest, ChatMessage, ContentPart } from "../../providers/index.ts";
+import { newGatewayRequestId } from "../../services/settlement-outbox.ts";
 
 const publicOpenAI = new Hono<{ Variables: PublicAuthVariables }>();
 // Auth is mounted once on the parent app for /v1/* (index.ts) so openai +
@@ -154,15 +159,19 @@ async function resolveModelAndRules(params: {
   aliasId: string;
   estimatedPromptTokens: number;
   maxCompletionTokens?: number;
-}): Promise<{ model: ModelDoc; rules: Awaited<ReturnType<typeof getEffectiveRules>> }> {
+}): Promise<{
+  model: ModelDoc;
+  rules: Awaited<ReturnType<typeof getEffectiveRules>>;
+  reservation: BalanceReservation | null;
+}> {
   const customerId = billableCustomerId(params.ctx);
   if (customerId === null) {
     // Internal management call — no customer to bill or meter. Still validate
     // the model exists + is active so 404s surface early.
     const model = await resolveModel(params.orgId, params.aliasId);
-    return { model, rules: [] };
+    return { model, rules: [], reservation: null };
   }
-  const result = await preFlight({
+  return preFlight({
     orgId: params.orgId,
     customerId,
     apiKeyModelWhitelist: modelWhitelistForContext(params.ctx),
@@ -170,7 +179,6 @@ async function resolveModelAndRules(params: {
     estimatedPromptTokens: params.estimatedPromptTokens,
     maxCompletionTokens: params.maxCompletionTokens,
   });
-  return result;
 }
 
 publicOpenAI.post("/v1/chat/completions", async (c) => {
@@ -216,7 +224,11 @@ publicOpenAI.post("/v1/chat/completions", async (c) => {
     reasoning: body.reasoning_effort ? { effort: body.reasoning_effort } : undefined,
   };
 
-  let preflightResult: { model: ModelDoc; rules: Awaited<ReturnType<typeof getEffectiveRules>> };
+  let preflightResult: {
+    model: ModelDoc;
+    rules: Awaited<ReturnType<typeof getEffectiveRules>>;
+    reservation: BalanceReservation | null;
+  };
   try {
     preflightResult = await resolveModelAndRules({
       orgId,
@@ -236,9 +248,11 @@ publicOpenAI.post("/v1/chat/completions", async (c) => {
     throw err;
   }
 
-  const { model, rules } = preflightResult;
+  const { model, rules, reservation } = preflightResult;
+  const reservedMinor = reservation?.reservedMinor ?? 0;
   const actor = actorForChatContext(ctx);
   const start = Date.now();
+  const gatewayRequestId = newGatewayRequestId();
 
   if (!stream) {
     try {
@@ -249,28 +263,25 @@ publicOpenAI.post("/v1/chat/completions", async (c) => {
       // analytics only (priceMinor 0). Attributed + customer paths bill
       // normally via the resolved customer.
       const priceMinor = ctx.kind === "management_internal" ? 0 : charges.priceMinor;
-      try {
-        await settleUsage({
-          orgId,
-          actor,
-          model,
-          entry: outcome.entry,
-          provider: outcome.provider,
-          protocol: "openai",
-          usage: outcome.response.usage,
-          costMinor: charges.costMinor,
-          priceMinor,
-          currency: charges.currency,
-          providerRequestId: outcome.response.providerRequestId,
-          status: 200,
-          durationMs,
-          rules,
-        });
-      } catch (settleErr) {
-        // The upstream call already succeeded; a settlement failure must not
-        // turn a 200 into a 502. Log so it can be reconciled (dxe).
-        console.error("[chat/completions] settlement failed (non-stream):", settleErr);
-      }
+      // Business settle failures enqueue outbox (return settled:false).
+      // Enqueue failures throw and become 502 — never log-only free settle.
+      await settleUsageOrOutbox({
+        orgId,
+        actor,
+        model,
+        entry: outcome.entry,
+        provider: outcome.provider,
+        protocol: "openai",
+        response: outcome.response,
+        providerRequestId: outcome.response.providerRequestId,
+        gatewayRequestId,
+        status: 200,
+        durationMs,
+        rules,
+        priceMinorOverride: priceMinor,
+        occurredAt: new Date(start),
+        reservedMinor,
+      });
 
       const r = outcome.response;
       return c.json({
@@ -296,6 +307,7 @@ publicOpenAI.post("/v1/chat/completions", async (c) => {
         },
       });
     } catch (err) {
+      await releasePreFlightReservation(reservation);
       if (err instanceof BillingError) {
         return c.json(formatOpenAIError(err.code, err.message, err.extra), err.status as 400 | 402 | 403 | 404 | 429 | 502);
       }
@@ -316,9 +328,18 @@ publicOpenAI.post("/v1/chat/completions", async (c) => {
   let reasoningTokens = 0;
   let cacheReadTokens = 0;
   let cacheWriteTokens = 0;
+  /** Provider-reported total from chunk.usage (may exceed prompt+completion). */
+  let reportedTotalTokens: number | undefined;
+  let cacheAccounting = cacheAccountingForProtocol("openai");
   let finishReason = "stop";
   let activeEntry: import("@tokenpanel/db").ModelEntryDoc | null = null;
-  let activeProviderId: import("mongodb").ObjectId | null = null;
+  // Retain the yielded ProviderDoc (do not re-fetch — concurrent delete would
+  // silently skip settlement/outbox).
+  let activeProvider: import("@tokenpanel/db").ProviderDoc | null = null;
+  /** Only true when adapter observed OpenAI `[DONE]` (not truncated EOF). */
+  let streamComplete = false;
+  /** Exactly one terminal error event per stream (yielded, truncation, or catch). */
+  let terminalErrorEmitted = false;
 
   const streamGen = streamWithFallback({ orgId, model, request });
   const encoder = new TextEncoder();
@@ -328,10 +349,15 @@ publicOpenAI.post("/v1/chat/completions", async (c) => {
       const enqueue = (obj: unknown) => {
         controller.enqueue(encoder.encode(`data: ${JSON.stringify(obj)}\n\n`));
       };
+      const enqueueTerminalError = (code: string, message: string) => {
+        if (terminalErrorEmitted) return;
+        terminalErrorEmitted = true;
+        enqueue(formatOpenAIError(code, message));
+      };
       try {
         for await (const { entry, provider, chunk } of streamGen) {
           activeEntry = entry;
-          activeProviderId = provider._id;
+          activeProvider = provider;
           if (chunk.type === "delta") {
             const delta: Record<string, unknown> = {};
             if (chunk.delta?.content !== undefined) delta.content = chunk.delta.content;
@@ -345,68 +371,138 @@ publicOpenAI.post("/v1/chat/completions", async (c) => {
               choices: [{ index: 0, delta, finish_reason: null }],
             });
           } else if (chunk.type === "done") {
+            if (chunk.streamComplete) streamComplete = true;
             if (chunk.finishReason) finishReason = chunk.finishReason;
-            if (chunk.usage) {
+            if (chunk.streamComplete && chunk.usage) {
               promptTokens = chunk.usage.promptTokens;
               completionTokens = chunk.usage.completionTokens;
               reasoningTokens = chunk.usage.reasoningTokens ?? 0;
               cacheReadTokens = chunk.usage.cacheReadTokens ?? 0;
               cacheWriteTokens = chunk.usage.cacheWriteTokens ?? 0;
+              // Retain provider total (e.g. 10+5 with total 20) for the normalizer.
+              reportedTotalTokens =
+                typeof chunk.usage.totalTokens === "number"
+                  ? chunk.usage.totalTokens
+                  : undefined;
+              if (
+                chunk.usage.cacheAccounting === "subset" ||
+                chunk.usage.cacheAccounting === "additive"
+              ) {
+                cacheAccounting = chunk.usage.cacheAccounting;
+              }
             }
           } else if (chunk.type === "error") {
-            enqueue(formatOpenAIError("upstream_error", chunk.error?.message ?? "stream error"));
+            enqueueTerminalError(
+              "upstream_error",
+              chunk.error?.message ?? "stream error",
+            );
           }
         }
-        enqueue({
-          id, object: "chat.completion.chunk", created, model: body.model,
-          choices: [{ index: 0, delta: {}, finish_reason: finishReason }],
+        // Mode-correct total: prefer provider total, never undercount additive cache.
+        // null = overflow / unsafe — fail-closed for settlement below.
+        const normalizedTotal = normalizeProcessedTotalTokens({
+          promptTokens,
+          completionTokens,
+          cacheReadTokens,
+          cacheWriteTokens,
+          totalTokens: reportedTotalTokens,
+          cacheAccounting,
         });
-        if (promptTokens > 0 || completionTokens > 0) {
+        if (!streamComplete) {
+          // Truncated / failed stream: emit error only — never finish_reason
+          // "error" + [DONE]. Skip if an upstream error chunk already terminalled.
+          enqueueTerminalError(
+            "stream_truncated",
+            "Upstream stream ended without a terminal event; response may be incomplete",
+          );
+        } else {
           enqueue({
             id, object: "chat.completion.chunk", created, model: body.model,
-            choices: [],
-            usage: {
-              prompt_tokens: promptTokens,
-              completion_tokens: completionTokens,
-              total_tokens: promptTokens + completionTokens,
-              ...(reasoningTokens > 0 ? { reasoning_tokens: reasoningTokens } : {}),
-              ...(cacheReadTokens > 0 ? { prompt_tokens_details: { cached_tokens: cacheReadTokens } } : {}),
-            },
+            choices: [{ index: 0, delta: {}, finish_reason: finishReason }],
           });
+          if (promptTokens > 0 || completionTokens > 0) {
+            enqueue({
+              id, object: "chat.completion.chunk", created, model: body.model,
+              choices: [],
+              usage: {
+                prompt_tokens: promptTokens,
+                completion_tokens: completionTokens,
+                total_tokens: normalizedTotal ?? 0,
+                ...(reasoningTokens > 0 ? { reasoning_tokens: reasoningTokens } : {}),
+                ...(cacheReadTokens > 0 ? { prompt_tokens_details: { cached_tokens: cacheReadTokens } } : {}),
+              },
+            });
+          }
+          controller.enqueue(encoder.encode("data: [DONE]\n\n"));
         }
-        controller.enqueue(encoder.encode("data: [DONE]\n\n"));
       } catch (err) {
-        enqueue(formatOpenAIError("upstream_error", err instanceof Error ? err.message : "stream failed"));
+        // Error path: no success-style finish_reason / [DONE]. One terminal only.
+        enqueueTerminalError(
+          "upstream_error",
+          err instanceof Error ? err.message : "stream failed",
+        );
       } finally {
         controller.close();
         const durationMs = Date.now() - start;
-        const totalTokens = promptTokens + completionTokens;
-        const usage = { promptTokens, completionTokens, reasoningTokens, cacheReadTokens, cacheWriteTokens, totalTokens };
-        if (activeEntry && activeProviderId && (promptTokens > 0 || completionTokens > 0)) {
+        const normalizedTotal = normalizeProcessedTotalTokens({
+          promptTokens,
+          completionTokens,
+          cacheReadTokens,
+          cacheWriteTokens,
+          totalTokens: reportedTotalTokens,
+          cacheAccounting,
+        });
+        const usage = {
+          promptTokens,
+          completionTokens,
+          reasoningTokens,
+          cacheReadTokens,
+          cacheWriteTokens,
+          totalTokens: normalizedTotal ?? 0,
+          cacheAccounting,
+        };
+        // Always settle or outbox when a provider attempt yielded context.
+        if (activeEntry && activeProvider) {
           try {
-            const db = await getDb();
-            const providerDoc = await db.providers.findOne({ _id: activeProviderId });
-            if (providerDoc && activeEntry) {
-              const charges = computeCharges({ entry: activeEntry, model, usage });
-              const priceMinor = ctx.kind === "management_internal" ? 0 : charges.priceMinor;
-              await settleUsage({
-                orgId,
-                actor,
-                model,
-                entry: activeEntry,
-                provider: providerDoc,
-                protocol: "openai",
-                usage,
-                costMinor: charges.costMinor,
-                priceMinor,
-                currency: charges.currency,
-                status: 200,
-                durationMs,
-                rules,
-              });
-            }
+            const charges = computeCharges({
+              entry: activeEntry,
+              model,
+              usage,
+              cacheAccounting,
+            });
+            const priceMinor =
+              ctx.kind === "management_internal" ? 0 : charges.priceMinor;
+            const hasAuthoritativeUsage =
+              streamComplete &&
+              normalizedTotal !== null &&
+              (promptTokens > 0 || completionTokens > 0);
+            await settleUsageOrOutbox({
+              orgId,
+              actor,
+              model,
+              entry: activeEntry,
+              provider: activeProvider,
+              protocol: "openai",
+              gatewayRequestId,
+              providerUsage: hasAuthoritativeUsage
+                ? { status: "reported", usage }
+                : {
+                    status: "missing",
+                    reason: !streamComplete
+                      ? "stream_truncated"
+                      : normalizedTotal === null
+                        ? "usage_overflow"
+                        : "stream_usage_absent",
+                  },
+              status: 200,
+              durationMs,
+              rules,
+              priceMinorOverride: priceMinor,
+              occurredAt: new Date(start),
+              reservedMinor,
+            });
           } catch (settleErr) {
-            console.error("[chat/completions] settlement failed (stream):", settleErr);
+            console.error("[chat/completions] stream settlement/outbox failed:", settleErr);
           }
         }
       }

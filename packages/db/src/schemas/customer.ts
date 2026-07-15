@@ -3,6 +3,7 @@ import {
   objectId,
   objectIdFromString,
   money,
+  customerBalance,
   moneyMinor,
   currencyCode,
   timestampFields,
@@ -18,8 +19,12 @@ export const customerDoc = z.object({
   externalId: z.string().max(128).nullish(),
   name: z.string().min(1).max(160),
   email: z.string().email().max(254).nullish(),
-  /** Prepaid balance in minor units + currency. */
-  balance: money.default({ amountMinor: 0, currency: "USD" }),
+  /** Prepaid balance in minor units + currency (+ optional canary reservedMinor). */
+  balance: customerBalance.default({
+    amountMinor: 0,
+    reservedMinor: 0,
+    currency: "USD",
+  }),
   status: z.enum(["active", "suspended", "closed"]).default("active"),
   metadata: z.record(z.string(), z.unknown()).default(() => ({})),
   ...timestampFields,

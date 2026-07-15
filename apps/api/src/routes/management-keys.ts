@@ -3,17 +3,23 @@ import { z } from "zod";
 import { zValidator } from "@hono/zod-validator";
 import { ObjectId } from "mongodb";
 import type { Filter } from "mongodb";
+import { MANAGEMENT_SCOPES_META } from "@tokenpanel/contracts";
 import {
   getDb,
   managementApiKeyDoc,
   managementApiKeyCreateInput,
   managementApiKeyUpdateInput,
   type ManagementApiKeyDoc,
-  type ManagementScope,
 } from "@tokenpanel/db";
 import { requireAuth, requireRole, type AuthVariables } from "../middleware/auth.ts";
-import { hashToken, randomToken, isDuplicateKeyError } from "../lib/crypto.ts";
-import { PREFIX_LENGTH as PUBLIC_PREFIX_LENGTH } from "../middleware/public-auth.ts";
+import {
+  MANAGEMENT_KEY_PREFIX_LITERAL,
+  API_KEY_LOOKUP_PREFIX_CHARS,
+  issueApiKeyWithRetry,
+} from "../services/api-key-issuer.ts";
+import { parseObjectIdParam } from "./route-utils.ts";
+
+export { MANAGEMENT_SCOPES_META };
 
 const managementKeyRoutes = new Hono<{ Variables: AuthVariables }>();
 
@@ -23,16 +29,13 @@ const managementKeyRoutes = new Hono<{ Variables: AuthVariables }>();
 managementKeyRoutes.use("*", requireAuth, requireRole("admin"));
 
 /** Literal `tp_mgmt_` prefix for management API keys. */
-export const KEY_PREFIX_LITERAL = "tp_mgmt_";
+export const KEY_PREFIX_LITERAL = MANAGEMENT_KEY_PREFIX_LITERAL;
 /**
  * Lookup prefix length — matches the public auth dispatcher's PREFIX_LENGTH so
  * a single slice(0, N) on either key kind resolves to the right doc.
  * 8 literal + 8 random hex ≈ 4.3B prefix combos.
  */
-export const PREFIX_LENGTH = PUBLIC_PREFIX_LENGTH;
-
-/** Max regeneration attempts when a generated prefix collides with an existing one. */
-const MAX_PREFIX_RETRIES = 5;
+export const PREFIX_LENGTH = API_KEY_LOOKUP_PREFIX_CHARS;
 
 type StrippedManagementKey = Omit<ManagementApiKeyDoc, "keyHash"> & { hasKey: true };
 
@@ -42,10 +45,7 @@ export function stripKey(doc: ManagementApiKeyDoc): StrippedManagementKey {
   return { ...rest, hasKey: true };
 }
 
-export function parseObjectIdParam(id: string): ObjectId | null {
-  if (!ObjectId.isValid(id)) return null;
-  return new ObjectId(id);
-}
+export { parseObjectIdParam };
 
 const listQuerySchema = z.object({
   status: z.enum(["active", "revoked"]).optional(),
@@ -75,58 +75,37 @@ managementKeyRoutes.post(
     const body = c.req.valid("json");
     const db = await getDb();
 
-    // Build the secret: prefix literal + 24 random hex bytes. The prefix is
-    // exactly PREFIX_LENGTH chars so the auth dispatcher can slice(0, N) on
-    // either key kind without knowing which kind it is. Full key is returned
-    // exactly once; only prefix + hash persist.
-    //
-    // Retry on a prefix-collision against the unique index so an operator
-    // never sees a 500 from a vanishingly-rare birthday collision. With 16
-    // hex chars of entropy (16^8 ≈ 4.3B combos) the probability of even one
-    // collision across thousands of keys is < 1e-6, but we handle it anyway
-    // — the cost is one extra hash per retry, the benefit is deterministic
-    // creation semantics.
+    // Key material + bounded unique-prefix retry: services/api-key-issuer.ts
     const now = new Date();
-    let attempt = 0;
-    let created: { doc: ManagementApiKeyDoc; fullKey: string } | null = null;
-    while (attempt < MAX_PREFIX_RETRIES) {
-      attempt += 1;
-      const tokenPart = randomToken(24);
-      const fullKey = `${KEY_PREFIX_LITERAL}${tokenPart}`;
-      const prefix = fullKey.slice(0, PREFIX_LENGTH);
-      const keyHash = hashToken(fullKey);
-
-      const doc: ManagementApiKeyDoc = managementApiKeyDoc.parse({
-        _id: new ObjectId(),
-        organizationId: orgId,
-        name: body.name,
-        prefix,
-        keyHash,
-        scopes: body.scopes,
-        status: "active",
-        lastUsedAt: null,
-        createdAt: now,
-        updatedAt: now,
-      });
-
-      try {
+    let createdDoc: ManagementApiKeyDoc | null = null;
+    const result = await issueApiKeyWithRetry({
+      literal: KEY_PREFIX_LITERAL,
+      insert: async (issued) => {
+        const doc: ManagementApiKeyDoc = managementApiKeyDoc.parse({
+          _id: new ObjectId(),
+          organizationId: orgId,
+          name: body.name,
+          prefix: issued.prefix,
+          keyHash: issued.keyHash,
+          scopes: body.scopes,
+          status: "active",
+          lastUsedAt: null,
+          createdAt: now,
+          updatedAt: now,
+        });
         await db.managementApiKeys.insertOne(doc);
-        created = { doc, fullKey };
-        break;
-      } catch (err) {
-        if (isDuplicateKeyError(err)) continue;
-        throw err;
-      }
-    }
+        createdDoc = doc;
+      },
+    });
 
-    if (!created) {
-      // Exhausted retries — astronomically unlikely (would require 5
-      // consecutive 16-hex-char collisions), but surface a clear error
-      // rather than succeeding with a non-unique key.
+    if (!result.ok || !createdDoc) {
       return c.json({ error: "prefix_collision" }, 503);
     }
 
-    return c.json({ managementKey: stripKey(created.doc), key: created.fullKey }, 201);
+    return c.json(
+      { managementKey: stripKey(createdDoc), key: result.issued.fullKey },
+      201,
+    );
   },
 );
 
@@ -188,18 +167,6 @@ managementKeyRoutes.delete("/:id", async (c) => {
 
   return c.json({ ok: true, status: updated.status });
 });
-
-export const MANAGEMENT_SCOPES_META: readonly { scope: ManagementScope; group: string; description: string }[] = [
-  { scope: "models:read", group: "Models", description: "List models and read capabilities / pricing." },
-  { scope: "customers:read", group: "Customers", description: "Look up customers by email and read their details." },
-  { scope: "customers:write", group: "Customers", description: "Create / update / suspend / reactivate customers." },
-  { scope: "balances:read", group: "Balances", description: "Read customer balance and ledger history." },
-  { scope: "balances:write", group: "Balances", description: "Top up / adjust / refund customer balances." },
-  { scope: "usage:read", group: "Usage", description: "Read per-customer usage summaries." },
-  { scope: "plans:read", group: "Plans", description: "List subscription plans." },
-  { scope: "subscriptions:write", group: "Plans", description: "Assign / change a customer's subscription plan." },
-  { scope: "chat:write", group: "Chat", description: "Call /v1/chat/completions and /v1/messages." },
-];
 
 managementKeyRoutes.get("/__scopes/meta", (c) => {
   return c.json({ items: MANAGEMENT_SCOPES_META });

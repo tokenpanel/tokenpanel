@@ -7,6 +7,7 @@ import type { AuthVariables } from "../middleware/auth.ts";
 import { requireAuth, requireRole } from "../middleware/auth.ts";
 import { hashPassword, verifyPassword, randomToken, hashToken, signJwt } from "../lib/crypto.ts";
 import { inviteThrottle } from "../lib/throttle.ts";
+import { requireJwtSecret } from "../config/state.ts";
 
 const inviteRoutes = new Hono<{ Variables: AuthVariables }>();
 
@@ -98,8 +99,12 @@ acceptInviteRoute.post("/accept-invite", zValidator("json", acceptBody), async (
     return c.json({ error: "expired" }, 410);
   }
 
-  const secret = process.env.JWT_SECRET;
-  if (!secret) return c.json({ error: "server_misconfigured" }, 500);
+  let secret: string;
+  try {
+    secret = requireJwtSecret();
+  } catch {
+    return c.json({ error: "server_misconfigured" }, 500);
+  }
 
   const now = new Date();
   const orgId = invite.organizationId;

@@ -16,6 +16,9 @@ import {
   buildAdapterContext,
   type DiscoveredModel,
 } from "../providers/index.ts";
+import { parseObjectIdParam } from "./route-utils.ts";
+
+export { parseObjectIdParam };
 
 type ProviderResponse = Omit<ProviderDoc, "apiKeyEncrypted"> & {
   hasApiKey: boolean;
@@ -25,11 +28,6 @@ export function maskProvider(doc: ProviderDoc): ProviderResponse {
   const { apiKeyEncrypted, ...rest } = doc;
   void apiKeyEncrypted;
   return { ...rest, hasApiKey: true };
-}
-
-export function parseObjectIdParam(id: string): ObjectId | null {
-  if (!ObjectId.isValid(id)) return null;
-  return new ObjectId(id);
 }
 
 export const providerRoutes = new Hono<{ Variables: AuthVariables }>();

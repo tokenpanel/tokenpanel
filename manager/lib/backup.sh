@@ -38,17 +38,24 @@ create_backup() {
 
   info "database: ${data_size_mb}MB data + ${index_size_mb}MB indexes = ${total_db_mb}MB total"
 
-  estimated_backup_mb=$((total_db_mb * 30 / 100))
-  [ "$estimated_backup_mb" -lt 1 ] && estimated_backup_mb=1
-  info "estimated backup (compressed): ~${estimated_backup_mb}MB"
+  # Conservative headroom: assume dump can approach full data+index size
+  # (compression is not guaranteed for already-compressed / binary-heavy data).
+  # Require 1× dump + 1× verify copy + 2GB free-space floor for live Mongo.
+  local estimated_backup_mb free_floor_mb free_mb required_mb
+  if [ "$total_db_mb" -gt 0 ]; then
+    estimated_backup_mb="$total_db_mb"
+  else
+    estimated_backup_mb=64
+  fi
+  free_floor_mb=2048
+  info "conservative backup budget: ~${estimated_backup_mb}MB (uncompressed upper bound)"
 
-  local free_mb required_mb
   free_mb="$(df -m "$BACKUP_DIR" 2>/dev/null | tail -1 | awk '{print $4}')"
-  required_mb=$((estimated_backup_mb * 2 + 1024))
+  required_mb=$((estimated_backup_mb * 2 + free_floor_mb))
 
   if [ "${free_mb:-0}" -lt "$required_mb" ]; then
     err "insufficient disk space: ${free_mb}MB free, need ~${required_mb}MB"
-    err "(backup ~${estimated_backup_mb}MB x2 for verify + 1GB margin)"
+    err "(dump upper bound ~${estimated_backup_mb}MB x2 + ${free_floor_mb}MB floor)"
     return 1
   fi
   ok "disk: ${free_mb}MB free, need ~${required_mb}MB — ok"

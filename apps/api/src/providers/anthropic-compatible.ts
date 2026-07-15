@@ -7,8 +7,27 @@ import type {
   ProviderAdapter,
   StreamChunk,
 } from "./types.ts";
+import {
+  parseAnthropicProviderUsage,
+  parseAnthropicStreamUsageFragment,
+  mergeAnthropicStreamUsage,
+  isAnthropicStreamUsageComplete,
+  toTokenUsage,
+  ZERO_USAGE,
+  type ProviderUsage,
+  type AnthropicStreamUsageAccum,
+} from "./provider-usage.ts";
+
+// Re-export for tests that historically imported merge from this module.
+export { mergeAnthropicStreamUsage, isAnthropicStreamUsageComplete } from "./provider-usage.ts";
+import {
+  providerHttpError,
+  publicProviderErrorMessage,
+  ProviderError,
+} from "./provider-errors.ts";
 
 const ANTHROPIC_VERSION = "2023-06-01";
+/** Non-authoritative discovery fallback when upstream omits context (not billing). */
 const ANTHROPIC_DEFAULT_CONTEXT = 200_000;
 const ANTHROPIC_DEFAULT_MAX_TOKENS = 4096;
 
@@ -137,20 +156,13 @@ export function buildBody(req: ChatRequest, stream: boolean): Record<string, unk
 }
 
 export function mapUsage(u: unknown): ChatResponse["usage"] {
-  if (!u || typeof u !== "object") {
-    return { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
-  }
-  const o = u as Record<string, unknown>;
-  const promptTokens = num(o.input_tokens) ?? 0;
-  const completionTokens = num(o.output_tokens) ?? 0;
-  return {
-    promptTokens,
-    completionTokens,
-    reasoningTokens: num(o.reasoning_tokens),
-    cacheReadTokens: num(o.cache_read_input_tokens) ?? num(o.cache_read_tokens),
-    cacheWriteTokens: num(o.cache_creation_input_tokens) ?? num(o.cache_creation_tokens),
-    totalTokens: promptTokens + completionTokens,
-  };
+  const r = parseAnthropicProviderUsage(u);
+  if (r.status === "missing") return { ...ZERO_USAGE };
+  return r.usage;
+}
+
+export function parseAnthropicUsageResult(u: unknown): ProviderUsage {
+  return parseAnthropicProviderUsage(u);
 }
 
 function stopReasonToFinishReason(sr: unknown): string {
@@ -224,11 +236,17 @@ export function createAnthropicCompatibleAdapter(): ProviderAdapter {
         signal: req.signal ?? ctx.signal,
       });
       if (!res.ok) {
-        throw new Error(`anthropic chatComplete ${res.status}: ${await safeText(res)}`);
+        throw providerHttpError(
+          res.status,
+          await safeText(res),
+          "request",
+          "anthropic chatComplete",
+        );
       }
       const json = (await res.json()) as Record<string, unknown>;
       const id = str(json.id) ?? cryptoRandomId();
       const message = assembleMessage(json);
+      const usageResult = parseAnthropicUsageResult(json.usage);
       return {
         id,
         model: str(json.model) ?? req.model,
@@ -239,7 +257,13 @@ export function createAnthropicCompatibleAdapter(): ProviderAdapter {
             finishReason: stopReasonToFinishReason(json.stop_reason),
           },
         ],
-        usage: mapUsage(json.usage),
+        usage:
+          usageResult.status === "reported"
+            ? usageResult.usage
+            : { ...ZERO_USAGE },
+        usageStatus: usageResult.status,
+        usageMissingReason:
+          usageResult.status === "missing" ? usageResult.reason : undefined,
         providerRequestId: res.headers.get("request-id") ?? id,
       };
     },
@@ -251,18 +275,69 @@ export function createAnthropicCompatibleAdapter(): ProviderAdapter {
         body: JSON.stringify(buildBody(req, true)),
         signal: req.signal ?? ctx.signal,
       });
-      if (!res.ok || !res.body) {
-        yield { type: "error", error: { code: `http_${res.status}`, message: await safeText(res) } };
-        return;
+      if (!res.ok) {
+        throw providerHttpError(
+          res.status,
+          await safeText(res),
+          "headers",
+          "anthropic streamChat",
+        );
+      }
+      if (!res.body) {
+        throw providerHttpError(502, "empty body", "headers", "anthropic streamChat");
       }
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
       let finishReason: string | undefined;
-      let lastUsage: ChatResponse["usage"] | undefined;
+      let lastUsage: AnthropicStreamUsageAccum | undefined;
+      let sawMessageStop = false;
+      let sawMalformedSse = false;
+      // Any present-but-unparseable usage fragment invalidates final usage even
+      // if an earlier fragment looked complete (stale billable counts).
+      let sawMalformedUsage = false;
+
+      /**
+       * Merge a usage fragment. **Any** present `usage` value that cannot be
+       * merged as a valid fragment invalidates final settlement — including
+       * non-objects (`"bad"`), empty objects, and auxiliary-only payloads.
+       * Prior complete 10/5 must not remain billable after a later bad usage.
+       */
+      const mergeStreamUsageOrFlagMalformed = (raw: unknown): void => {
+        // Present but non-object (string/number/null/array) → invalid.
+        if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+          sawMalformedUsage = true;
+          return;
+        }
+        const frag = parseAnthropicStreamUsageFragment(raw);
+        if (!frag) {
+          // Object present but not a usable input/output fragment (empty,
+          // auxiliary-only, or malformed numbers) → fail closed.
+          sawMalformedUsage = true;
+          return;
+        }
+        lastUsage = mergeAnthropicStreamUsage(lastUsage, frag);
+      };
+
       try {
         while (true) {
-          const { value, done } = await reader.read();
+          let value: Uint8Array | undefined;
+          let done: boolean;
+          try {
+            ({ value, done } = await reader.read());
+          } catch (err) {
+            // Body read after headers: upstream may have accepted. Never failover.
+            throw new ProviderError({
+              message: publicProviderErrorMessage("anthropic streamChat"),
+              category: "connection",
+              phase: "body",
+              fallbackEligible: false,
+              maybeAcceptedUpstream: true,
+              retryable: false,
+              diagnostic:
+                err instanceof Error ? err.message.slice(0, 500) : String(err),
+            });
+          }
           if (done) break;
           buffer += decoder.decode(value, { stream: true });
           let sep: number;
@@ -279,6 +354,8 @@ export function createAnthropicCompatibleAdapter(): ProviderAdapter {
             try {
               evt = JSON.parse(payload) as Record<string, unknown>;
             } catch {
+              // Malformed SSE: fail closed — never treat stream as complete.
+              sawMalformedSse = true;
               continue;
             }
             const type = str(evt.type);
@@ -286,7 +363,10 @@ export function createAnthropicCompatibleAdapter(): ProviderAdapter {
             switch (type) {
               case "message_start": {
                 const msg = evt.message as Record<string, unknown> | undefined;
-                if (msg?.usage) lastUsage = mapUsage(msg.usage);
+                // Key present (even null/string/"bad") must be validated — not only truthy objects.
+                if (msg && "usage" in msg) {
+                  mergeStreamUsageOrFlagMalformed(msg.usage);
+                }
                 break;
               }
               case "content_block_start": {
@@ -320,10 +400,15 @@ export function createAnthropicCompatibleAdapter(): ProviderAdapter {
               case "message_delta": {
                 const delta = evt.delta as Record<string, unknown> | undefined;
                 if (delta?.stop_reason) finishReason = stopReasonToFinishReason(delta.stop_reason);
-                if (evt.usage) lastUsage = mapUsage(evt.usage);
+                // Key present (even null/string/"bad") must invalidate, not be ignored.
+                if ("usage" in evt) {
+                  mergeStreamUsageOrFlagMalformed(evt.usage);
+                }
                 break;
               }
               case "message_stop":
+                sawMessageStop = true;
+                break;
               case "ping":
               default:
                 break;
@@ -333,7 +418,29 @@ export function createAnthropicCompatibleAdapter(): ProviderAdapter {
       } finally {
         reader.releaseLock();
       }
-      yield { type: "done", finishReason, ...(lastUsage ? { usage: lastUsage } : {}) };
+      if (sawMalformedSse) {
+        yield {
+          type: "error",
+          error: {
+            code: "malformed_sse",
+            message: "Upstream stream contained malformed SSE JSON",
+          },
+        };
+      }
+      // EOF without message_stop, or malformed SSE/usage, or incomplete sides:
+      // not authoritative for settlement (routes check streamComplete + usage).
+      const streamOk =
+        sawMessageStop && !sawMalformedSse && !sawMalformedUsage;
+      const usage =
+        streamOk && isAnthropicStreamUsageComplete(lastUsage)
+          ? toTokenUsage(lastUsage)
+          : undefined;
+      yield {
+        type: "done",
+        finishReason,
+        streamComplete: streamOk,
+        ...(usage ? { usage } : {}),
+      };
     },
   };
 }

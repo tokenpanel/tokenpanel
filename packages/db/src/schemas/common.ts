@@ -1,9 +1,17 @@
 import { ObjectId } from "mongodb";
 import { z } from "zod";
+import {
+  modelModalitySchema,
+  modelModalitiesSchema,
+  modelStatusSchema,
+  type ModelModalities,
+  type ModelStatus,
+} from "@tokenpanel/contracts";
 
 /**
  * Shared zod primitives for MongoDB documents.
  * Stored documents use real ObjectId + Date instances; input variants coerce.
+ * Cross-runtime product enums (modality, status) live in @tokenpanel/contracts.
  */
 
 export const objectId = z.instanceof(ObjectId);
@@ -38,13 +46,37 @@ export const currencyCode = z
 /** Non-negative decimal money amount stored as integer minor units (cents). */
 export const moneyMinor = z.number().int().nonnegative();
 
-/** A 2-tuple price expressed in minor units + currency. */
+/**
+ * Non-negative token / counter counts bounded to Number.MAX_SAFE_INTEGER.
+ * Rejects unsafe integers that would poison analytics or rate-limit sums.
+ */
+export const tokenCount = z
+  .number()
+  .int()
+  .nonnegative()
+  .max(Number.MAX_SAFE_INTEGER);
+
+/** A 2-tuple price expressed in minor units + currency (top-ups, plan credit). */
 export const money = z.object({
   amountMinor: moneyMinor,
   currency: currencyCode,
 });
 
 export type Money = z.infer<typeof money>;
+
+/**
+ * Customer prepaid balance with optional canary hold (ADR 001).
+ * - `amountMinor`: ledger cash on hand (debits reduce this).
+ * - `reservedMinor`: holds from atomic reservation (default 0). Available =
+ *   amountMinor - reservedMinor. Missing field reads as 0 at runtime.
+ */
+export const customerBalance = z.object({
+  amountMinor: moneyMinor,
+  reservedMinor: moneyMinor.default(0),
+  currency: currencyCode,
+});
+
+export type CustomerBalance = z.infer<typeof customerBalance>;
 
 /**
  * Per-token price schedule. All values are integer minor units PER MILLION
@@ -74,25 +106,14 @@ export const tokenLimits = z.object({
 
 export type TokenLimits = z.infer<typeof tokenLimits>;
 
-/** Supported modalities per models.dev. */
-export const modalitySchema = z.enum([
-  "text",
-  "image",
-  "audio",
-  "video",
-  "pdf",
-]);
+/** Supported modalities per models.dev — owned by @tokenpanel/contracts. */
+export const modalitySchema = modelModalitySchema;
+export const modalities = modelModalitiesSchema;
+export type Modalities = ModelModalities;
 
-export const modalities = z.object({
-  input: z.array(modalitySchema),
-  output: z.array(modalitySchema),
-});
-
-export type Modalities = z.infer<typeof modalities>;
-
-/** Model lifecycle status. */
-export const modelStatus = z.enum(["alpha", "beta", "deprecated", "ga"]);
-export type ModelStatus = z.infer<typeof modelStatus>;
+/** Model lifecycle status — owned by @tokenpanel/contracts. */
+export const modelStatus = modelStatusSchema;
+export type { ModelStatus };
 
 /**
  * Interleaved reasoning config: the response field that carries reasoning

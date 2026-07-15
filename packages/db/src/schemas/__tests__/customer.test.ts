@@ -19,7 +19,7 @@ test("customerDoc applies defaults: balance 0 USD, status active, metadata {}", 
     createdAt: new Date(),
     updatedAt: new Date(),
   });
-  expect(r.balance).toEqual({ amountMinor: 0, currency: "USD" });
+  expect(r.balance).toEqual({ amountMinor: 0, reservedMinor: 0, currency: "USD" });
   expect(r.status).toBe("active");
   expect(r.metadata).toEqual({});
   expect(r.externalId).toBeUndefined();

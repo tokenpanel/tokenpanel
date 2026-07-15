@@ -134,7 +134,11 @@ test("parseUsage: maps OpenAI usage fields, defaults to 0, sums total", () => {
   expect(parseUsage(null)).toEqual({ promptTokens: 0, completionTokens: 0, totalTokens: 0 });
   expect(parseUsage({})).toEqual({ promptTokens: 0, completionTokens: 0, totalTokens: 0 });
   const u = parseUsage({ prompt_tokens: 100, completion_tokens: 50, total_tokens: 150 });
-  expect(u).toEqual({ promptTokens: 100, completionTokens: 50, totalTokens: 150 });
+  expect(u.promptTokens).toBe(100);
+  expect(u.completionTokens).toBe(50);
+  expect(u.totalTokens).toBe(150);
+  // Adapter stamps subset mode for OpenAI-compatible billing.
+  expect(u.cacheAccounting).toBe("subset");
 });
 
 test("parseUsage: extracts cache tokens from prompt_tokens_details.cached_tokens", () => {
@@ -318,26 +322,207 @@ test("adapter.streamChat: parses SSE data lines, yields deltas + done chunk", as
     const types = chunks.map((c) => (c as { type: string }).type);
     expect(types.filter((t) => t === "delta")).toHaveLength(2);
     expect(types[types.length - 1]).toBe("done");
-    const done = chunks[chunks.length - 1] as { type: string; finishReason?: string; usage?: { promptTokens: number } };
+    const done = chunks[chunks.length - 1] as {
+      type: string;
+      finishReason?: string;
+      usage?: { promptTokens: number };
+      streamComplete?: boolean;
+    };
     expect(done.finishReason).toBe("stop");
+    expect(done.streamComplete).toBe(true);
     expect(done.usage?.promptTokens).toBe(2);
   } finally {
     globalThis.fetch = origFetch;
   }
 });
 
-test("adapter.streamChat: yields error chunk on non-2xx", async () => {
+test("adapter.streamChat: EOF without [DONE] is streamComplete false and drops usage", async () => {
+  const sse = [
+    `data: {"id":"1","choices":[{"delta":{"content":"hi"}}]}`,
+    `data: {"usage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3}}`,
+    "",
+  ].join("\n");
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    new Response(sse, {
+      status: 200,
+      headers: { "content-type": "text/event-stream" },
+    })) as unknown as typeof fetch;
+  try {
+    const chunks: Array<{ type: string; streamComplete?: boolean; usage?: unknown }> = [];
+    for await (const c of createOpenAICompatibleAdapter().streamChat(ctx(), {
+      model: "x",
+      messages: [],
+    })) {
+      chunks.push(c as { type: string; streamComplete?: boolean; usage?: unknown });
+    }
+    const done = chunks[chunks.length - 1];
+    expect(done?.type).toBe("done");
+    expect(done?.streamComplete).toBe(false);
+    expect(done?.usage).toBeUndefined();
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+test("adapter.streamChat: usage:null after reported invalidates (no stale 10/5)", async () => {
+  // Valid 10/5 then usage:null then [DONE] must not settle stale usage.
+  const sse = [
+    `data: {"id":"1","choices":[{"delta":{"content":"hi"}}]}`,
+    `data: {"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}`,
+    `data: {"usage":null,"choices":[{"delta":{},"finish_reason":"stop"}]}`,
+    `data: [DONE]`,
+    "",
+  ].join("\n");
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    new Response(sse, {
+      status: 200,
+      headers: { "content-type": "text/event-stream" },
+    })) as unknown as typeof fetch;
+  try {
+    const chunks: Array<{
+      type: string;
+      streamComplete?: boolean;
+      usage?: unknown;
+    }> = [];
+    for await (const c of createOpenAICompatibleAdapter().streamChat(ctx(), {
+      model: "x",
+      messages: [],
+    })) {
+      chunks.push(c as { type: string; streamComplete?: boolean; usage?: unknown });
+    }
+    const done = chunks[chunks.length - 1];
+    expect(done?.type).toBe("done");
+    expect(done?.streamComplete).toBe(false);
+    expect(done?.usage).toBeUndefined();
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+test("adapter.streamChat: pre-final usage:null does not clear later report", async () => {
+  const sse = [
+    `data: {"id":"1","choices":[{"delta":{"content":"hi"}}],"usage":null}`,
+    `data: {"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15},"choices":[{"delta":{},"finish_reason":"stop"}]}`,
+    `data: [DONE]`,
+    "",
+  ].join("\n");
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    new Response(sse, {
+      status: 200,
+      headers: { "content-type": "text/event-stream" },
+    })) as unknown as typeof fetch;
+  try {
+    let done: { streamComplete?: boolean; usage?: { promptTokens?: number } } | undefined;
+    for await (const c of createOpenAICompatibleAdapter().streamChat(ctx(), {
+      model: "x",
+      messages: [],
+    })) {
+      if ((c as { type: string }).type === "done") {
+        done = c as { streamComplete?: boolean; usage?: { promptTokens?: number } };
+      }
+    }
+    expect(done?.streamComplete).toBe(true);
+    expect(done?.usage?.promptTokens).toBe(10);
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+test("adapter.streamChat: malformed usage after report invalidates", async () => {
+  const sse = [
+    `data: {"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}`,
+    `data: {"usage":{"prompt_tokens":1.5,"completion_tokens":2,"total_tokens":3.5}}`,
+    `data: [DONE]`,
+    "",
+  ].join("\n");
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    new Response(sse, {
+      status: 200,
+      headers: { "content-type": "text/event-stream" },
+    })) as unknown as typeof fetch;
+  try {
+    let done: { streamComplete?: boolean; usage?: unknown } | undefined;
+    for await (const c of createOpenAICompatibleAdapter().streamChat(ctx(), {
+      model: "x",
+      messages: [],
+    })) {
+      if ((c as { type: string }).type === "done") {
+        done = c as { streamComplete?: boolean; usage?: unknown };
+      }
+    }
+    expect(done?.streamComplete).toBe(false);
+    expect(done?.usage).toBeUndefined();
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+test("adapter.streamChat: malformed SSE JSON fails closed (not complete, no usage)", async () => {
+  const sse = [
+    `data: {"id":"1","choices":[{"delta":{"content":"hi"}}]}`,
+    `data: {not-valid-json`,
+    `data: {"usage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3}}`,
+    `data: [DONE]`,
+    "",
+  ].join("\n");
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    new Response(sse, {
+      status: 200,
+      headers: { "content-type": "text/event-stream" },
+    })) as unknown as typeof fetch;
+  try {
+    const chunks: Array<{
+      type: string;
+      streamComplete?: boolean;
+      usage?: unknown;
+      error?: { code?: string };
+    }> = [];
+    for await (const c of createOpenAICompatibleAdapter().streamChat(ctx(), {
+      model: "x",
+      messages: [],
+    })) {
+      chunks.push(
+        c as {
+          type: string;
+          streamComplete?: boolean;
+          usage?: unknown;
+          error?: { code?: string };
+        },
+      );
+    }
+    const err = chunks.find((c) => c.type === "error");
+    expect(err?.error?.code).toBe("malformed_sse");
+    const done = chunks[chunks.length - 1];
+    expect(done?.type).toBe("done");
+    expect(done?.streamComplete).toBe(false);
+    expect(done?.usage).toBeUndefined();
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+test("adapter.streamChat: throws ProviderError on non-2xx (pre-stream)", async () => {
   const origFetch = globalThis.fetch;
   globalThis.fetch = (async () => new Response("err", { status: 500 })) as unknown as typeof fetch;
   try {
     const adapter = createOpenAICompatibleAdapter();
-    const chunks: unknown[] = [];
-    for await (const c of adapter.streamChat(ctx(), { model: "x", messages: [] })) {
-      chunks.push(c);
+    let threw: unknown;
+    try {
+      for await (const _c of adapter.streamChat(ctx(), { model: "x", messages: [] })) {
+        /* should not yield */
+      }
+    } catch (e) {
+      threw = e;
     }
-    expect(chunks).toHaveLength(1);
-    expect((chunks[0] as { type: string }).type).toBe("error");
-    expect((chunks[0] as { error?: { code?: string } }).error?.code).toBe("http_500");
+    expect(threw).toBeInstanceOf(Error);
+    expect((threw as Error).name).toBe("ProviderError");
+    expect((threw as { httpStatus?: number }).httpStatus).toBe(500);
+    expect((threw as { fallbackEligible?: boolean }).fallbackEligible).toBe(true);
   } finally {
     globalThis.fetch = origFetch;
   }

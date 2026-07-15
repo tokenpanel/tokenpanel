@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { getJson } from "../api/client.ts";
+import * as playgroundApi from "../api/playground.ts";
+import {
+  applyEventToState,
+  formatMinor,
+  formatBalance,
+  safeErr,
+  round,
+} from "./playground/stream-utils.ts";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -43,9 +50,7 @@ import { StreamingMarkdown, ReasoningPanel, useRafBuffer, useAutoScroll } from "
 import { cn } from "@/lib/utils";
 import type {
   PlaygroundModel,
-  PlaygroundModelListResponse,
   PlaygroundCustomer,
-  PlaygroundCustomerListResponse,
 } from "../api/types.ts";
 
 type Role = "system" | "user" | "assistant";
@@ -121,8 +126,8 @@ export default function PlaygroundPage(): React.ReactElement {
     async function load() {
       try {
         const [modelRes, custRes] = await Promise.all([
-          getJson<PlaygroundModelListResponse>("/admin/models"),
-          getJson<PlaygroundCustomerListResponse>(`/admin/customers?limit=${CUSTOMER_LIMIT}`),
+          playgroundApi.listPlaygroundModels(),
+          playgroundApi.listPlaygroundCustomers(CUSTOMER_LIMIT),
         ]);
         if (cancelled) return;
         const active = modelRes.items.filter((m) => m.active);
@@ -671,66 +676,3 @@ function ParamSlider({ label, value, min, max, step, onChange, hint }: { label: 
 
 // ---- helpers ----------------------------------------------------------------
 
-function applyEventToState(cur: StreamState[string], evt: Record<string, unknown>): StreamState[string] {
-  const obj = evt.object as string | undefined;
-  if (obj === "playground.meta") return cur;
-  if (obj === "playground.cost") {
-    const cost = evt.cost as { costMinor: number; priceMinor: number; currency: string } | undefined;
-    const provider = evt.provider as StreamState[string]["provider"] | undefined;
-    const billed = evt.billed as boolean | undefined;
-    return { ...cur, cost: cost ?? null, provider: provider ?? cur.provider, billed: billed ?? false };
-  }
-  if (obj === "chat.completion.chunk") {
-    const choices = evt.choices as Array<{ delta?: { content?: string; reasoning_content?: string }; finish_reason?: string | null }> | undefined;
-    const usage = evt.usage as { prompt_tokens: number; completion_tokens: number; total_tokens: number; reasoning_tokens?: number } | undefined;
-    let content = cur.content;
-    let reasoning = cur.reasoning;
-    if (choices) {
-      for (const ch of choices) {
-        if (ch?.delta?.content) content += ch.delta.content;
-        if (ch?.delta?.reasoning_content) reasoning += ch.delta.reasoning_content;
-      }
-    }
-    return {
-      ...cur,
-      content,
-      reasoning,
-      usage: usage
-        ? { promptTokens: usage.prompt_tokens, completionTokens: usage.completion_tokens, totalTokens: usage.total_tokens, reasoningTokens: usage.reasoning_tokens }
-        : cur.usage,
-    };
-  }
-  if (obj === "error" || (evt.error && typeof evt.error === "object")) {
-    const e = (evt.error as { message?: string } | undefined)?.message ?? "error";
-    return { ...cur, done: true, error: e };
-  }
-  return cur;
-}
-
-function round(n: number, dp: number): number {
-  const f = 10 ** dp;
-  return Math.round(n * f) / f;
-}
-
-function formatMinor(minor: number, currency: string): string {
-  const major = (minor / 100).toFixed(4);
-  return `${currency} ${major}`;
-}
-
-function formatBalance(b: { amountMinor: number; currency: string }): string {
-  return `${b.currency} ${(b.amountMinor / 100).toFixed(2)}`;
-}
-
-async function safeErr(res: Response): Promise<string> {
-  try {
-    const txt = await res.text();
-    try {
-      const j = JSON.parse(txt) as { error?: { message?: string } };
-      return j.error?.message ?? (txt.slice(0, 200) || `HTTP ${res.status}`);
-    } catch {
-      return txt.slice(0, 200) || `HTTP ${res.status}`;
-    }
-  } catch {
-    return `HTTP ${res.status}`;
-  }
-}

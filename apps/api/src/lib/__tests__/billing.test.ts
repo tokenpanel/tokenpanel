@@ -2,6 +2,7 @@ import { test, expect } from "bun:test";
 import { ObjectId } from "mongodb";
 import {
   BillingError,
+  applyTokenSchedule,
   computeCharges,
   checkModelAccess,
   estimatePromptTokens,
@@ -53,6 +54,24 @@ function model(over: Partial<ModelDoc> = {}): ModelDoc {
     ...over,
   };
 }
+
+test("applyTokenSchedule: non-reasoning output + reasoning tier", () => {
+  const amount = applyTokenSchedule(
+    {
+      inputMinorPerMillion: 1_000_000,
+      outputMinorPerMillion: 2_000_000,
+      reasoningMinorPerMillion: 4_000_000,
+    },
+    {
+      promptTokens: 1,
+      completionTokens: 3, // includes 1 reasoning
+      reasoningTokens: 1,
+      totalTokens: 4,
+    },
+  );
+  // 1*1 + 2*2 + 1*4 = 1+4+4 = 9 (rates are per million; ceil of exact)
+  expect(amount).toBe(1 + 4 + 4);
+});
 
 test("computeCharges: basic input+output, ceil per bucket", () => {
   const m = model();
@@ -113,7 +132,7 @@ test("computeCharges: cost = 0 when no entry.cost schedule", () => {
   expect(c.costMinor).toBe(0);
 });
 
-test("computeCharges: includes reasoning + cache tokens with ceil", () => {
+test("computeCharges: reasoning is inside completion — no double charge", () => {
   const m = model({
     price: {
       inputMinorPerMillion: 300,
@@ -123,6 +142,8 @@ test("computeCharges: includes reasoning + cache tokens with ceil", () => {
       cacheWriteMinorPerMillion: 40,
     },
   });
+  // completion=500 includes reasoning=200 → bill 300@output + 200@reasoning.
+  // subset: prompt=1000 includes cacheRead=100 + cacheWrite=50 → uncached 850.
   const c = computeCharges({
     entry: entry(),
     model: m,
@@ -132,16 +153,134 @@ test("computeCharges: includes reasoning + cache tokens with ceil", () => {
       reasoningTokens: 200,
       cacheReadTokens: 100,
       cacheWriteTokens: 50,
-      totalTokens: 1850,
+      totalTokens: 1500,
+      cacheAccounting: "subset",
     },
   });
   expect(c.priceMinor).toBe(
-    Math.ceil((1000 * 300) / 1_000_000) +
-      Math.ceil((500 * 600) / 1_000_000) +
+    Math.ceil((850 * 300) / 1_000_000) + // uncached prompt
+      Math.ceil((300 * 600) / 1_000_000) + // non-reasoning output only
       Math.ceil((200 * 900) / 1_000_000) +
       Math.ceil((100 * 30) / 1_000_000) +
       Math.ceil((50 * 40) / 1_000_000),
   );
+});
+
+test("computeCharges: OpenAI subset cache — uncached+cache tier not double-billed", () => {
+  // Reproduction: full prompt@input + cache@tier = 1050; correct subset = 550.
+  const m = model({
+    price: {
+      inputMinorPerMillion: 1_000_000,
+      outputMinorPerMillion: 0,
+      cacheReadMinorPerMillion: 100_000,
+    },
+  });
+  const c = computeCharges({
+    entry: entry(),
+    model: m,
+    usage: {
+      promptTokens: 1000,
+      completionTokens: 0,
+      cacheReadTokens: 500,
+      totalTokens: 1000,
+      cacheAccounting: "subset",
+    },
+  });
+  // 500 uncached * 1 + 500 cached * 0.1 = 500 + 50 = 550
+  expect(c.priceMinor).toBe(550);
+  expect(c.priceMinor).not.toBe(1050);
+});
+
+test("computeCharges: Anthropic additive cache even when cache < input", () => {
+  // Amount heuristic would peel to 550; Anthropic requires 1000+500 = 1050.
+  const m = model({
+    price: {
+      inputMinorPerMillion: 1_000_000,
+      outputMinorPerMillion: 0,
+      cacheReadMinorPerMillion: 100_000,
+    },
+  });
+  const c = computeCharges({
+    entry: entry(),
+    model: m,
+    usage: {
+      promptTokens: 1000,
+      completionTokens: 0,
+      cacheReadTokens: 500,
+      totalTokens: 1000,
+      cacheAccounting: "additive",
+    },
+  });
+  // 1000*1 + 500*0.1 = 1000 + 50 = 1050
+  expect(c.priceMinor).toBe(1050);
+});
+
+test("computeCharges: protocol override stamps additive without usage field", () => {
+  const m = model({
+    price: {
+      inputMinorPerMillion: 1_000_000,
+      outputMinorPerMillion: 0,
+      cacheReadMinorPerMillion: 100_000,
+    },
+  });
+  const c = computeCharges({
+    entry: entry(),
+    model: m,
+    usage: {
+      promptTokens: 1000,
+      completionTokens: 0,
+      cacheReadTokens: 500,
+      totalTokens: 1000,
+      // no cacheAccounting on usage
+    },
+    cacheAccounting: "additive",
+  });
+  expect(c.priceMinor).toBe(1050);
+});
+
+test("computeCharges: no reasoning rate falls back to full completion at output", () => {
+  const m = model({
+    price: {
+      inputMinorPerMillion: 300,
+      outputMinorPerMillion: 600,
+      // no reasoningMinorPerMillion
+    },
+  });
+  const c = computeCharges({
+    entry: entry(),
+    model: m,
+    usage: {
+      promptTokens: 1000,
+      completionTokens: 500,
+      reasoningTokens: 200,
+      totalTokens: 1500,
+    },
+  });
+  // reasoning rate defaults to output rate → full completion charged once.
+  expect(c.priceMinor).toBe(
+    Math.ceil((1000 * 300) / 1_000_000) + Math.ceil((500 * 600) / 1_000_000),
+  );
+});
+
+test("computeCharges: reasoning > completion clamps (never negative non-reasoning)", () => {
+  const m = model({
+    price: {
+      inputMinorPerMillion: 0,
+      outputMinorPerMillion: 1000,
+      reasoningMinorPerMillion: 2000,
+    },
+  });
+  const c = computeCharges({
+    entry: entry(),
+    model: m,
+    usage: {
+      promptTokens: 0,
+      completionTokens: 100,
+      reasoningTokens: 150, // provider bug — clamp to 100
+      totalTokens: 100,
+    },
+  });
+  expect(c.priceMinor).toBe(Math.ceil((100 * 2000) / 1_000_000));
 });
 
 test("computeCharges: zero tokens → zero charges", () => {

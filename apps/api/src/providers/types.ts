@@ -67,7 +67,12 @@ export type ChatResponse = {
     cacheReadTokens?: number;
     cacheWriteTokens?: number;
     totalTokens: number;
+    /** Adapter-stamped cache billing mode; see CacheAccountingMode. */
+    cacheAccounting?: "subset" | "additive";
   };
+  /** Explicit usage provenance; missing must not settle as free. */
+  usageStatus?: "reported" | "missing";
+  usageMissingReason?: string;
   providerRequestId?: string;
 };
 
@@ -80,6 +85,13 @@ export type StreamChunk = {
   };
   finishReason?: string;
   usage?: ChatResponse["usage"];
+  /**
+   * True only when a protocol terminal event was observed
+   * (OpenAI `[DONE]`, Anthropic `message_stop`). EOF without a terminal event
+   * yields `done` with `streamComplete: false` so routes do not settle
+   * partial/truncated usage as authoritative.
+   */
+  streamComplete?: boolean;
   error?: { code: string; message: string };
 };
 

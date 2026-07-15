@@ -14,6 +14,7 @@
     "clean": "rm -rf dist .turbo node_modules/.tmp"
   },
   "dependencies": {
+    "@tokenpanel/contracts": "workspace:*",
     "@tokenpanel/db": "workspace:*",
     "hono": "^4.7",
     "@hono/zod-validator": "^0.5",

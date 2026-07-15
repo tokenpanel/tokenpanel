@@ -7,7 +7,18 @@ import type {
   ProviderAdapter,
   StreamChunk,
 } from "./types.ts";
+import {
+  parseOpenAIProviderUsage,
+  ZERO_USAGE,
+  type ProviderUsage,
+} from "./provider-usage.ts";
+import {
+  providerHttpError,
+  publicProviderErrorMessage,
+  ProviderError,
+} from "./provider-errors.ts";
 
+/** Unknown context is omitted (not a positive sentinel). Historical name kept for grep. */
 const OPENAI_DEFAULT_CONTEXT = 0;
 
 type OpenAiModel = {
@@ -98,29 +109,20 @@ export function buildChatBody(req: ChatRequest, stream: boolean): Record<string,
   return body;
 }
 
+/**
+ * Parse OpenAI usage into TokenUsage.
+ * Prefer parseOpenAIUsageResult for settlement — missing usage is explicit.
+ * This wrapper maps missing → zeros for stream/chunk compatibility; settlement
+ * paths must call parseOpenAIUsageResult and refuse free settle.
+ */
 export function parseUsage(u: unknown): ChatResponse["usage"] {
-  if (!u || typeof u !== "object") {
-    return { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
-  }
-  const o = u as Record<string, unknown>;
-  const promptTokens = num(o.prompt_tokens) ?? 0;
-  const completionTokens = num(o.completion_tokens) ?? 0;
-  const reasoningTokens = num(o.reasoning_tokens);
-  const promptTokensDetails =
-    typeof o.prompt_tokens_details === "object" && o.prompt_tokens_details !== null
-      ? (o.prompt_tokens_details as Record<string, unknown>)
-      : undefined;
-  const cacheReadTokens =
-    num(promptTokensDetails?.cached_tokens) ?? num(o.cache_read_tokens);
-  const cacheWriteTokens = num(o.cache_creation_tokens) ?? num(o.cache_write_tokens);
-  return {
-    promptTokens,
-    completionTokens,
-    reasoningTokens,
-    cacheReadTokens,
-    cacheWriteTokens,
-    totalTokens: num(o.total_tokens) ?? promptTokens + completionTokens,
-  };
+  const r = parseOpenAIProviderUsage(u);
+  if (r.status === "missing") return { ...ZERO_USAGE };
+  return r.usage;
+}
+
+export function parseOpenAIUsageResult(u: unknown): ProviderUsage {
+  return parseOpenAIProviderUsage(u);
 }
 
 export function assembleChoice(raw: unknown, index: number): ChatResponse["choices"][number] | null {
@@ -182,14 +184,27 @@ export function createOpenAICompatibleAdapter(): ProviderAdapter {
     },
 
     async chatComplete(ctx, req) {
-      const res = await fetch(joinUrl(ctx.baseUrl, "/chat/completions"), {
-        method: "POST",
-        headers: authHeaders(ctx),
-        body: JSON.stringify(buildChatBody(req, false)),
-        signal: req.signal ?? ctx.signal,
-      });
+      let res: Response;
+      try {
+        res = await fetch(joinUrl(ctx.baseUrl, "/chat/completions"), {
+          method: "POST",
+          headers: authHeaders(ctx),
+          body: JSON.stringify(buildChatBody(req, false)),
+          signal: req.signal ?? ctx.signal,
+        });
+      } catch (err) {
+        if (err instanceof TypeError || (err instanceof Error && /fetch failed|ECONNREFUSED|ENOTFOUND/i.test(err.message))) {
+          throw err;
+        }
+        throw err;
+      }
       if (!res.ok) {
-        throw new Error(`openai chatComplete ${res.status}: ${await safeText(res)}`);
+        throw providerHttpError(
+          res.status,
+          await safeText(res),
+          "request",
+          "openai chatComplete",
+        );
       }
       const json = (await res.json()) as Record<string, unknown>;
       const choicesRaw = Array.isArray(json.choices) ? json.choices : [];
@@ -197,13 +212,17 @@ export function createOpenAICompatibleAdapter(): ProviderAdapter {
         .map((c, i) => assembleChoice(c, i))
         .filter((c): c is ChatResponse["choices"][number] => c !== null);
       const id = str(json.id) ?? cryptoRandomId();
+      const usageResult = parseOpenAIUsageResult(json.usage);
       return {
         id,
         model: str(json.model) ?? req.model,
         choices: choices.length > 0 ? choices : [
           { index: 0, message: { role: "assistant", content: "" }, finishReason: "stop" },
         ],
-        usage: parseUsage(json.usage),
+        usage: usageResult.status === "reported" ? usageResult.usage : { ...ZERO_USAGE },
+        usageStatus: usageResult.status,
+        usageMissingReason:
+          usageResult.status === "missing" ? usageResult.reason : undefined,
         providerRequestId: res.headers.get("x-request-id") ?? id,
       };
     },
@@ -215,18 +234,57 @@ export function createOpenAICompatibleAdapter(): ProviderAdapter {
         body: JSON.stringify(buildChatBody(req, true)),
         signal: req.signal ?? ctx.signal,
       });
-      if (!res.ok || !res.body) {
-        yield { type: "error", error: { code: `http_${res.status}`, message: await safeText(res) } };
-        return;
+      // Throw typed pre-stream errors so fallback can classify 429/5xx.
+      if (!res.ok) {
+        throw providerHttpError(
+          res.status,
+          await safeText(res),
+          "headers",
+          "openai streamChat",
+        );
+      }
+      if (!res.body) {
+        throw providerHttpError(502, "empty body", "headers", "openai streamChat");
       }
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
       let finishReason: string | undefined;
-      let lastUsage: ChatResponse["usage"] | undefined;
+      /**
+       * Structured usage parse state — truthiness on `chunk.usage` alone is
+       * unsafe: after a valid report, `usage:null` must invalidate, not leave
+       * stale 10/5 billable. Pre-final mid-stream `usage:null` is normal and
+       * ignored until a report exists.
+       *
+       * Held on a box so nested/loop mutations stay visible to the type checker.
+       */
+      type StreamUsageState =
+        | { kind: "none" }
+        | { kind: "reported"; usage: ChatResponse["usage"] }
+        | { kind: "invalidated"; reason: string };
+      const usageBox: { state: StreamUsageState } = { state: { kind: "none" } };
+      let sawDone = false;
+      let sawMalformedSse = false;
+
       try {
         while (true) {
-          const { value, done } = await reader.read();
+          let value: Uint8Array | undefined;
+          let done: boolean;
+          try {
+            ({ value, done } = await reader.read());
+          } catch (err) {
+            // Body read after headers: upstream may have accepted. Never failover.
+            throw new ProviderError({
+              message: publicProviderErrorMessage("openai streamChat"),
+              category: "connection",
+              phase: "body",
+              fallbackEligible: false,
+              maybeAcceptedUpstream: true,
+              retryable: false,
+              diagnostic:
+                err instanceof Error ? err.message.slice(0, 500) : String(err),
+            });
+          }
           if (done) break;
           buffer += decoder.decode(value, { stream: true });
           let nlIdx: number;
@@ -238,16 +296,72 @@ export function createOpenAICompatibleAdapter(): ProviderAdapter {
             if (!line.startsWith("data:")) continue;
             const payload = line.slice(5).trim();
             if (payload === "[DONE]") {
-              yield { type: "done", finishReason, ...(lastUsage ? { usage: lastUsage } : {}) };
+              sawDone = true;
+              if (sawMalformedSse) {
+                yield {
+                  type: "error",
+                  error: {
+                    code: "malformed_sse",
+                    message: "Upstream stream contained malformed SSE JSON",
+                  },
+                };
+              }
+              // Protocol terminal ok only when SSE clean and usage not invalidated.
+              const uState = usageBox.state;
+              const streamOk =
+                !sawMalformedSse && uState.kind !== "invalidated";
+              const usage =
+                streamOk && uState.kind === "reported" ? uState.usage : undefined;
+              yield {
+                type: "done",
+                finishReason,
+                streamComplete: streamOk,
+                ...(usage ? { usage } : {}),
+              };
               return;
             }
             let chunk: Record<string, unknown>;
             try {
               chunk = JSON.parse(payload) as Record<string, unknown>;
             } catch {
+              // Surface via streamComplete=false + error; do not silently drop.
+              sawMalformedSse = true;
               continue;
             }
-            if (chunk.usage) lastUsage = parseUsage(chunk.usage);
+            // Key present (including null) must go through structured state.
+            if ("usage" in chunk) {
+              const raw = chunk.usage;
+              const cur = usageBox.state;
+              if (cur.kind !== "invalidated") {
+                if (raw === null || raw === undefined) {
+                  // Normal pre-final null — only fatal after a reported usage.
+                  if (cur.kind === "reported") {
+                    usageBox.state = {
+                      kind: "invalidated",
+                      reason: "usage_null_after_reported",
+                    };
+                  }
+                } else {
+                  const parsed = parseOpenAIUsageResult(raw);
+                  if (parsed.status === "reported") {
+                    usageBox.state = {
+                      kind: "reported",
+                      usage: {
+                        ...parsed.usage,
+                        cacheAccounting:
+                          parsed.usage.cacheAccounting ?? "subset",
+                      },
+                    };
+                  } else {
+                    // Present but incomplete/malformed → fail closed.
+                    usageBox.state = {
+                      kind: "invalidated",
+                      reason: parsed.reason || "usage_malformed",
+                    };
+                  }
+                }
+              }
+            }
             const choicesRaw = Array.isArray(chunk.choices) ? chunk.choices : [];
             for (const c of choicesRaw) {
               if (!c || typeof c !== "object") continue;
@@ -276,7 +390,27 @@ export function createOpenAICompatibleAdapter(): ProviderAdapter {
       } finally {
         reader.releaseLock();
       }
-      yield { type: "done", finishReason, ...(lastUsage ? { usage: lastUsage } : {}) };
+      if (sawMalformedSse) {
+        yield {
+          type: "error",
+          error: {
+            code: "malformed_sse",
+            message: "Upstream stream contained malformed SSE JSON",
+          },
+        };
+      }
+      // EOF without [DONE] is truncated — usage (if any) is not authoritative.
+      const uState = usageBox.state;
+      const streamOk =
+        sawDone && !sawMalformedSse && uState.kind !== "invalidated";
+      const usage =
+        streamOk && uState.kind === "reported" ? uState.usage : undefined;
+      yield {
+        type: "done",
+        finishReason,
+        streamComplete: streamOk,
+        ...(usage ? { usage } : {}),
+      };
     },
   };
 }

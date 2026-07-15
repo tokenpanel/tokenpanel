@@ -1,5 +1,11 @@
 import { z } from "zod";
 import {
+  MODEL_METADATA_POLICY,
+  MODEL_METADATA_RESERVED_KEYS as CONTRACT_RESERVED_KEYS,
+  isValidModelMetadataKey,
+  normalizeMetadataValueNewlines,
+} from "@tokenpanel/contracts";
+import {
   objectId,
   objectIdFromString,
   timestampFields,
@@ -11,42 +17,20 @@ import {
 } from "./common.ts";
 
 /** Max string key/value pairs on a model.metadata map. */
-export const MODEL_METADATA_MAX_ENTRIES = 50;
+export const MODEL_METADATA_MAX_ENTRIES = MODEL_METADATA_POLICY.maxEntries;
 /** Max length of a metadata key after edge trim. */
-export const MODEL_METADATA_KEY_MAX_LEN = 80;
+export const MODEL_METADATA_KEY_MAX_LEN = MODEL_METADATA_POLICY.keyMaxLen;
 /** Max length of a metadata value (verbatim; empty allowed). */
-export const MODEL_METADATA_VALUE_MAX_LEN = 2000;
-
-/** Exact keys rejected to avoid prototype-pollution foot-guns. */
-export const MODEL_METADATA_RESERVED_KEYS = new Set([
-  "__proto__",
-  "prototype",
-  "constructor",
-]);
+export const MODEL_METADATA_VALUE_MAX_LEN = MODEL_METADATA_POLICY.valueMaxLen;
 
 /**
- * Validate a single already-trimmed metadata key.
- * Rejects empty, overlong, NUL, CR/LF, leading `$`, and reserved prototype keys.
- * Dots are allowed: API replaces the whole metadata object, never interpolates
- * keys into Mongo update paths. Line breaks are rejected so single-line name
- * inputs remain faithful to the stored key.
+ * Exact keys rejected to avoid prototype-pollution foot-guns.
+ * Live source is the immutable tuple in @tokenpanel/contracts; Set is a
+ * storage-layer convenience for O(1) membership (not exported as mutable API).
  */
-export function isValidModelMetadataKey(key: string): boolean {
-  if (key.length < 1 || key.length > MODEL_METADATA_KEY_MAX_LEN) return false;
-  if (key.includes("\0")) return false;
-  if (/[\r\n]/.test(key)) return false;
-  if (key.startsWith("$")) return false;
-  if (MODEL_METADATA_RESERVED_KEYS.has(key)) return false;
-  return true;
-}
+export const MODEL_METADATA_RESERVED_KEYS = new Set<string>(CONTRACT_RESERVED_KEYS);
 
-/**
- * Contract-wide value newline normalization: `\r\n` / `\r` → `\n`.
- * Matches browser `<textarea>` behavior so UI round-trips are stable.
- */
-export function normalizeMetadataValueNewlines(value: string): string {
-  return value.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-}
+export { isValidModelMetadataKey, normalizeMetadataValueNewlines };
 
 /** True for plain objects (`{}` / Object.create(null)); rejects Date/Map/RegExp/class. */
 export function isPlainMetadataObject(value: object): boolean {

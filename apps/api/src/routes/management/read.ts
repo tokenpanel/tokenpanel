@@ -1,7 +1,6 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import { zValidator } from "@hono/zod-validator";
-import { ObjectId } from "mongodb";
 import type { Document, Filter } from "mongodb";
 import {
   getDb,
@@ -15,6 +14,7 @@ import type { PublicAuthVariables } from "../../middleware/public-auth.ts";
 import {
   requireManagementScope,
 } from "../../middleware/management-auth.ts";
+import { parseObjectIdParam, escapeRegExp } from "../route-utils.ts";
 
 type ManagementAuthVariables = PublicAuthVariables;
 
@@ -57,11 +57,6 @@ export function principalHasScope(
  * cross-org data leakage is structurally impossible.
  */
 const managementRead = new Hono<{ Variables: ManagementAuthVariables }>();
-
-function parseObjectIdParam(id: string): ObjectId | null {
-  if (!ObjectId.isValid(id)) return null;
-  return new ObjectId(id);
-}
 
 // ---------------------------------------------------------------------------
 // Models
@@ -140,7 +135,7 @@ managementRead.get(
     const filter: Filter<CustomerDoc> = { organizationId: orgId };
     if (q.status !== undefined) filter.status = q.status;
     if (q.q !== undefined && q.q.length > 0) {
-      const esc = q.q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const esc = escapeRegExp(q.q);
       filter.$or = [
         { name: { $regex: esc, $options: "i" } },
         { email: { $regex: esc, $options: "i" } },

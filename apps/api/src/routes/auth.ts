@@ -6,6 +6,7 @@ import type { AuthVariables } from "../middleware/auth.ts";
 import { requireAuth } from "../middleware/auth.ts";
 import { hashPassword, verifyPassword, signJwt } from "../lib/crypto.ts";
 import { loginThrottle } from "../lib/throttle.ts";
+import { requireJwtSecret } from "../config/state.ts";
 
 export const loginBody = z.object({
   username: z.string().min(1).max(60),
@@ -98,8 +99,10 @@ auth.post("/login", zValidator("json", loginBody), async (c) => {
     return c.json({ error: "forbidden", message: "user disabled" }, 403);
   }
   loginThrottle.recordSuccess(body.username);
-  const secret = process.env.JWT_SECRET;
-  if (!secret) {
+  let secret: string;
+  try {
+    secret = requireJwtSecret();
+  } catch {
     return c.json({ error: "server_misconfigured" }, 500);
   }
   const resp = userResponse(user);

@@ -10,21 +10,23 @@ import {
   type CustomerDoc,
 } from "@tokenpanel/db";
 import { requireAuth, requireRole, type AuthVariables } from "../middleware/auth.ts";
-import { hashToken, randomToken, isDuplicateKeyError } from "../lib/crypto.ts";
+import {
+  CUSTOMER_KEY_PREFIX_LITERAL,
+  API_KEY_LOOKUP_PREFIX_CHARS,
+  issueApiKeyWithRetry,
+} from "../services/api-key-issuer.ts";
+import { parseObjectIdParam } from "./route-utils.ts";
 
 const apiKeyRoutes = new Hono<{ Variables: AuthVariables }>();
 
 apiKeyRoutes.use("*", requireAuth);
 
-export const KEY_PREFIX_LITERAL = "tp_live_";
+export const KEY_PREFIX_LITERAL = CUSTOMER_KEY_PREFIX_LITERAL;
 /**
  * Lookup prefix length — matches the public auth dispatcher's PREFIX_LENGTH
  * (16). 8 literal + 8 random hex ≈ 4.3B combos; birthday collision ~65K keys.
  */
-export const PREFIX_LENGTH = 16;
-
-/** Max regeneration attempts when a generated prefix collides with an existing one. */
-const MAX_PREFIX_RETRIES = 5;
+export const PREFIX_LENGTH = API_KEY_LOOKUP_PREFIX_CHARS;
 
 type StrippedApiKey = Omit<ApiKeyDoc, "keyHash"> & { hasKey: true };
 
@@ -34,10 +36,7 @@ export function stripKey(doc: ApiKeyDoc): StrippedApiKey {
   return { ...rest, hasKey: true };
 }
 
-export function parseObjectIdParam(id: string): ObjectId | null {
-  if (!ObjectId.isValid(id)) return null;
-  return new ObjectId(id);
-}
+export { parseObjectIdParam };
 
 const listQuerySchema = z.object({
   customerId: z.string().min(1).max(64).optional(),
@@ -89,52 +88,35 @@ apiKeyRoutes.post("/", requireRole("admin"), zValidator("json", createBodySchema
     return c.json({ error: "customer_not_found" }, 404);
   }
 
-  // Build the secret: prefix literal + 24 random hex bytes. Prefix is exactly
-  // PREFIX_LENGTH chars so the auth dispatcher can slice(0, N) on either key
-  // kind. Full key is returned exactly once; only prefix + hash persist.
-  //
-  // Retry on a prefix collision against the unique index — astronomically
-  // rare with 16 hex chars of entropy (16^8 ≈ 4.3B combos, birthday at ~65K
-  // keys) but handled defensively so creation is deterministic for operators.
+  // Key material + bounded unique-prefix retry: apps/api/src/services/api-key-issuer.ts
   const now = new Date();
-  let attempt = 0;
-  let created: { doc: ApiKeyDoc; fullKey: string } | null = null;
-  while (attempt < MAX_PREFIX_RETRIES) {
-    attempt += 1;
-    const tokenPart = randomToken(24);
-    const fullKey = `${KEY_PREFIX_LITERAL}${tokenPart}`;
-    const prefix = fullKey.slice(0, PREFIX_LENGTH);
-    const keyHash = hashToken(fullKey);
-
-    const doc: ApiKeyDoc = {
-      _id: new ObjectId(),
-      organizationId: orgId,
-      customerId,
-      name: body.name,
-      prefix,
-      keyHash,
-      modelWhitelist: body.modelWhitelist ?? [],
-      status: "active",
-      lastUsedAt: null,
-      createdAt: now,
-      updatedAt: now,
-    };
-
-    try {
+  let createdDoc: ApiKeyDoc | null = null;
+  const result = await issueApiKeyWithRetry({
+    literal: KEY_PREFIX_LITERAL,
+    insert: async (issued) => {
+      const doc: ApiKeyDoc = {
+        _id: new ObjectId(),
+        organizationId: orgId,
+        customerId,
+        name: body.name,
+        prefix: issued.prefix,
+        keyHash: issued.keyHash,
+        modelWhitelist: body.modelWhitelist ?? [],
+        status: "active",
+        lastUsedAt: null,
+        createdAt: now,
+        updatedAt: now,
+      };
       await db.apiKeys.insertOne(doc);
-      created = { doc, fullKey };
-      break;
-    } catch (err) {
-      if (isDuplicateKeyError(err)) continue;
-      throw err;
-    }
-  }
+      createdDoc = doc;
+    },
+  });
 
-  if (!created) {
+  if (!result.ok || !createdDoc) {
     return c.json({ error: "prefix_collision" }, 503);
   }
 
-  return c.json({ apiKey: stripKey(created.doc), key: created.fullKey }, 201);
+  return c.json({ apiKey: stripKey(createdDoc), key: result.issued.fullKey }, 201);
 });
 
 apiKeyRoutes.get("/:id", async (c) => {

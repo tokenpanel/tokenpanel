@@ -19,6 +19,7 @@ import { CreditCard, Plus, X } from "lucide-react";
 import { PageHeader } from "@/components/PageHeader";
 import { EmptyState } from "@/components/EmptyState";
 import { FadeIn, StaggerItem } from "@/components/anim";
+import { formatMoney } from "../utils/format.ts";
 
 type Interval = "day" | "week" | "month" | "year";
 type Dimension = "tokens" | "requests" | "spend_minor";
@@ -205,10 +206,9 @@ export function formatWindow(seconds: number): string {
   return `${seconds}s`;
 }
 
+/** Plan card money display — delegates to ISO-aware formatMoney. */
 export function formatAmountMinor(amountMinor: number, currency: string): string {
-  const major = amountMinor / 100;
-  const fixed = Number.isInteger(major) ? major.toFixed(0) : major.toFixed(2);
-  return `${currency} ${fixed}`;
+  return formatMoney(amountMinor, currency);
 }
 
 function ruleSummary(r: RateLimitRule): string {

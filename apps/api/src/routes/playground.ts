@@ -14,11 +14,13 @@ import {
   callWithFallback,
   streamWithFallback,
   computeCharges,
-  settleUsage,
+  settleUsageOrOutbox,
   BillingError,
 } from "../lib/billing.ts";
+import { normalizeProcessedTotalTokens } from "../providers/provider-usage.ts";
 import { getEffectiveRules } from "../lib/rate-limits.ts";
 import type { ChatRequest, ChatMessage, ContentPart } from "../providers/index.ts";
+import { newGatewayRequestId } from "../services/settlement-outbox.ts";
 
 const playground = new Hono<{ Variables: AuthVariables }>();
 
@@ -184,6 +186,7 @@ playground.post("/chat", zValidator("json", chatBody), async (c) => {
   const { model } = preflight;
   const rules = ctx.rules; // use customer's real rules if a customer was selected
   const start = Date.now();
+  const gatewayRequestId = newGatewayRequestId();
 
   // Non-streaming -----------------------------------------------------------
   if (!stream) {
@@ -197,30 +200,26 @@ playground.post("/chat", zValidator("json", chatBody), async (c) => {
       // "playground", billed=false) so admins see cost visibility without
       // charging anyone — previously this used a sentinel ObjectId hack that
       // the new nullable-customerId schema makes unnecessary.
-      try {
-        await settleUsage({
-          orgId,
-          actor: {
-            actorKind: "playground",
-            customerId: ctx.customer?._id ?? null,
-            apiKeyId: null,
-          },
-          model,
-          entry: outcome.entry,
-          provider: outcome.provider,
-          protocol: "openai",
-          usage: outcome.response.usage,
-          costMinor: charges.costMinor,
-          priceMinor: ctx.customer ? charges.priceMinor : 0,
-          currency: charges.currency,
-          providerRequestId: outcome.response.providerRequestId,
-          status: 200,
-          durationMs,
-          rules,
-        });
-      } catch (settleErr) {
-        console.error("[playground] settlement failed (non-stream):", settleErr);
-      }
+      await settleUsageOrOutbox({
+        orgId,
+        actor: {
+          actorKind: "playground",
+          customerId: ctx.customer?._id ?? null,
+          apiKeyId: null,
+        },
+        model,
+        entry: outcome.entry,
+        provider: outcome.provider,
+        protocol: "openai",
+        response: outcome.response,
+        providerRequestId: outcome.response.providerRequestId,
+        gatewayRequestId,
+        status: 200,
+        durationMs,
+        rules,
+        occurredAt: new Date(start),
+        priceMinorOverride: ctx.customer ? charges.priceMinor : 0,
+      });
 
       const r = outcome.response;
       return c.json({
@@ -275,9 +274,15 @@ playground.post("/chat", zValidator("json", chatBody), async (c) => {
   let reasoningTokens = 0;
   let cacheReadTokens = 0;
   let cacheWriteTokens = 0;
+  /** Provider-reported total from chunk.usage (may exceed prompt+completion). */
+  let reportedTotalTokens: number | undefined;
+  let cacheAccounting: "subset" | "additive" = "subset";
   let finishReason = "stop";
   let activeEntry: ModelEntryDoc | null = null;
   let activeProvider: ProviderDoc | null = null;
+  let streamComplete = false;
+  /** Exactly one terminal error event per stream. */
+  let terminalErrorEmitted = false;
 
   const streamGen = streamWithFallback({ orgId, model, request });
   const encoder = new TextEncoder();
@@ -286,6 +291,11 @@ playground.post("/chat", zValidator("json", chatBody), async (c) => {
     async start(controller) {
       const enqueue = (obj: unknown) => {
         controller.enqueue(encoder.encode(`data: ${JSON.stringify(obj)}\n\n`));
+      };
+      const enqueueTerminalError = (code: string, message: string) => {
+        if (terminalErrorEmitted) return;
+        terminalErrorEmitted = true;
+        enqueue(formatError(code, message));
       };
       try {
         // Send a header event so the client can show which provider/model served.
@@ -308,44 +318,93 @@ playground.post("/chat", zValidator("json", chatBody), async (c) => {
               choices: [{ index: 0, delta, finish_reason: null }],
             });
           } else if (chunk.type === "done") {
+            if (chunk.streamComplete) streamComplete = true;
             if (chunk.finishReason) finishReason = chunk.finishReason;
-            if (chunk.usage) {
+            if (chunk.streamComplete && chunk.usage) {
               promptTokens = chunk.usage.promptTokens;
               completionTokens = chunk.usage.completionTokens;
               reasoningTokens = chunk.usage.reasoningTokens ?? 0;
               cacheReadTokens = chunk.usage.cacheReadTokens ?? 0;
               cacheWriteTokens = chunk.usage.cacheWriteTokens ?? 0;
+              // Retain provider total (e.g. 10+5 with total 20) for the normalizer.
+              reportedTotalTokens =
+                typeof chunk.usage.totalTokens === "number"
+                  ? chunk.usage.totalTokens
+                  : undefined;
+              if (
+                chunk.usage.cacheAccounting === "subset" ||
+                chunk.usage.cacheAccounting === "additive"
+              ) {
+                cacheAccounting = chunk.usage.cacheAccounting;
+              }
             }
           } else if (chunk.type === "error") {
-            enqueue(formatError("upstream_error", chunk.error?.message ?? "stream error"));
+            enqueueTerminalError(
+              "upstream_error",
+              chunk.error?.message ?? "stream error",
+            );
           }
         }
-        enqueue({
-          id,
-          object: "chat.completion.chunk",
-          created,
-          model: body.model,
-          choices: [{ index: 0, delta: {}, finish_reason: finishReason }],
+        // Mode-correct total for SSE + settlement (prefer provider total).
+        // null = overflow / unsafe — fail-closed for settlement below.
+        const normalizedTotal = normalizeProcessedTotalTokens({
+          promptTokens,
+          completionTokens,
+          cacheReadTokens,
+          cacheWriteTokens,
+          totalTokens: reportedTotalTokens,
+          cacheAccounting,
         });
-        const totalTokens = promptTokens + completionTokens;
-        const usagePayload = {
-          prompt_tokens: promptTokens,
-          completion_tokens: completionTokens,
-          total_tokens: totalTokens,
-          ...(reasoningTokens > 0 ? { reasoning_tokens: reasoningTokens } : {}),
-          ...(cacheReadTokens > 0 ? { prompt_tokens_details: { cached_tokens: cacheReadTokens } } : {}),
-        };
-        if (promptTokens > 0 || completionTokens > 0) {
-          enqueue({ id, object: "chat.completion.chunk", created, model: body.model, choices: [], usage: usagePayload });
+        if (!streamComplete) {
+          // Error-only terminal — never finish_reason "error" + [DONE].
+          enqueueTerminalError(
+            "stream_truncated",
+            "Upstream stream ended without a terminal event; response may be incomplete",
+          );
+        } else {
+          enqueue({
+            id,
+            object: "chat.completion.chunk",
+            created,
+            model: body.model,
+            choices: [{ index: 0, delta: {}, finish_reason: finishReason }],
+          });
+          const usagePayload = {
+            prompt_tokens: promptTokens,
+            completion_tokens: completionTokens,
+            total_tokens: normalizedTotal ?? 0,
+            ...(reasoningTokens > 0 ? { reasoning_tokens: reasoningTokens } : {}),
+            ...(cacheReadTokens > 0 ? { prompt_tokens_details: { cached_tokens: cacheReadTokens } } : {}),
+          };
+          if (promptTokens > 0 || completionTokens > 0) {
+            enqueue({ id, object: "chat.completion.chunk", created, model: body.model, choices: [], usage: usagePayload });
+          }
         }
-        // Final cost event so the UI can show $ without re-fetching.
-        if (activeEntry && activeProvider && (promptTokens > 0 || completionTokens > 0)) {
-          const usage = { promptTokens, completionTokens, reasoningTokens, cacheReadTokens, cacheWriteTokens, totalTokens };
-          const charges = computeCharges({ entry: activeEntry, model, usage });
-          // Unified settlement: customer-attributed when a customer is
-          // selected (debited), otherwise internal (audit-only).
+        // Final cost event so the UI can show $ without re-fetching (even on
+        // truncated streams, so operators see which provider accepted work).
+        if (activeEntry && activeProvider) {
+          const usage = {
+            promptTokens,
+            completionTokens,
+            reasoningTokens,
+            cacheReadTokens,
+            cacheWriteTokens,
+            totalTokens: normalizedTotal ?? 0,
+            cacheAccounting,
+          };
+          const charges = computeCharges({
+            entry: activeEntry,
+            model,
+            usage,
+            cacheAccounting,
+          });
+          const hasAuthoritativeUsage =
+            streamComplete &&
+            normalizedTotal !== null &&
+            (promptTokens > 0 || completionTokens > 0);
+          let settled = false;
           try {
-            await settleUsage({
+            const result = await settleUsageOrOutbox({
               orgId,
               actor: {
                 actorKind: "playground",
@@ -356,17 +415,30 @@ playground.post("/chat", zValidator("json", chatBody), async (c) => {
               entry: activeEntry,
               provider: activeProvider,
               protocol: "openai",
-              usage,
-              costMinor: charges.costMinor,
-              priceMinor: ctx.customer ? charges.priceMinor : 0,
-              currency: charges.currency,
+              gatewayRequestId,
+              providerUsage: hasAuthoritativeUsage
+                ? { status: "reported", usage }
+                : {
+                    status: "missing",
+                    reason: !streamComplete
+                      ? "stream_truncated"
+                      : normalizedTotal === null
+                        ? "usage_overflow"
+                        : "stream_usage_absent",
+                  },
               status: 200,
               durationMs: Date.now() - start,
               rules,
+              priceMinorOverride: ctx.customer ? charges.priceMinor : 0,
+              occurredAt: new Date(start),
             });
+            settled = result.settled;
           } catch (settleErr) {
-            console.error("[playground] settlement failed (stream):", settleErr);
+            console.error("[playground] stream settlement/outbox failed:", settleErr);
           }
+          // Never report billed:true for truncated/missing-usage paths.
+          const billed =
+            settled && streamComplete && hasAuthoritativeUsage && ctx.customer !== null;
           enqueue({
             id,
             object: "playground.cost",
@@ -378,12 +450,19 @@ playground.post("/chat", zValidator("json", chatBody), async (c) => {
               sdkType: activeProvider.sdkType,
             },
             cost: { costMinor: charges.costMinor, priceMinor: charges.priceMinor, currency: charges.currency },
-            billed: ctx.customer !== null,
+            billed,
+            streamComplete,
           });
         }
-        controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+        if (streamComplete) {
+          controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+        }
       } catch (err) {
-        enqueue(formatError("upstream_error", err instanceof Error ? err.message : "stream failed"));
+        // Error path: no [DONE] success terminal. Exactly one terminal error.
+        enqueueTerminalError(
+          "upstream_error",
+          err instanceof Error ? err.message : "stream failed",
+        );
       } finally {
         controller.close();
       }

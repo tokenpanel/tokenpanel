@@ -36,11 +36,9 @@ docker_build_prod() {
   done
   args+=("$INSTALL_DIR")
 
-  if docker build "${args[@]}"; then
-    return 0
-  fi
-
-  warn "docker build failed; retrying once for transient registry/network failure..."
+  # Fail immediately on compile/config errors — do not blind-retry full builds.
+  # Transient registry failures should be retried by the operator or CI with
+  # classified network policy, not an unconditional second full docker build.
   docker build "${args[@]}"
 }
 

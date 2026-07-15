@@ -23,6 +23,7 @@
         "@radix-ui/react-switch": "^1.1.1",
         "@radix-ui/react-tabs": "^1.1.15",
         "@radix-ui/react-tooltip": "^1.2.10",
+        "@tokenpanel/contracts": "workspace:*",
         "class-variance-authority": "^0.7.0",
         "clsx": "^2.1.1",
         "dompurify": "^3.4.11",
@@ -53,8 +54,19 @@
       "version": "0.0.0",
       "dependencies": {
         "@hono/zod-validator": "^0.5",
+        "@tokenpanel/contracts": "workspace:*",
         "@tokenpanel/db": "workspace:*",
         "hono": "^4.7",
+        "zod": "^3.25",
+      },
+      "devDependencies": {
+        "@types/bun": "latest",
+      },
+    },
+    "packages/contracts": {
+      "name": "@tokenpanel/contracts",
+      "version": "0.0.0",
+      "dependencies": {
         "zod": "^3.25",
       },
       "devDependencies": {
@@ -65,6 +77,7 @@
       "name": "@tokenpanel/db",
       "version": "0.0.0",
       "dependencies": {
+        "@tokenpanel/contracts": "workspace:*",
         "mongodb": "^6.18",
         "zod": "^3.25",
       },
@@ -287,6 +300,8 @@
     "@tokenpanel/admin": ["@tokenpanel/admin@workspace:apps/admin"],
 
     "@tokenpanel/api": ["@tokenpanel/api@workspace:apps/api"],
+
+    "@tokenpanel/contracts": ["@tokenpanel/contracts@workspace:packages/contracts"],
 
     "@tokenpanel/db": ["@tokenpanel/db@workspace:packages/db"],
 

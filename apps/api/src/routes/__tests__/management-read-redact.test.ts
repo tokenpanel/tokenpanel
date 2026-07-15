@@ -14,7 +14,7 @@ function customer(over: Partial<CustomerDoc> = {}): CustomerDoc {
     externalId: null,
     name: "alice",
     email: "alice@example.com",
-    balance: { amountMinor: 10000, currency: "USD" },
+    balance: { amountMinor: 10000, reservedMinor: 0, currency: "USD" },
     status: "active",
     metadata: {},
     createdAt: new Date(),
@@ -24,7 +24,9 @@ function customer(over: Partial<CustomerDoc> = {}): CustomerDoc {
 }
 
 test("maybeRedactCustomer: returns full doc when caller has balances:read", () => {
-  const c = customer({ balance: { amountMinor: 5000, currency: "USD" } });
+  const c = customer({
+    balance: { amountMinor: 5000, reservedMinor: 0, currency: "USD" },
+  });
   const out = maybeRedactCustomer(c, true);
   expect("balance" in out).toBe(true);
   if ("balance" in out) {
@@ -33,7 +35,9 @@ test("maybeRedactCustomer: returns full doc when caller has balances:read", () =
 });
 
 test("maybeRedactCustomer: strips balance when caller lacks balances:read", () => {
-  const c = customer({ balance: { amountMinor: 5000, currency: "USD" } });
+  const c = customer({
+    balance: { amountMinor: 5000, reservedMinor: 0, currency: "USD" },
+  });
   const out = maybeRedactCustomer(c, false);
   expect("balance" in out).toBe(false);
   // Other fields preserved.

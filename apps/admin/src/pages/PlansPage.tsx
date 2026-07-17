@@ -15,11 +15,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { CreditCard, Plus, X } from "lucide-react";
+import { CreditCard, Plus, ShieldCheck, X } from "lucide-react";
 import { PageHeader } from "@/components/PageHeader";
 import { EmptyState } from "@/components/EmptyState";
 import { FadeIn, StaggerItem } from "@/components/anim";
 import { formatMoney } from "../utils/format.ts";
+import { hasPermission, useAuth } from "../auth/AuthContext.tsx";
 
 import {
   PLAN_INTERVALS,
@@ -265,6 +266,9 @@ function FormField({
 }
 
 export default function PlansPage(): React.ReactElement {
+  const { user } = useAuth();
+  const canWrite = hasPermission(user, "plans:write");
+
   const [plans, setPlans] = useState<Plan[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -292,18 +296,23 @@ export default function PlansPage(): React.ReactElement {
   }, [loadPlans]);
 
   const startCreate = useCallback(() => {
+    if (!canWrite) return;
     setEditing(null);
     setDraft(emptyDraft());
     setFormError(null);
     setShowForm(true);
-  }, []);
+  }, [canWrite]);
 
-  const startEdit = useCallback((plan: Plan) => {
-    setEditing(plan);
-    setDraft(planToDraft(plan));
-    setFormError(null);
-    setShowForm(true);
-  }, []);
+  const startEdit = useCallback(
+    (plan: Plan) => {
+      if (!canWrite) return;
+      setEditing(plan);
+      setDraft(planToDraft(plan));
+      setFormError(null);
+      setShowForm(true);
+    },
+    [canWrite],
+  );
 
   const cancelForm = useCallback(() => {
     setShowForm(false);
@@ -314,6 +323,7 @@ export default function PlansPage(): React.ReactElement {
 
   const onDelete = useCallback(
     async (plan: Plan) => {
+      if (!canWrite) return;
       if (!window.confirm(`Deactivate plan "${plan.name}"? This is a soft delete.`)) return;
       try {
         await deleteJson<PlansResponse>(`/admin/plans/${plan._id}`);
@@ -322,12 +332,13 @@ export default function PlansPage(): React.ReactElement {
         setError(err instanceof ApiError ? err.message : "Delete failed.");
       }
     },
-    [loadPlans],
+    [loadPlans, canWrite],
   );
 
   const onSubmit = useCallback(
     async (e: FormEvent<HTMLFormElement>) => {
       e.preventDefault();
+      if (!canWrite) return;
       const validation = validateDraft(draft);
       if (validation) {
         setFormError(validation);
@@ -369,7 +380,7 @@ export default function PlansPage(): React.ReactElement {
         setSaving(false);
       }
     },
-    [draft, editing, loadPlans],
+    [draft, editing, loadPlans, canWrite],
   );
 
   const setField = useCallback(
@@ -436,12 +447,12 @@ export default function PlansPage(): React.ReactElement {
       <PageHeader title="Plans" icon={<CreditCard strokeWidth={1.75} />}>
         {showForm ? (
           <Button variant="outline" size="sm" onClick={cancelForm} disabled={saving}>Cancel</Button>
-        ) : (
+        ) : canWrite ? (
           <Button size="sm" onClick={startCreate}>
             <Plus className="size-4" />
             Add Plan
           </Button>
-        )}
+        ) : null}
       </PageHeader>
 
       {error ? (
@@ -450,7 +461,17 @@ export default function PlansPage(): React.ReactElement {
         </Alert>
       ) : null}
 
-      {showForm ? (
+      {!canWrite ? (
+        <Alert>
+          <ShieldCheck className="size-4" />
+          <AlertDescription>
+            You can view plans but need{" "}
+            <code className="font-mono text-xs">plans:write</code> to create, edit, or deactivate them.
+          </AlertDescription>
+        </Alert>
+      ) : null}
+
+      {showForm && canWrite ? (
         <FadeIn className="flex flex-col gap-5 rounded-lg border border-border bg-card p-6 shadow-xs">
         <form className="flex flex-col gap-5" onSubmit={onSubmit}>
           <h2 className="text-lg font-semibold">{editing ? "Edit plan" : "New plan"}</h2>
@@ -609,8 +630,19 @@ export default function PlansPage(): React.ReactElement {
         <EmptyState
           icon={<CreditCard className="size-5" />}
           title="No plans yet"
-          description="Create your first subscription plan with pricing and rate-limit defaults."
-          action={<Button size="sm" onClick={startCreate}><Plus className="size-4" />Add Plan</Button>}
+          description={
+            canWrite
+              ? "Create your first subscription plan with pricing and rate-limit defaults."
+              : "No plans configured yet. An admin with plans:write can add them."
+          }
+          action={
+            canWrite ? (
+              <Button size="sm" onClick={startCreate}>
+                <Plus className="size-4" />
+                Add Plan
+              </Button>
+            ) : undefined
+          }
         />
       ) : (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -635,10 +667,12 @@ export default function PlansPage(): React.ReactElement {
                     ))}
                   </ul>
                 ) : null}
-                <div className="mt-auto flex gap-2 pt-1">
-                  <Button variant="outline" size="sm" onClick={() => startEdit(plan)}>Edit</Button>
-                  <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive" onClick={() => void onDelete(plan)}>Delete</Button>
-                </div>
+                {canWrite ? (
+                  <div className="mt-auto flex gap-2 pt-1">
+                    <Button variant="outline" size="sm" onClick={() => startEdit(plan)}>Edit</Button>
+                    <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive" onClick={() => void onDelete(plan)}>Delete</Button>
+                  </div>
+                ) : null}
               </Card>
             </StaggerItem>
           ))}

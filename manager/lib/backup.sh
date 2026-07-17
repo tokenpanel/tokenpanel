@@ -46,16 +46,30 @@ _quiesce_writers() {
 }
 
 # Restart api only if this backup run stopped it. Safe to call multiple times.
+# Returns 0 when nothing to do or api is up and (when wait_for_health is
+# available) ready; 1 if start or readiness fails. Callers must not treat a
+# failed resume as overall success even when the dump itself succeeded.
 _resume_writers() {
-  if [ "${BACKUP_API_WAS_RUNNING:-0}" -eq 1 ]; then
-    step "backup" "restarting api..."
-    if docker compose -f "$APP_YML" start api >/dev/null 2>&1; then
-      ok "api restarted"
-    else
-      err "failed to restart api — start it manually: tokenpanel start"
-    fi
-    BACKUP_API_WAS_RUNNING=0
+  if [ "${BACKUP_API_WAS_RUNNING:-0}" -ne 1 ]; then
+    return 0
   fi
+  BACKUP_API_WAS_RUNNING=0
+  step "backup" "restarting api..."
+  if ! docker compose -f "$APP_YML" start api >/dev/null 2>&1; then
+    err "failed to restart api — start it manually: tokenpanel start"
+    return 1
+  fi
+  # health.sh is sourced by bin/tokenpanel before backup.sh; unit tests that
+  # only source backup.sh skip readiness (start success is enough).
+  if declare -F wait_for_health >/dev/null 2>&1; then
+    if ! wait_for_health api 60; then
+      err "api started but not ready — check: tokenpanel logs api"
+      return 1
+    fi
+  else
+    ok "api restarted"
+  fi
+  return 0
 }
 
 create_backup() {
@@ -150,13 +164,20 @@ create_backup() {
   fi
 
   # Resume API before retention (retention is local FS only) so write traffic
-  # returns ASAP. Clear EXIT trap only after a successful explicit resume.
+  # returns ASAP. Clear EXIT trap only after an explicit resume attempt.
+  # Dump + verify already succeeded; still fail the command if api does not
+  # come back so operators never see "backup ok" with a dead API.
   trap - EXIT
-  _resume_writers
+  local resume_rc=0
+  _resume_writers || resume_rc=$?
 
   apply_retention
 
   echo "$backup_file"
+  if [ "$resume_rc" -ne 0 ]; then
+    err "backup archive is valid but api did not resume cleanly"
+    return 1
+  fi
 }
 
 apply_retention() {
@@ -368,6 +389,12 @@ restore_backup() {
   if ! docker compose -f "$APP_YML" start api; then
     err "failed to restart api — start it manually: tokenpanel start"
     return 1
+  fi
+  if declare -F wait_for_health >/dev/null 2>&1; then
+    if ! wait_for_health api 60; then
+      err "api started but not ready after restore — check: tokenpanel logs api"
+      return 1
+    fi
   fi
 
   if [ "$rc" -eq 1 ]; then

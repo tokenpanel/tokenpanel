@@ -564,7 +564,7 @@ export default function SettingsPage(): React.ReactElement {
                           id="invite-ttl"
                           type="number"
                           min={1}
-                          placeholder="72"
+                          placeholder="168"
                           value={inviteTtl}
                           disabled={creating}
                           onChange={(e) => setInviteTtl(e.target.value)}
@@ -700,7 +700,7 @@ export default function SettingsPage(): React.ReactElement {
                     )}
                   </form>
                   <p className="mt-2 text-xs text-muted-foreground">
-                    Default TTL is 72 hours if left blank. New invites default to member with no grants.
+                    Default TTL is 168 hours (7 days) if left blank. New invites default to member with no grants.
                   </p>
                 </Card>
               ) : null}

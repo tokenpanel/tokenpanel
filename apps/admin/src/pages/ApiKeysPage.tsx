@@ -28,15 +28,19 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Plus, KeyRound, Copy, Check } from "lucide-react";
+import { Plus, KeyRound, Copy, Check, ShieldCheck } from "lucide-react";
 import { PageHeader } from "@/components/PageHeader";
 import { EmptyState } from "@/components/EmptyState";
 import { FadeIn } from "@/components/anim";
 import { cn } from "@/lib/utils";
+import { hasPermission, useAuth } from "../auth/AuthContext.tsx";
 
 const CUSTOMER_LIMIT = 200;
 
 export default function ApiKeysPage(): React.ReactElement {
+  const { user } = useAuth();
+  const canWrite = hasPermission(user, "customer_keys:write");
+
   const [customers, setCustomers] = useState<CustomerListResponse | null>(null);
   const [customerId, setCustomerId] = useState<string>("");
   const [keys, setKeys] = useState<ApiKey[]>([]);
@@ -113,7 +117,7 @@ export default function ApiKeysPage(): React.ReactElement {
 
   async function onCreate(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    if (!customerId || !newName.trim()) return;
+    if (!canWrite || !customerId || !newName.trim()) return;
     setCreating(true);
     setError(null);
     const whitelist = newWhitelist
@@ -139,6 +143,7 @@ export default function ApiKeysPage(): React.ReactElement {
   }
 
   async function onRevoke(keyId: string) {
+    if (!canWrite) return;
     setRevokingId(keyId);
     setError(null);
     try {
@@ -170,6 +175,16 @@ export default function ApiKeysPage(): React.ReactElement {
       {error ? (
         <Alert variant="destructive">
           <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      ) : null}
+
+      {!canWrite ? (
+        <Alert>
+          <ShieldCheck className="size-4" />
+          <AlertDescription>
+            You can view API keys but need{" "}
+            <code className="font-mono text-xs">customer_keys:write</code> to create or revoke them.
+          </AlertDescription>
         </Alert>
       ) : null}
 
@@ -218,17 +233,19 @@ export default function ApiKeysPage(): React.ReactElement {
               <div className="flex flex-col gap-3">
                 <div className="flex items-center justify-between">
                   <h2 className="text-base font-semibold">Keys for {customerName}</h2>
-                  <Button size="sm" onClick={() => setShowCreate((v) => !v)}>
-                    {showCreate ? "Cancel" : (
-                      <>
-                        <Plus className="size-4" />
-                        Create Key
-                      </>
-                    )}
-                  </Button>
+                  {canWrite ? (
+                    <Button size="sm" onClick={() => setShowCreate((v) => !v)}>
+                      {showCreate ? "Cancel" : (
+                        <>
+                          <Plus className="size-4" />
+                          Create Key
+                        </>
+                      )}
+                    </Button>
+                  ) : null}
                 </div>
 
-                {showCreate ? (
+                {showCreate && canWrite ? (
                   <FadeIn>
                     <Card className="p-5">
                       <form className="flex flex-col gap-3" onSubmit={onCreate}>
@@ -303,7 +320,7 @@ export default function ApiKeysPage(): React.ReactElement {
                               </TableCell>
                               <TableCell className="text-muted-foreground">{formatRelative(k.lastUsedAt)}</TableCell>
                               <TableCell className="text-right">
-                                {k.status !== "revoked" ? (
+                                {canWrite && k.status !== "revoked" ? (
                                   <Button variant="destructive" size="sm" disabled={revokingId === k._id} onClick={() => void onRevoke(k._id)}>
                                     {revokingId === k._id ? "Revoking…" : "Revoke"}
                                   </Button>

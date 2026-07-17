@@ -31,7 +31,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Boxes, Plus, ArrowLeft, Trash2, GripVertical, Sparkles } from "lucide-react";
+import { Boxes, Plus, ArrowLeft, Trash2, GripVertical, Sparkles, ShieldCheck } from "lucide-react";
 import { PageHeader } from "@/components/PageHeader";
 import { EmptyState } from "@/components/EmptyState";
 import { FadeIn } from "@/components/anim";
@@ -42,6 +42,7 @@ import {
   MODEL_METADATA_POLICY,
   type ModelStatus,
 } from "@tokenpanel/contracts";
+import { hasPermission, useAuth } from "../auth/AuthContext.tsx";
 
 
 // Domain-split pure helpers (models/model-form.ts). Re-exported for unit tests.
@@ -111,6 +112,9 @@ function StatusBadge({ status }: { status: StatusFilter }): React.ReactElement {
 }
 
 export default function ModelsPage(): React.ReactElement {
+  const { user } = useAuth();
+  const canWrite = hasPermission(user, "models:write");
+
   const [models, setModels] = useState<Model[]>([]);
   const [providers, setProviders] = useState<Provider[]>([]);
   const [loading, setLoading] = useState(true);
@@ -157,11 +161,12 @@ export default function ModelsPage(): React.ReactElement {
   const reload = useCallback(() => setRefreshKey((k) => k + 1), []);
 
   const startAdd = useCallback(() => {
+    if (!canWrite) return;
     setEditing(null);
     setForm(emptyForm());
     setFormError(null);
     setView("edit");
-  }, []);
+  }, [canWrite]);
 
   const startEdit = useCallback((m: Model) => {
     setEditing(m);
@@ -187,6 +192,7 @@ export default function ModelsPage(): React.ReactElement {
   const submitForm = useCallback(
     async (e: FormEvent<HTMLFormElement>) => {
       e.preventDefault();
+      if (!canWrite) return;
       const isCreate = editing === null;
       const built = buildModelPayload(form, isCreate);
       if (!built.ok) {
@@ -217,11 +223,12 @@ export default function ModelsPage(): React.ReactElement {
         setSaving(false);
       }
     },
-    [form, editing],
+    [form, editing, canWrite],
   );
 
   const deleteModel = useCallback(
     async (m: Model) => {
+      if (!canWrite) return;
       if (!confirm(`Delete model "${m.displayName}" (${m.aliasId})? This cannot be undone.`))
         return;
       try {
@@ -232,10 +239,10 @@ export default function ModelsPage(): React.ReactElement {
         setError(err instanceof ApiError ? err.message : "Delete failed.");
       }
     },
-    [editing, backToList],
+    [editing, backToList, canWrite],
   );
 
-  if (view === "edit") {
+  if (view === "edit" && (canWrite || editing !== null)) {
     return (
       <>
         <ModelEditor
@@ -247,6 +254,7 @@ export default function ModelsPage(): React.ReactElement {
           model={editing}
           providers={providers}
           providerMap={providerMap}
+          canWrite={canWrite}
           onSubmit={submitForm}
           onBack={backToList}
           onDelete={deleteModel}
@@ -254,7 +262,7 @@ export default function ModelsPage(): React.ReactElement {
           onOpenFetch={() => setFetchOpen(true)}
         />
         <FetchModelDialog
-          open={fetchOpen}
+          open={canWrite && fetchOpen}
           onOpenChange={setFetchOpen}
           onApply={applyFetched}
         />
@@ -265,10 +273,12 @@ export default function ModelsPage(): React.ReactElement {
   return (
     <div className="flex flex-col gap-6 p-6 lg:p-8">
       <PageHeader title="Models" icon={<Boxes strokeWidth={1.75} />}>
-        <Button size="sm" onClick={startAdd}>
-          <Plus className="size-4" />
-          Add Model
-        </Button>
+        {canWrite ? (
+          <Button size="sm" onClick={startAdd}>
+            <Plus className="size-4" />
+            Add Model
+          </Button>
+        ) : null}
       </PageHeader>
 
       {error ? (
@@ -277,13 +287,34 @@ export default function ModelsPage(): React.ReactElement {
         </Alert>
       ) : null}
 
+      {!canWrite ? (
+        <Alert>
+          <ShieldCheck className="size-4" />
+          <AlertDescription>
+            You can view models but need{" "}
+            <code className="font-mono text-xs">models:write</code> to create, edit, or delete them.
+          </AlertDescription>
+        </Alert>
+      ) : null}
+
       <Card className="overflow-hidden p-0">
         {loading ? null : models.length === 0 ? (
           <EmptyState
             icon={<Boxes className="size-5" />}
             title="No models yet"
-            description="Create your first aliased model with a provider fallback chain."
-            action={<Button size="sm" onClick={startAdd}><Plus className="size-4" />Add Model</Button>}
+            description={
+              canWrite
+                ? "Create your first aliased model with a provider fallback chain."
+                : "No models configured yet. An admin with models:write can add them."
+            }
+            action={
+              canWrite ? (
+                <Button size="sm" onClick={startAdd}>
+                  <Plus className="size-4" />
+                  Add Model
+                </Button>
+              ) : undefined
+            }
           />
         ) : (
           <FadeIn>
@@ -310,10 +341,20 @@ export default function ModelsPage(): React.ReactElement {
                       <TableCell className="text-xs text-muted-foreground">{m.active ? "on" : "off"}</TableCell>
                       <TableCell className="text-right">
                         <div className="inline-flex gap-1">
-                          <Button variant="secondary" size="sm" onClick={() => startEdit(m)}>Edit</Button>
-                          <Button variant="ghost" size="icon-sm" className="text-destructive hover:text-destructive" onClick={() => void deleteModel(m)} aria-label="Delete">
-                            <Trash2 className="size-4" />
+                          <Button variant="secondary" size="sm" onClick={() => startEdit(m)}>
+                            {canWrite ? "Edit" : "View"}
                           </Button>
+                          {canWrite ? (
+                            <Button
+                              variant="ghost"
+                              size="icon-sm"
+                              className="text-destructive hover:text-destructive"
+                              onClick={() => void deleteModel(m)}
+                              aria-label="Delete"
+                            >
+                              <Trash2 className="size-4" />
+                            </Button>
+                          ) : null}
                         </div>
                       </TableCell>
                     </TableRow>
@@ -337,6 +378,7 @@ interface ModelEditorProps {
   model: Model | null;
   providers: Provider[];
   providerMap: Map<string, Provider>;
+  canWrite: boolean;
   onSubmit: (e: FormEvent<HTMLFormElement>) => void;
   onBack: () => void;
   onDelete: (m: Model) => void;
@@ -381,19 +423,27 @@ function ModelEditor({
   model,
   providers,
   providerMap,
+  canWrite,
   onSubmit,
   onBack,
   onDelete,
   onModelReplaced,
   onOpenFetch,
 }: ModelEditorProps): React.ReactElement {
+  const readOnly = !canWrite;
   return (
     <div className="flex flex-col gap-6 p-6 lg:p-8">
       <PageHeader
-        title={isCreate ? "Add model" : (model?.displayName ?? "Edit model")}
+        title={
+          isCreate
+            ? "Add model"
+            : readOnly
+              ? (model?.displayName ?? "Model")
+              : (model?.displayName ?? "Edit model")
+        }
         icon={<Boxes strokeWidth={1.75} />}
       >
-        {isCreate ? (
+        {isCreate && canWrite ? (
           <Button variant="outline" size="sm" onClick={onOpenFetch} disabled={saving}>
             <Sparkles className="size-4" />
             Fetch Model Information
@@ -405,7 +455,11 @@ function ModelEditor({
         </Button>
       </PageHeader>
 
-      <form className="flex flex-col gap-6 rounded-lg border border-border bg-card p-6 shadow-xs" onSubmit={onSubmit}>
+      <form
+        className="flex flex-col gap-6 rounded-lg border border-border bg-card p-6 shadow-xs"
+        onSubmit={onSubmit}
+        aria-readonly={readOnly || undefined}
+      >
         <SectionTitle>Identity</SectionTitle>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <FormField id="m-alias" label="Alias ID" help="Lowercase slug: a-z, 0-9, _ or -.">
@@ -535,19 +589,31 @@ function ModelEditor({
         ) : null}
 
         <div className="flex justify-end gap-2 pt-1">
-          {!isCreate && model ? (
+          {canWrite && !isCreate && model ? (
             <Button type="button" variant="destructive" onClick={() => void onDelete(model)} disabled={saving}>
               <Trash2 className="size-4" />
               Delete
             </Button>
           ) : null}
-          <Button type="button" variant="outline" onClick={onBack} disabled={saving}>Cancel</Button>
-          <Button type="submit" disabled={saving}>{saving ? "Saving…" : isCreate ? "Create" : "Save"}</Button>
+          <Button type="button" variant="outline" onClick={onBack} disabled={saving}>
+            {canWrite ? "Cancel" : "Back"}
+          </Button>
+          {canWrite ? (
+            <Button type="submit" disabled={saving}>
+              {saving ? "Saving…" : isCreate ? "Create" : "Save"}
+            </Button>
+          ) : null}
         </div>
       </form>
 
       {!isCreate && model ? (
-        <FallbackChain model={model} providers={providers} providerMap={providerMap} onModelReplaced={onModelReplaced} />
+        <FallbackChain
+          model={model}
+          providers={providers}
+          providerMap={providerMap}
+          canWrite={canWrite}
+          onModelReplaced={onModelReplaced}
+        />
       ) : null}
     </div>
   );
@@ -775,10 +841,17 @@ interface FallbackChainProps {
   model: Model;
   providers: Provider[];
   providerMap: Map<string, Provider>;
+  canWrite: boolean;
   onModelReplaced: () => void;
 }
 
-function FallbackChain({ model, providers, providerMap, onModelReplaced }: FallbackChainProps): React.ReactElement {
+function FallbackChain({
+  model,
+  providers,
+  providerMap,
+  canWrite,
+  onModelReplaced,
+}: FallbackChainProps): React.ReactElement {
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   const [dropTarget, setDropTarget] = useState<number | null>(null);
   const [reordering, setReordering] = useState(false);
@@ -790,6 +863,7 @@ function FallbackChain({ model, providers, providerMap, onModelReplaced }: Fallb
 
   const onDragStart = useCallback(
     (e: DragEvent<HTMLDivElement>, index: number) => {
+      if (!canWrite) return;
       setDragIndex(index);
       e.dataTransfer.effectAllowed = "move";
       try {
@@ -798,7 +872,7 @@ function FallbackChain({ model, providers, providerMap, onModelReplaced }: Fallb
         /* some browsers throw without user gesture */
       }
     },
-    [],
+    [canWrite],
   );
 
   const onDragOver = useCallback(
@@ -950,12 +1024,21 @@ function FallbackChain({ model, providers, providerMap, onModelReplaced }: Fallb
         <div>
           <h2 className="text-lg font-semibold">Fallback chain</h2>
           <p className="mt-0.5 text-sm text-muted-foreground">
-            Drag rows to reorder priorities (lower = tried first).
+            {canWrite
+              ? "Drag rows to reorder priorities (lower = tried first)."
+              : "Provider fallback order (priority: lower = tried first)."}
           </p>
         </div>
-        <Button variant="outline" size="sm" onClick={() => setShowAdd((v) => !v)} disabled={reordering}>
-          {showAdd ? "Close" : "Add Provider Entry"}
-        </Button>
+        {canWrite ? (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setShowAdd((v) => !v)}
+            disabled={reordering}
+          >
+            {showAdd ? "Close" : "Add Provider Entry"}
+          </Button>
+        ) : null}
       </div>
 
       {chainError ? (
@@ -988,19 +1071,21 @@ function FallbackChain({ model, providers, providerMap, onModelReplaced }: Fallb
                       "flex items-stretch border-b border-border last:border-b-0 bg-card transition-colors",
                       isDragging && "opacity-50 bg-muted",
                     )}
-                    draggable
+                    draggable={canWrite}
                     onDragStart={(e) => onDragStart(e, index)}
                     onDragOver={(e) => onDragOver(e, index)}
                     onDrop={(e) => onDrop(e, index)}
                     onDragEnd={onDragEnd}
                   >
-                    <div
-                      className="flex w-9 shrink-0 cursor-grab select-none items-center justify-center border-r border-border text-muted-foreground active:cursor-grabbing"
-                      aria-label="Drag to reorder"
-                      title="Drag to reorder"
-                    >
-                      <GripVertical className="size-4" />
-                    </div>
+                    {canWrite ? (
+                      <div
+                        className="flex w-9 shrink-0 cursor-grab select-none items-center justify-center border-r border-border text-muted-foreground active:cursor-grabbing"
+                        aria-label="Drag to reorder"
+                        title="Drag to reorder"
+                      >
+                        <GripVertical className="size-4" />
+                      </div>
+                    ) : null}
                     <div className="flex min-w-0 flex-1 flex-col gap-2 px-3 py-2.5">
                       <div className="flex flex-wrap items-center gap-3">
                         <span className="inline-flex size-5 items-center justify-center rounded-full bg-primary/10 px-1.5 text-xs font-bold text-primary">
@@ -1009,10 +1094,20 @@ function FallbackChain({ model, providers, providerMap, onModelReplaced }: Fallb
                         <span className="text-sm font-semibold">{provider?.name ?? "Unknown provider"}</span>
                         <span className="font-mono text-xs text-muted-foreground">{entry.upstreamModelId}</span>
                         <div className="ml-auto flex items-center gap-2">
-                          <label className="inline-flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground">
-                            <Checkbox checked={entry.active} onCheckedChange={(v) => void onActiveToggle(entry, v === true)} disabled={reordering} />
-                            active
-                          </label>
+                          {canWrite ? (
+                            <label className="inline-flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground">
+                              <Checkbox
+                                checked={entry.active}
+                                onCheckedChange={(v) => void onActiveToggle(entry, v === true)}
+                                disabled={reordering}
+                              />
+                              active
+                            </label>
+                          ) : (
+                            <Badge variant={entry.active ? "success" : "secondary"}>
+                              {entry.active ? "active" : "off"}
+                            </Badge>
+                          )}
                           <button
                             type="button"
                             className="rounded border border-border px-2 py-0.5 text-[11px] text-muted-foreground hover:bg-muted"
@@ -1020,9 +1115,18 @@ function FallbackChain({ model, providers, providerMap, onModelReplaced }: Fallb
                           >
                             {expanded.has(entry.id) ? "Hide" : "Cost/Price"}
                           </button>
-                          <Button variant="ghost" size="icon-sm" className="text-destructive hover:text-destructive" onClick={() => void onRemoveEntry(entry)} disabled={reordering} aria-label="Remove">
-                            <Trash2 className="size-4" />
-                          </Button>
+                          {canWrite ? (
+                            <Button
+                              variant="ghost"
+                              size="icon-sm"
+                              className="text-destructive hover:text-destructive"
+                              onClick={() => void onRemoveEntry(entry)}
+                              disabled={reordering}
+                              aria-label="Remove"
+                            >
+                              <Trash2 className="size-4" />
+                            </Button>
+                          ) : null}
                         </div>
                       </div>
                       {expanded.has(entry.id) ? <EntryCostPrice entry={entry} /> : null}
@@ -1039,7 +1143,7 @@ function FallbackChain({ model, providers, providerMap, onModelReplaced }: Fallb
         )}
       </div>
 
-      {showAdd ? (
+      {canWrite && showAdd ? (
         <AddEntryForm
           modelId={model._id}
           providers={providers}

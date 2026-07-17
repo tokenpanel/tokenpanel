@@ -43,11 +43,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Plus, Search, Users, ChevronLeft, ChevronRight, Copy, Check } from "lucide-react";
+import { Plus, Search, Users, ChevronLeft, ChevronRight, Copy, Check, ShieldCheck } from "lucide-react";
 import { PageHeader } from "@/components/PageHeader";
 import { EmptyState } from "@/components/EmptyState";
 import { FadeIn } from "@/components/anim";
 import { cn } from "@/lib/utils";
+import { hasPermission, useAuth } from "../auth/AuthContext.tsx";
 
 import {
   CUSTOMER_STATUSES,
@@ -219,6 +220,9 @@ function Field({
 }
 
 export default function CustomersPage(): React.ReactElement {
+  const { user } = useAuth();
+  const canWriteCustomers = hasPermission(user, "customers:write");
+
   const [items, setItems] = useState<Customer[]>([]);
   const [total, setTotal] = useState(0);
   const [skip, setSkip] = useState(0);
@@ -291,11 +295,24 @@ export default function CustomersPage(): React.ReactElement {
   return (
     <div className="flex min-h-full flex-col gap-6 p-6 lg:p-8">
       <PageHeader title="Customers" icon={<Users strokeWidth={1.75} />}>
-        <Button size="sm" onClick={() => setCreateOpen(true)}>
-          <Plus className="size-4" />
-          Add Customer
-        </Button>
+        {canWriteCustomers ? (
+          <Button size="sm" onClick={() => setCreateOpen(true)}>
+            <Plus className="size-4" />
+            Add Customer
+          </Button>
+        ) : null}
       </PageHeader>
+
+      {!canWriteCustomers ? (
+        <Alert>
+          <ShieldCheck className="size-4" />
+          <AlertDescription>
+            You can view customers but need{" "}
+            <code className="font-mono text-xs">customers:write</code> (and related
+            permissions) for create, edit, balance, subscription, and key actions.
+          </AlertDescription>
+        </Alert>
+      ) : null}
 
       <div className="flex flex-wrap items-center gap-3">
         <FadeIn className="relative flex items-center">
@@ -371,8 +388,14 @@ export default function CustomersPage(): React.ReactElement {
                     <TableCell><Badge variant={statusVariant(c.status)}>{c.status}</Badge></TableCell>
                     <TableCell>
                       <div className="flex justify-end gap-1.5" onClick={(e) => e.stopPropagation()}>
-                        <Button variant="outline" size="sm" onClick={(e) => onRowEdit(e, c)}>Edit</Button>
-                        <Button variant="ghost" size="sm" onClick={() => openDetail(c)}>Manage</Button>
+                        {canWriteCustomers ? (
+                          <Button variant="outline" size="sm" onClick={(e) => onRowEdit(e, c)}>
+                            Edit
+                          </Button>
+                        ) : null}
+                        <Button variant="ghost" size="sm" onClick={() => openDetail(c)}>
+                          {canWriteCustomers ? "Manage" : "View"}
+                        </Button>
                       </div>
                     </TableCell>
                   </TableRow>
@@ -407,8 +430,11 @@ export default function CustomersPage(): React.ReactElement {
         </SheetContent>
       </Sheet>
 
-      <Dialog open={createOpen} onOpenChange={(o) => (o ? null : setCreateOpen(false))}>
-        {createOpen ? (
+      <Dialog
+        open={canWriteCustomers && createOpen}
+        onOpenChange={(o) => (o ? null : setCreateOpen(false))}
+      >
+        {canWriteCustomers && createOpen ? (
           <CustomerFormModal
             mode="create"
             onClose={() => setCreateOpen(false)}
@@ -432,6 +458,14 @@ interface DrawerProps {
 }
 
 function CustomerDrawer({ customer, onClose, onUpdated, onDeleted }: DrawerProps): React.ReactElement {
+  const { user } = useAuth();
+  const canWriteCustomers = hasPermission(user, "customers:write");
+  const canWriteBalances = hasPermission(user, "balances:write");
+  const canWriteSubscriptions = hasPermission(user, "subscriptions:write");
+  const canWriteKeys = hasPermission(user, "customer_keys:write");
+  const canReadBalances = hasPermission(user, "balances:read") || canWriteBalances;
+  const canReadKeys = hasPermission(user, "customer_keys:read") || canWriteKeys;
+
   const [editOpen, setEditOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
@@ -445,6 +479,7 @@ function CustomerDrawer({ customer, onClose, onUpdated, onDeleted }: DrawerProps
   }, [onClose]);
 
   async function handleDelete() {
+    if (!canWriteCustomers) return;
     if (!confirm(`Close customer "${customer.name}"? This sets status to closed.`)) return;
     setDeleting(true);
     setDeleteError(null);
@@ -471,12 +506,14 @@ function CustomerDrawer({ customer, onClose, onUpdated, onDeleted }: DrawerProps
         <Card className="flex flex-col gap-3.5 p-5">
           <div className="flex items-center justify-between gap-3">
             <div className="text-sm font-semibold">Customer info</div>
-            <div className="flex gap-2">
-              <Button variant="outline" size="sm" onClick={() => setEditOpen(true)}>Edit</Button>
-              <Button variant="destructive" size="sm" onClick={() => void handleDelete()} disabled={deleting}>
-                {deleting ? "Closing…" : "Close"}
-              </Button>
-            </div>
+            {canWriteCustomers ? (
+              <div className="flex gap-2">
+                <Button variant="outline" size="sm" onClick={() => setEditOpen(true)}>Edit</Button>
+                <Button variant="destructive" size="sm" onClick={() => void handleDelete()} disabled={deleting}>
+                  {deleting ? "Closing…" : "Close"}
+                </Button>
+              </div>
+            ) : null}
           </div>
           <div className="grid grid-cols-[130px_1fr] gap-x-4 gap-y-2 text-sm">
             <div className="text-muted-foreground">Name</div><div>{customer.name}</div>
@@ -496,14 +533,30 @@ function CustomerDrawer({ customer, onClose, onUpdated, onDeleted }: DrawerProps
           {deleteError ? <Alert variant="destructive"><AlertDescription>{deleteError}</AlertDescription></Alert> : null}
         </Card>
 
-        <BalanceCard customerId={customer._id} balance={customer.balance} onUpdated={onUpdated} />
-        <SubscriptionCard customerId={customer._id} />
+        {canReadBalances ? (
+          <BalanceCard
+            customerId={customer._id}
+            balance={customer.balance}
+            canWrite={canWriteBalances}
+            onUpdated={onUpdated}
+          />
+        ) : null}
+        <SubscriptionCard customerId={customer._id} canWrite={canWriteSubscriptions} />
         <UsageCard customerId={customer._id} />
-        <ApiKeysCard customerId={customer._id} customerName={customer.name} />
+        {canReadKeys ? (
+          <ApiKeysCard
+            customerId={customer._id}
+            customerName={customer.name}
+            canWrite={canWriteKeys}
+          />
+        ) : null}
       </div>
 
-      <Dialog open={editOpen} onOpenChange={(o) => (o ? null : setEditOpen(false))}>
-        {editOpen ? (
+      <Dialog
+        open={canWriteCustomers && editOpen}
+        onOpenChange={(o) => (o ? null : setEditOpen(false))}
+      >
+        {canWriteCustomers && editOpen ? (
           <CustomerFormModal
             mode="edit"
             customer={customer}
@@ -522,10 +575,16 @@ function CustomerDrawer({ customer, onClose, onUpdated, onDeleted }: DrawerProps
 interface BalanceCardProps {
   customerId: string;
   balance: Money;
+  canWrite: boolean;
   onUpdated: (c: Customer) => void;
 }
 
-function BalanceCard({ customerId, balance, onUpdated }: BalanceCardProps): React.ReactElement {
+function BalanceCard({
+  customerId,
+  balance,
+  canWrite,
+  onUpdated,
+}: BalanceCardProps): React.ReactElement {
   const [history, setHistory] = useState<BalanceAdjustment[]>([]);
   const [historyTotal, setHistoryTotal] = useState(0);
   const [loadingHistory, setLoadingHistory] = useState(false);
@@ -556,7 +615,11 @@ function BalanceCard({ customerId, balance, onUpdated }: BalanceCardProps): Reac
     <Card className="flex flex-col gap-3.5 p-5">
       <div className="flex items-center justify-between gap-3">
         <div className="text-sm font-semibold">Balance</div>
-        <Button variant="outline" size="sm" onClick={() => setFormOpen(true)}>Add Credit</Button>
+        {canWrite ? (
+          <Button variant="outline" size="sm" onClick={() => setFormOpen(true)}>
+            Add Credit
+          </Button>
+        ) : null}
       </div>
       <div className="text-2xl font-bold tabular-nums">{formatMoney(balance.amountMinor, balance.currency)}</div>
       <div>
@@ -587,8 +650,8 @@ function BalanceCard({ customerId, balance, onUpdated }: BalanceCardProps): Reac
           </div>
         )}
       </div>
-      <Dialog open={formOpen} onOpenChange={(o) => (o ? null : setFormOpen(false))}>
-        {formOpen ? (
+      <Dialog open={canWrite && formOpen} onOpenChange={(o) => (o ? null : setFormOpen(false))}>
+        {canWrite && formOpen ? (
           <BalanceForm
             customerId={customerId}
             currency={balance.currency}
@@ -693,9 +756,10 @@ function BalanceForm({ customerId, currency, onClose, onSaved }: BalanceFormProp
 
 interface SubscriptionCardProps {
   customerId: string;
+  canWrite: boolean;
 }
 
-function SubscriptionCard({ customerId }: SubscriptionCardProps): React.ReactElement {
+function SubscriptionCard({ customerId, canWrite }: SubscriptionCardProps): React.ReactElement {
   const [sub, setSub] = useState<SubscriptionResponse | null>(null);
   const [plans, setPlans] = useState<Plan[]>([]);
   const [loading, setLoading] = useState(true);
@@ -729,7 +793,7 @@ function SubscriptionCard({ customerId }: SubscriptionCardProps): React.ReactEle
 
   async function onSubscribe(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    if (!planId) return;
+    if (!canWrite || !planId) return;
     setSubscribing(true);
     setError(null);
     try {
@@ -766,19 +830,21 @@ function SubscriptionCard({ customerId }: SubscriptionCardProps): React.ReactEle
       ) : (
         <div>
           <div className="mb-3 text-sm text-muted-foreground/60">No active subscription.</div>
-          <form className="flex gap-2" onSubmit={onSubscribe}>
-            <Select value={planId} onValueChange={setPlanId} disabled={subscribing || plans.length === 0}>
-              <SelectTrigger className="flex-1">
-                <SelectValue placeholder="Select plan…" />
-              </SelectTrigger>
-              <SelectContent>
-                {plans.map((p) => (
-                  <SelectItem key={p._id} value={p._id}>{p.name} — {formatMoney(p.price.amountMinor, p.price.currency)} {intervalLabel(p.interval, p.intervalCount)}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Button type="submit" disabled={subscribing || plans.length === 0 || !planId}>{subscribing ? "Subscribing…" : "Assign"}</Button>
-          </form>
+          {canWrite ? (
+            <form className="flex gap-2" onSubmit={onSubscribe}>
+              <Select value={planId} onValueChange={setPlanId} disabled={subscribing || plans.length === 0}>
+                <SelectTrigger className="flex-1">
+                  <SelectValue placeholder="Select plan…" />
+                </SelectTrigger>
+                <SelectContent>
+                  {plans.map((p) => (
+                    <SelectItem key={p._id} value={p._id}>{p.name} — {formatMoney(p.price.amountMinor, p.price.currency)} {intervalLabel(p.interval, p.intervalCount)}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Button type="submit" disabled={subscribing || plans.length === 0 || !planId}>{subscribing ? "Subscribing…" : "Assign"}</Button>
+            </form>
+          ) : null}
         </div>
       )}
     </Card>
@@ -894,9 +960,10 @@ function UsageCard({ customerId }: UsageCardProps): React.ReactElement {
 interface ApiKeysCardProps {
   customerId: string;
   customerName: string;
+  canWrite: boolean;
 }
 
-function ApiKeysCard({ customerId, customerName }: ApiKeysCardProps): React.ReactElement {
+function ApiKeysCard({ customerId, customerName, canWrite }: ApiKeysCardProps): React.ReactElement {
   const [keys, setKeys] = useState<ApiKey[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -922,6 +989,7 @@ function ApiKeysCard({ customerId, customerName }: ApiKeysCardProps): React.Reac
   }, [load]);
 
   async function onRevoke(k: ApiKey) {
+    if (!canWrite) return;
     if (!confirm(`Revoke key "${k.name}"? This cannot be undone.`)) return;
     try {
       await deleteJson<OkResponse>(`/admin/api-keys/${k._id}`);
@@ -944,7 +1012,11 @@ function ApiKeysCard({ customerId, customerName }: ApiKeysCardProps): React.Reac
     <Card className="flex flex-col gap-3.5 p-5">
       <div className="flex items-center justify-between gap-3">
         <div className="text-sm font-semibold">API Keys</div>
-        <Button variant="outline" size="sm" onClick={() => setCreateOpen(true)}>Create Key</Button>
+        {canWrite ? (
+          <Button variant="outline" size="sm" onClick={() => setCreateOpen(true)}>
+            Create Key
+          </Button>
+        ) : null}
       </div>
       {newKey ? (
         <div className="flex items-start gap-2.5 rounded-md border border-primary/30 bg-primary/10 px-3.5 py-3 text-sm">
@@ -976,15 +1048,15 @@ function ApiKeysCard({ customerId, customerName }: ApiKeysCardProps): React.Reac
                   {k.modelWhitelist.length > 0 ? <span>models: {k.modelWhitelist.join(", ")}</span> : null}
                 </span>
               </div>
-              {k.status === "active" ? (
+              {canWrite && k.status === "active" ? (
                 <Button variant="destructive" size="sm" onClick={() => void onRevoke(k)}>Revoke</Button>
               ) : null}
             </div>
           ))}
         </div>
       )}
-      <Dialog open={createOpen} onOpenChange={(o) => (o ? null : setCreateOpen(false))}>
-        {createOpen ? (
+      <Dialog open={canWrite && createOpen} onOpenChange={(o) => (o ? null : setCreateOpen(false))}>
+        {canWrite && createOpen ? (
           <ApiKeyCreateForm
             customerId={customerId}
             customerName={customerName}

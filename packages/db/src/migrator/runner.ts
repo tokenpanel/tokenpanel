@@ -107,18 +107,23 @@ export async function runMigrations(
 
 export async function getMigrationStatus(db: Db): Promise<MigrationStatus> {
   const appliedDocs = await db.collection<MigrationDoc>(MIGRATIONS_COLLECTION).find({}).toArray();
-  const appliedIds = new Set(appliedDocs.map((a) => a._id));
+  const appliedMap = new Map(appliedDocs.map((a) => [a._id, a.checksum]));
 
   let pending = 0;
   const pendingIds: string[] = [];
+  const checksumMismatches: string[] = [];
 
   const migrations = await loadMigrationTree();
   for (const phase of ["pre", "post"] as MigrationPhase[]) {
     const files = migrations[phase];
     for (const m of files) {
-      if (!appliedIds.has(m.id)) {
+      const existingChecksum = appliedMap.get(m.id);
+      if (existingChecksum === undefined) {
         pending++;
         pendingIds.push(m.id);
+      } else if (existingChecksum !== m.checksum) {
+        // Applied id with a different file body — runMigrations will refuse.
+        checksumMismatches.push(m.id);
       }
     }
   }
@@ -127,5 +132,6 @@ export async function getMigrationStatus(db: Db): Promise<MigrationStatus> {
     applied: appliedDocs.length,
     pending,
     pendingIds,
+    checksumMismatches,
   };
 }

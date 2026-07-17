@@ -48,6 +48,12 @@ async function main(): Promise<void> {
       console.log(`Applied: ${status.applied}`);
       console.log(`Pending: ${status.pending}`);
       for (const id of status.pendingIds) console.log(`  ○ ${id}`);
+      if (status.checksumMismatches.length > 0) {
+        console.log(`Checksum mismatches: ${status.checksumMismatches.length}`);
+        for (const id of status.checksumMismatches) {
+          console.log(`  ✗ ${id} (file edited after apply — run will abort)`);
+        }
+      }
       await closeDb();
       break;
     }

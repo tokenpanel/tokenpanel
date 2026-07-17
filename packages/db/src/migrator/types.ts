@@ -21,4 +21,9 @@ export interface MigrationStatus {
   applied: number;
   pending: number;
   pendingIds: string[];
+  /**
+   * Migration IDs present in `_migrations` whose on-disk checksum no longer
+   * matches. `runMigrations` aborts on these; status surfaces them early.
+   */
+  checksumMismatches: string[];
 }

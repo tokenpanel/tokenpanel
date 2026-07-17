@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { useAuth } from "../auth/AuthContext.tsx";
+import { hasPermission, useAuth } from "../auth/AuthContext.tsx";
 import { ApiError, deleteJson, getJson, patchJson, postJson } from "../api/client.ts";
 import type {
   Organization,
@@ -66,6 +66,9 @@ function deriveSlug(name: string): string {
 
 export default function OrganizationsPage(): React.ReactElement {
   const { user, switchOrganization } = useAuth();
+  // Rename requires organization:write on the target membership; create/delete
+  // are owner/auth-scoped on the API (create: any member, delete: owner only).
+  const canWriteOrg = hasPermission(user, "organization:write");
 
   const [orgs, setOrgs] = useState<Organization[]>([]);
   const [activeId, setActiveId] = useState<string>("");
@@ -274,10 +277,12 @@ export default function OrganizationsPage(): React.ReactElement {
                           </Button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end">
-                          <DropdownMenuItem onClick={() => openRename(org)}>
-                            <Pencil className="size-4" />
-                            <span>Rename</span>
-                          </DropdownMenuItem>
+                          {canWriteOrg ? (
+                            <DropdownMenuItem onClick={() => openRename(org)}>
+                              <Pencil className="size-4" />
+                              <span>Rename</span>
+                            </DropdownMenuItem>
+                          ) : null}
                           {owned ? (
                             <DropdownMenuItem
                               onClick={() => setDeleteTarget(org)}

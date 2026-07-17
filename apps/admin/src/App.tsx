@@ -1,6 +1,7 @@
 import { Navigate, Route, Routes } from "react-router-dom";
 import Layout from "./components/Layout.tsx";
 import RequireAuth from "./components/RequireAuth.tsx";
+import RequirePermission from "./components/RequirePermission.tsx";
 import { SidebarProvider } from "./components/ui/sidebar.tsx";
 import LoginPage from "./pages/LoginPage.tsx";
 import SignupPage from "./pages/SignupPage.tsx";
@@ -16,6 +17,7 @@ import PlaygroundPage from "./pages/PlaygroundPage.tsx";
 import SettingsPage from "./pages/SettingsPage.tsx";
 import OrganizationsPage from "./pages/OrganizationsPage.tsx";
 import { useAuth } from "./auth/AuthContext.tsx";
+import type { PanelPermission } from "./auth/AuthContext.tsx";
 
 function FullScreenLoader(): React.ReactElement {
   return (
@@ -39,6 +41,16 @@ function RootRedirect(): React.ReactElement {
   return <Navigate to="/" replace />;
 }
 
+function Guarded({
+  permission,
+  page,
+}: {
+  permission: PanelPermission | null;
+  page: React.ReactElement;
+}): React.ReactElement {
+  return <RequirePermission permission={permission}>{page}</RequirePermission>;
+}
+
 export default function App(): React.ReactElement {
   return (
     <Routes>
@@ -55,17 +67,36 @@ export default function App(): React.ReactElement {
           </RequireAuth>
         }
       >
-        <Route index element={<DashboardPage />} />
-        <Route path="providers" element={<ProvidersPage />} />
-        <Route path="models" element={<ModelsPage />} />
-        <Route path="customers" element={<CustomersPage />} />
-        <Route path="plans" element={<PlansPage />} />
-        <Route path="playground" element={<PlaygroundPage />} />
-        <Route path="analytics" element={<AnalyticsPage />} />
-        <Route path="api-keys" element={<ApiKeysPage />} />
-        <Route path="management-keys" element={<ManagementKeysPage />} />
-        <Route path="organizations" element={<OrganizationsPage />} />
-        <Route path="settings" element={<SettingsPage />} />
+        <Route index element={<Guarded permission="dashboard:read" page={<DashboardPage />} />} />
+        <Route
+          path="providers"
+          element={<Guarded permission="providers:read" page={<ProvidersPage />} />}
+        />
+        <Route path="models" element={<Guarded permission="models:read" page={<ModelsPage />} />} />
+        <Route
+          path="customers"
+          element={<Guarded permission="customers:read" page={<CustomersPage />} />}
+        />
+        <Route path="plans" element={<Guarded permission="plans:read" page={<PlansPage />} />} />
+        <Route
+          path="playground"
+          element={<Guarded permission="playground:write" page={<PlaygroundPage />} />}
+        />
+        <Route
+          path="analytics"
+          element={<Guarded permission="usage:read" page={<AnalyticsPage />} />}
+        />
+        <Route
+          path="api-keys"
+          element={<Guarded permission="customer_keys:read" page={<ApiKeysPage />} />}
+        />
+        <Route
+          path="management-keys"
+          element={<Guarded permission="management_keys:read" page={<ManagementKeysPage />} />}
+        />
+        {/* Orgs + settings: any authenticated member (no panel atom). */}
+        <Route path="organizations" element={<Guarded permission={null} page={<OrganizationsPage />} />} />
+        <Route path="settings" element={<Guarded permission={null} page={<SettingsPage />} />} />
       </Route>
       <Route path="*" element={<RootRedirect />} />
     </Routes>

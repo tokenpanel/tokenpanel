@@ -43,10 +43,15 @@ catalogSourceRoutes.get(
         const items = yield* Effect.tryPromise({
           try: () => listModels(id),
           catch: (err) =>
+            // Public message is fixed; raw upstream text stays in diagnostic
+            // (logs/observability only — never echoed to clients).
             new SystemError({
               code: "system_error",
-              message: err instanceof Error ? err.message : String(err),
-              diagnostic: "catalog_source_upstream",
+              message: "Failed to fetch models from catalog source",
+              diagnostic:
+                err instanceof Error
+                  ? `catalog_source_upstream: ${err.message}`
+                  : `catalog_source_upstream: ${String(err)}`,
             }),
         });
         return { items };
@@ -60,10 +65,12 @@ catalogSourceRoutes.get(
             "_tag" in err &&
             (err as { _tag: string })._tag === "SystemError"
           ) {
-            const se = err as SystemError;
             return {
               status: 502,
-              body: { error: "upstream_error", message: se.message },
+              body: {
+                error: "upstream_error",
+                message: "Failed to fetch models from catalog source",
+              },
               headers: {},
             };
           }

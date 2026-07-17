@@ -4,6 +4,7 @@ import { sValidator } from "../http/validation/validator.ts";
 import type { AuthVariables } from "../middleware/auth.ts";
 import { requireAuth } from "../middleware/auth.ts";
 import { loginThrottle } from "../lib/throttle.ts";
+import { getRequestClientIp } from "../lib/client-ip.ts";
 import {
   needsSetup,
   login as loginOp,
@@ -32,7 +33,8 @@ authRoutes.get("/status", async (c) => {
 
 authRoutes.post("/login", sValidator("json", loginBody), async (c) => {
   const body = c.req.valid("json");
-  const gate = loginThrottle.check(body.username);
+  const clientIp = getRequestClientIp(c);
+  const gate = loginThrottle.check(clientIp);
   if (!gate.allowed) {
     return c.json(
       { error: "too_many_attempts" },
@@ -44,10 +46,10 @@ authRoutes.post("/login", sValidator("json", loginBody), async (c) => {
     c,
     loginOp({ username: body.username, password: body.password }).pipe(
       Effect.tap(() =>
-        Effect.sync(() => loginThrottle.recordSuccess(body.username)),
+        Effect.sync(() => loginThrottle.recordSuccess(clientIp)),
       ),
       Effect.tapError(() =>
-        Effect.sync(() => loginThrottle.recordFailure(body.username)),
+        Effect.sync(() => loginThrottle.recordFailure(clientIp)),
       ),
     ),
     {

@@ -19,6 +19,7 @@ import type { RepoError } from "../ports/common.ts";
 import { UserRepository } from "../ports/user-repository.ts";
 import { KeyRepository } from "../ports/key-repository.ts";
 import { CustomerRepository } from "../ports/customer-repository.ts";
+import { OrganizationRepository } from "../ports/organization-repository.ts";
 import { Crypto } from "../../runtime/services/crypto.ts";
 import { AppConfig } from "../../runtime/services/app-config.ts";
 import {
@@ -141,7 +142,7 @@ export const resolvePublicPrincipal = (
 ): Effect.Effect<
   ResolvedPublicPrincipal,
   SessionError,
-  KeyRepository | CustomerRepository | Crypto
+  KeyRepository | CustomerRepository | OrganizationRepository | Crypto
 > =>
   Effect.gen(function* () {
     if (!authorizationHeader) {
@@ -200,6 +201,14 @@ export const resolvePublicPrincipal = (
     const hashOk = yield* crypto.safeHashEqual(keyHash, managementKey.keyHash);
     if (!hashOk) return yield* unauthorized();
     if (managementKey.status !== "active") return yield* unauthorized();
+
+    // Detached keys (org deleted without cascade) must not authenticate.
+    // Enumeration-safe: missing tenant → 401, same as unknown key.
+    const orgs = yield* OrganizationRepository;
+    const org = yield* orgs.findById(
+      managementKey.organizationId.toHexString(),
+    );
+    if (!org) return yield* unauthorized("organization_missing");
 
     return {
       kind: "management" as const,

@@ -98,7 +98,9 @@ export const API_KEY_SECRET_BYTES = 24;
 export const API_KEY_PREFIX_COLLISION_ATTEMPTS_COUNT = 5;
 
 // ---------------------------------------------------------------------------
-// Credential failure throttles (in-memory, per process)
+// Credential failure throttles (in-memory, per process, keyed by client IP)
+// Separate FailureThrottle instances per surface so login / API-key / invite
+// keep independent attempt budgets (see apps/api/src/lib/throttle.ts).
 // ---------------------------------------------------------------------------
 
 /** Sliding window for counting failures. Unit: milliseconds. */
@@ -107,14 +109,14 @@ export const THROTTLE_WINDOW_MS = 15 * 60 * 1000;
 /** Lockout duration after max attempts. Unit: milliseconds. */
 export const THROTTLE_LOCKOUT_MS = 15 * 60 * 1000;
 
-/** Max keys retained in the throttle map before global purge. Unit: count. */
+/** Max client IPs retained in one throttle map before global purge. Unit: count. */
 export const THROTTLE_MAX_STORE_SIZE_COUNT = 50_000;
 
-/** Admin login: failures before lockout. Unit: count. */
+/** Admin login: failures from one IP before lockout. Unit: count. */
 export const THROTTLE_LOGIN_MAX_ATTEMPTS_COUNT = 5;
 
-/** Invite-token accept: failures before lockout. Unit: count. */
+/** Invite-token accept: failures from one IP before lockout. Unit: count. */
 export const THROTTLE_INVITE_MAX_ATTEMPTS_COUNT = 5;
 
-/** Public API-key auth: failures before lockout. Unit: count. */
+/** Public API-key auth: failures from one IP before lockout. Unit: count. */
 export const THROTTLE_API_KEY_MAX_ATTEMPTS_COUNT = 10;

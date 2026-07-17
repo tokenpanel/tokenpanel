@@ -82,14 +82,24 @@ export type ApiRuntimeConfig = Readonly<{
     uri: string;
     name: string;
   }>;
-  /**
-   * Org IDs (hex) where atomic balance reservation is enforcement (canary).
-   * Empty → shadow-compare only; legacy checkBalance remains the reader.
-   * See RESERVATION_CANARY_ORG_IDS and ADR 001.
-   */
-  reservationCanaryOrgIds: ReadonlySet<string>;
   /** Intervals, timeouts, concurrency, cache TTLs (see ApiOperationalConfig). */
   operational: ApiOperationalConfig;
+  /**
+   * When true, resolve client IP from reverse-proxy headers if the TCP peer
+   * is in `trustedProxies` (see TRUST_PROXY). Default false — socket only.
+   */
+  trustProxy: boolean;
+  /**
+   * Exact IPs or CIDRs of reverse proxies allowed to set client-IP headers.
+   * Empty + trustProxy → private/loopback defaults (Docker + Caddy).
+   * Env: TRUSTED_PROXIES (comma-separated).
+   */
+  trustedProxies: readonly string[];
+  /**
+   * Prefer CF-Connecting-IP when trustProxy trusts the peer.
+   * Env: TRUST_CLOUDFLARE. Default false.
+   */
+  trustCloudflare: boolean;
 }>;
 
 export class ConfigValidationError extends Error {
@@ -330,22 +340,6 @@ function parseCorsOrigins(
   return out;
 }
 
-/** Parse RESERVATION_CANARY_ORG_IDS (comma-separated 24-hex ObjectIds). */
-function parseReservationCanaryOrgIds(
-  raw: string | undefined,
-): ReadonlySet<string> {
-  if (raw === undefined || raw.trim() === "") return new Set();
-  const out = new Set<string>();
-  for (const part of raw.split(",")) {
-    const id = part.trim().toLowerCase();
-    if (id.length === 0) continue;
-    // Soft-validate: ignore invalid hex rather than fail boot (ops typo safe).
-    if (!/^[0-9a-f]{24}$/.test(id)) continue;
-    out.add(id);
-  }
-  return out;
-}
-
 /**
  * Parse a non-negative integer env var (milliseconds or counts).
  * Unset/empty → default. Invalid → issue + default (aggregation continues).
@@ -388,6 +382,79 @@ function parseNonNegativeInt(
     return defaultValue;
   }
   return n;
+}
+
+function parseBoolEnv(
+  raw: string | undefined,
+  variable: string,
+  defaultValue: boolean,
+  issues: { variable: string; reason: string }[],
+): boolean {
+  if (raw === undefined || raw === "") return defaultValue;
+  const v = raw.trim().toLowerCase();
+  if (v === "1" || v === "true" || v === "yes" || v === "on") return true;
+  if (v === "0" || v === "false" || v === "no" || v === "off") return false;
+  issues.push({
+    variable,
+    reason: "must be a boolean (true/false, 1/0, yes/no, on/off)",
+  });
+  return defaultValue;
+}
+
+/**
+ * Comma-separated IPs or CIDRs. Empty → []. Invalid entries are skipped with
+ * an issue (aggregation continues).
+ */
+function parseTrustedProxies(
+  raw: string | undefined,
+  issues: { variable: string; reason: string }[],
+): readonly string[] {
+  if (raw === undefined || raw.trim() === "") return [];
+  const parts = raw.split(",").map((s) => s.trim()).filter(Boolean);
+  const out: string[] = [];
+  for (const part of parts) {
+    if (part.includes("/")) {
+      const slash = part.indexOf("/");
+      const base = part.slice(0, slash);
+      const bits = part.slice(slash + 1);
+      if (!/^\d+$/.test(bits)) {
+        issues.push({
+          variable: "TRUSTED_PROXIES",
+          reason: `invalid CIDR prefix length: ${part}`,
+        });
+        continue;
+      }
+      const n = Number(bits);
+      const isV4 = /^\d+\.\d+\.\d+\.\d+$/.test(base);
+      const maxBits = isV4 ? 32 : 128;
+      if (n < 0 || n > maxBits) {
+        issues.push({
+          variable: "TRUSTED_PROXIES",
+          reason: `CIDR prefix out of range: ${part}`,
+        });
+        continue;
+      }
+      // Base must look like an IP (full validation is in client-ip at match time).
+      if (base.length === 0 || base.length > 45) {
+        issues.push({
+          variable: "TRUSTED_PROXIES",
+          reason: `invalid proxy address: ${part}`,
+        });
+        continue;
+      }
+      out.push(part);
+    } else {
+      if (part.length === 0 || part.length > 45) {
+        issues.push({
+          variable: "TRUSTED_PROXIES",
+          reason: `invalid proxy address: ${part}`,
+        });
+        continue;
+      }
+      out.push(part);
+    }
+  }
+  return out;
 }
 
 function parseOperationalConfig(
@@ -453,8 +520,8 @@ function parseOperationalConfig(
  * Aggregates all issues before throwing ConfigValidationError.
  *
  * This is the single source of truth for validation semantics (JWT exact
- * bytes, production secret policy, Mongo URI, CORS, canary org IDs,
- * operational defaults). Effect decode path wraps this function.
+ * bytes, production secret policy, Mongo URI, CORS, operational defaults).
+ * Effect decode path wraps this function.
  */
 export function parseApiRuntimeConfig(
   source: Readonly<Record<string, string | undefined>>,
@@ -467,10 +534,20 @@ export function parseApiRuntimeConfig(
   const uri = parseMongoUri(source.MONGODB_URI, issues);
   const name = parseMongoDbName(source.MONGODB_DB, issues);
   const corsOrigins = parseCorsOrigins(source.CORS_ORIGINS, issues);
-  const reservationCanaryOrgIds = parseReservationCanaryOrgIds(
-    source.RESERVATION_CANARY_ORG_IDS,
-  );
   const operational = parseOperationalConfig(source, issues);
+  const trustProxy = parseBoolEnv(
+    source.TRUST_PROXY,
+    "TRUST_PROXY",
+    false,
+    issues,
+  );
+  const trustedProxies = parseTrustedProxies(source.TRUSTED_PROXIES, issues);
+  const trustCloudflare = parseBoolEnv(
+    source.TRUST_CLOUDFLARE,
+    "TRUST_CLOUDFLARE",
+    false,
+    issues,
+  );
 
   if (environment === "production" && corsOrigins === null) {
     // Production without explicit CORS: no broad reflection (same-origin only).
@@ -504,7 +581,9 @@ export function parseApiRuntimeConfig(
     jwtSecret,
     corsOrigins: resolvedCors === null ? null : Object.freeze([...resolvedCors]),
     database: Object.freeze({ uri, name }),
-    reservationCanaryOrgIds,
     operational,
+    trustProxy,
+    trustedProxies: Object.freeze([...trustedProxies]),
+    trustCloudflare,
   });
 }

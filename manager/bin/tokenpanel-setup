@@ -201,6 +201,23 @@ prompt_with_default() {
   fi
 }
 
+# Map env bool (true/false/1/0/yes/no/on/off) or y/n → y|n for prompt_yn defaults.
+env_bool_to_yn() {
+  case "${1:-}" in
+    true|TRUE|1|yes|YES|on|ON|y|Y) echo "y" ;;
+    *) echo "n" ;;
+  esac
+}
+
+# Map prompt_yn y|n → true|false for API env (parseBoolEnv).
+yn_to_env_bool() {
+  if [ "${1:-}" = "y" ]; then
+    echo "true"
+  else
+    echo "false"
+  fi
+}
+
 install_packages() {
   if command -v apt-get >/dev/null 2>&1; then
     apt-get update -qq >/dev/null
@@ -281,23 +298,30 @@ EXISTING_JWT_SECRET="${JWT_SECRET:-}"
 EXISTING_TIMEZONE="${TZ:-UTC}"
 EXISTING_API_PORT="${API_PORT:-3000}"
 EXISTING_USE_CADDY="${USE_CADDY:-y}"
+# Trust-proxy defaults: Caddy mode historically trusted headers; direct mode did not.
+EXISTING_TRUST_PROXY_YN="$(env_bool_to_yn "${TRUST_PROXY:-}")"
+EXISTING_TRUST_CLOUDFLARE_YN="$(env_bool_to_yn "${TRUST_CLOUDFLARE:-}")"
+if [ -z "${TRUST_PROXY:-}" ]; then
+  # First install / old .env without the key — infer from topology later.
+  EXISTING_TRUST_PROXY_YN=""
+fi
 if [ -f "$APP_YML" ] && ! grep -q '^[[:space:]]*caddy:' "$APP_YML" 2>/dev/null; then
   EXISTING_USE_CADDY="n"
 fi
 
 # ── Prompts ──
 echo
-step "1/7" "Domain name for the admin panel"
+step "1/8" "Domain name for the admin panel"
 DOMAIN="$(prompt_with_default '  Domain' "$EXISTING_DOMAIN")"
 [ -n "$DOMAIN" ] || die "domain is required"
 validate_domain "$DOMAIN" || die "invalid domain"
 
-step "2/7" "Admin email (first login + Let's Encrypt notifications)"
+step "2/8" "Admin email (first login + Let's Encrypt notifications)"
 ADMIN_EMAIL="$(prompt_with_default '  Email' "$EXISTING_EMAIL")"
 [ -n "$ADMIN_EMAIL" ] || die "email is required"
 validate_email "$ADMIN_EMAIL" || die "invalid email"
 
-step "3/7" "HTTPS via Let's Encrypt (Caddy reverse proxy)"
+step "3/8" "HTTPS via Let's Encrypt (Caddy reverse proxy)"
 if domain_supports_letsencrypt "$DOMAIN"; then
   USE_CADDY="$(prompt_yn '  Use built-in Caddy for automatic HTTPS?' "$EXISTING_USE_CADDY")"
 else
@@ -312,7 +336,39 @@ else
 fi
 warn_if_nat_or_forwarding_needed
 
-step "4/7" "MongoDB credentials"
+step "4/8" "Client IP for rate limits (login / API-key throttles)"
+echo "  TokenPanel rate-limits failed logins and API keys by client IP."
+echo "  Behind a reverse proxy you must trust proxy headers or every client"
+echo "  looks like the proxy (shared throttle bucket / wrong IP)."
+if [ "$USE_CADDY" = "y" ]; then
+  info "  Built-in Caddy sits in front of the API on the Docker network."
+  # Default trust on for Caddy unless operator previously set false.
+  _tp_default="${EXISTING_TRUST_PROXY_YN:-y}"
+  TRUST_PROXY_YN="$(prompt_yn '  Trust X-Real-IP / X-Forwarded-For from Caddy (recommended)?' "$_tp_default")"
+else
+  echo "  Direct mode publishes the API port. Only enable trust if nginx,"
+  echo "  Traefik, Cloudflare, or another proxy terminates TLS in front and"
+  echo "  the API is not reachable by untrusted clients that can spoof headers."
+  _tp_default="${EXISTING_TRUST_PROXY_YN:-n}"
+  TRUST_PROXY_YN="$(prompt_yn '  Behind an external reverse proxy — trust client-IP headers?' "$_tp_default")"
+fi
+TRUST_PROXY="$(yn_to_env_bool "$TRUST_PROXY_YN")"
+
+if [ "$TRUST_PROXY_YN" = "y" ]; then
+  _cf_default="${EXISTING_TRUST_CLOUDFLARE_YN:-n}"
+  TRUST_CLOUDFLARE_YN="$(prompt_yn '  Cloudflare (or CDN) in front — prefer CF-Connecting-IP?' "$_cf_default")"
+  TRUST_CLOUDFLARE="$(yn_to_env_bool "$TRUST_CLOUDFLARE_YN")"
+  if [ "$TRUST_CLOUDFLARE_YN" = "y" ]; then
+    info "  CF-Connecting-IP will be preferred when the TCP peer is trusted."
+  fi
+  info "  Trusted peers default to private/loopback CIDRs (Docker-safe)."
+  info "  Override later in ${ENV_FILE}: TRUSTED_PROXIES=..."
+else
+  TRUST_CLOUDFLARE="false"
+  info "  Using TCP peer IP only (headers ignored)."
+fi
+
+step "5/8" "MongoDB credentials"
 MONGO_USER="$(prompt_with_default '  MongoDB admin username' "${EXISTING_MONGO_USER}")"
 MONGO_PASS_PROMPT=""
 if [ -n "$EXISTING_MONGO_PASS" ]; then
@@ -360,11 +416,11 @@ else
   JWT_SECRET="$JWT_SECRET_PROMPT"
 fi
 
-step "5/7" "MongoDB database name"
+step "6/8" "MongoDB database name"
 MONGODB_DB="$(prompt_with_default '  Database name' "${EXISTING_MONGODB_DB}")"
 validate_db_name "$MONGODB_DB" || die "invalid database name (allowed: letters, digits, underscore, hyphen; 1-64 chars)"
 
-step "6/7" "SMTP for notifications (optional)"
+step "7/8" "SMTP for notifications (optional)"
 USE_SMTP="$(prompt_yn '  Configure SMTP?' 'n')"
 SMTP_BLOCK=""
 if [ "$USE_SMTP" = "y" ]; then
@@ -380,7 +436,7 @@ SMTP_PASS=${SMTP_PASS}
 SMTP_FROM=${SMTP_FROM}"
 fi
 
-step "7/7" "Timezone"
+step "8/8" "Timezone"
 TIMEZONE="$(prompt_with_default '  Timezone' "${EXISTING_TIMEZONE}")"
 
 # ── Summary ──
@@ -394,6 +450,8 @@ else
   echo "  HTTPS:     disabled (bring your own reverse proxy)"
   echo "  App port:  ${API_PORT}"
 fi
+echo "  Trust proxy headers: ${TRUST_PROXY}"
+echo "  Cloudflare client IP: ${TRUST_CLOUDFLARE}"
 echo "  Data dir:  ${DATA_DIR}"
 echo "  Install:   ${INSTALL_DIR}"
 echo "────────────────────────────────────────────"
@@ -434,6 +492,7 @@ fi
 # .env file itself, so secrets belong here).
 export DOMAIN ADMIN_EMAIL MONGO_USER MONGO_PASS MONGO_USER_URI MONGO_PASS_URI \
        MONGODB_DB JWT_SECRET API_PORT USE_CADDY TIMEZONE \
+       TRUST_PROXY TRUST_CLOUDFLARE \
        INSTALL_DIR CONFIG_DIR DATA_DIR LOG_DIR BACKUP_DIR TEMPLATE_DIR
 
 # Render .env (no whitelist — every var in env.tmpl is a real config value).

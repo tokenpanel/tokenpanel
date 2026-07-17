@@ -129,7 +129,7 @@ export function customerFixture(over: Partial<CustomerDoc> = {}): CustomerDoc {
   };
 }
 
-/** Pre-canary legacy: balance without reservedMinor field. */
+/** Legacy fixture: balance without reservedMinor field. */
 export function customerLegacyBalanceFixture(): Record<string, unknown> {
   const c = customerFixture();
   return {

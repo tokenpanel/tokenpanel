@@ -1357,6 +1357,12 @@ export const KeyRepositoryLive = Layer.effect(
           );
           return yield* decodeMgmtKey(raw);
         }),
+      deleteManagementKeysByOrg: (organizationId) =>
+        tryMongo(async () => {
+          await db().managementApiKeys.deleteMany({
+            organizationId: toObjectId(organizationId),
+          });
+        }),
     };
   }),
 );

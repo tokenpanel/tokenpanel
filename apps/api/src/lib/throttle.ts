@@ -4,6 +4,13 @@
  * locking a key out for `lockoutMs` after `maxAttempts` failures within a
  * sliding `windowMs` window.
  *
+ * Callers key **by client IP only** (see `getRequestClientIp`). Separate
+ * process singletons (`loginThrottle`, `apiKeyThrottle`, `inviteThrottle`) keep
+ * per-surface budgets and limits independent — login fails do not consume the
+ * API-key budget and vice versa. Identity (username / key prefix) is never
+ * part of the map key, so attackers cannot grow the store via unique strings
+ * or lock out a victim account from another IP.
+ *
  * State is per-process (single Bun.serve instance). A restart resets counters —
  * acceptable for throttling; the constant-time hash comparison (crypto.ts) is
  * the durable protection against offline guessing. `now` is injectable so tests
@@ -109,21 +116,21 @@ export class FailureThrottle {
   }
 }
 
-/** Throttle for admin login attempts, keyed by username. */
+/** Admin login failures. Key = client IP. */
 export const loginThrottle = new FailureThrottle({
   maxAttempts: THROTTLE_LOGIN_MAX_ATTEMPTS_COUNT,
   windowMs: THROTTLE_WINDOW_MS,
   lockoutMs: THROTTLE_LOCKOUT_MS,
 });
 
-/** Throttle for invite-token acceptance, keyed by the invite token. */
+/** Invite accept failures. Key = client IP. (Wire when accept-invite throttles.) */
 export const inviteThrottle = new FailureThrottle({
   maxAttempts: THROTTLE_INVITE_MAX_ATTEMPTS_COUNT,
   windowMs: THROTTLE_WINDOW_MS,
   lockoutMs: THROTTLE_LOCKOUT_MS,
 });
 
-/** Throttle for public API-key auth failures, keyed by key prefix. */
+/** Public API-key auth failures. Key = client IP. */
 export const apiKeyThrottle = new FailureThrottle({
   maxAttempts: THROTTLE_API_KEY_MAX_ATTEMPTS_COUNT,
   windowMs: THROTTLE_WINDOW_MS,

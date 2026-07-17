@@ -1,10 +1,9 @@
 /**
- * Atomic balance reservation (ADR 001 dual-write / org canary).
+ * Atomic balance reservation.
  *
  * Available = amountMinor - reservedMinor.
- * Canary orgs: preFlight holds estimated spend in reservedMinor; settle releases
- * the hold and debits actual price. Non-canary: shadow-compare only, legacy
- * checkBalance remains the enforcement reader.
+ * preFlight holds estimated spend in reservedMinor; settle releases the hold
+ * and debits actual price. Release on upstream failure / cancel.
  *
  * Persistence: schema-decoding CustomersRepo only (task 14.2).
  * Primary API is Effect (run on ManagedRuntime / AppServices).
@@ -14,7 +13,6 @@ import { Effect } from "effect";
 import type { ClientSession, ObjectId } from "mongodb";
 import { CustomersRepo } from "../infrastructure/mongo/repositories/customers.ts";
 import type { MongoFailure } from "../infrastructure/mongo/try-mongo.ts";
-import { syncLog } from "../infrastructure/telemetry/sync-log.ts";
 
 export type BalanceSnapshot = {
   amountMinor: number;
@@ -115,44 +113,3 @@ export const settleBalanceWithReservation = (params: {
       ...(params.session !== undefined ? { session: params.session } : {}),
     });
   });
-
-/** Low-cardinality shadow compare log (no PII / full customer ids). */
-export function logReservationShadowCompare(params: {
-  orgIdTail: string;
-  legacyOk: boolean;
-  reservationOk: boolean;
-  needMinor: number;
-  availableMinor: number;
-  amountMinor: number;
-  reservedMinor: number;
-  enforced: boolean;
-}): void {
-  if (params.legacyOk === params.reservationOk) return;
-  syncLog("info", "reservation_shadow_mismatch", {
-    event: "reservation_shadow_mismatch",
-    orgIdTail: params.orgIdTail,
-    legacyOk: params.legacyOk,
-    reservationOk: params.reservationOk,
-    needMinor: params.needMinor,
-    availableMinor: params.availableMinor,
-    amountMinor: params.amountMinor,
-    reservedMinor: params.reservedMinor,
-    enforced: params.enforced,
-  });
-}
-
-export function logRateShadowCompare(params: {
-  orgIdTail: string;
-  legacyOk: boolean;
-  dualOk: boolean;
-  enforced: boolean;
-}): void {
-  if (params.legacyOk === params.dualOk) return;
-  syncLog("info", "rate_shadow_mismatch", {
-    event: "rate_shadow_mismatch",
-    orgIdTail: params.orgIdTail,
-    legacyOk: params.legacyOk,
-    dualOk: params.dualOk,
-    enforced: params.enforced,
-  });
-}

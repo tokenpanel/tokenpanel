@@ -2,7 +2,7 @@ import type { MigrationDb } from "../../src/migrator/migration-db.ts";
 
 /**
  * Additive: ensure customer.balance.reservedMinor exists (default 0).
- * Used by dual-write atomic reservation canary (ADR 001). Safe on re-run.
+ * Used by atomic balance reservation (reservedMinor holds). Safe on re-run.
  */
 export const id = "2026-07-14T00-40-00Z__balance-reserved-minor";
 export const phase = "pre" as const;

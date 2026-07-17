@@ -83,6 +83,10 @@ export type KeyRepositoryService = {
   readonly touchManagementKeyLastUsed: (
     prefix: string,
   ) => Effect.Effect<void, RepoError>;
+  /** Cascade cleanup when an organization is deleted. */
+  readonly deleteManagementKeysByOrg: (
+    organizationId: HexId,
+  ) => Effect.Effect<void, RepoError>;
 };
 
 export class KeyRepository extends Context.Tag("tokenpanel/KeyRepository")<

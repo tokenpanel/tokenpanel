@@ -13,6 +13,7 @@ import type { RepoError, HexId } from "../ports/common.ts";
 import { OrganizationRepository } from "../ports/organization-repository.ts";
 import { UserRepository } from "../ports/user-repository.ts";
 import { InviteRepository } from "../ports/invite-repository.ts";
+import { KeyRepository } from "../ports/key-repository.ts";
 import { Crypto } from "../../runtime/services/crypto.ts";
 import { AppConfig } from "../../runtime/services/app-config.ts";
 import { roleForOrganization } from "../auth/authz.ts";
@@ -274,7 +275,10 @@ export const deleteOrganization = (input: {
 }): Effect.Effect<
   { ok: true },
   OrgDomainError,
-  OrganizationRepository | UserRepository | InviteRepository
+  | OrganizationRepository
+  | UserRepository
+  | InviteRepository
+  | KeyRepository
 > =>
   Effect.gen(function* () {
     const role = roleForOrganization(
@@ -359,6 +363,10 @@ export const deleteOrganization = (input: {
     }
 
     const invites = yield* InviteRepository;
+    const keys = yield* KeyRepository;
+    // Management keys are not business data (empty-org gate ignores them) but
+    // must not survive deletion — otherwise public auth still trusts the key.
+    yield* keys.deleteManagementKeysByOrg(input.organizationId);
     yield* invites.deleteByOrg(input.organizationId);
     yield* orgs.delete(input.organizationId);
     return { ok: true as const };

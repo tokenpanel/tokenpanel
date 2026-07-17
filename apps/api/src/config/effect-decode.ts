@@ -4,7 +4,7 @@
  * `parseApiRuntimeConfig` remains the source of truth for validation semantics.
  * This module wraps it so boot / Layers can use the Effect error channel without
  * reimplementing JWT exact-bytes, production secret policy, Mongo URI, CORS,
- * canary org IDs, or operational defaults.
+ * or operational defaults.
  */
 import { Effect } from "effect";
 import {

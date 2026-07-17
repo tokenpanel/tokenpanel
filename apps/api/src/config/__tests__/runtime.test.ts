@@ -206,4 +206,28 @@ describe("parseApiRuntimeConfig", () => {
       expect(vars).toContain("PORT");
     }
   });
+
+  test("trust proxy defaults off; parses TRUST_PROXY / TRUSTED_PROXIES / TRUST_CLOUDFLARE", () => {
+    const off = parseApiRuntimeConfig(base());
+    expect(off.trustProxy).toBe(false);
+    expect(off.trustedProxies).toEqual([]);
+    expect(off.trustCloudflare).toBe(false);
+
+    const on = parseApiRuntimeConfig(
+      base({
+        TRUST_PROXY: "true",
+        TRUSTED_PROXIES: "10.0.0.0/8, 172.18.0.2",
+        TRUST_CLOUDFLARE: "1",
+      }),
+    );
+    expect(on.trustProxy).toBe(true);
+    expect(on.trustedProxies).toEqual(["10.0.0.0/8", "172.18.0.2"]);
+    expect(on.trustCloudflare).toBe(true);
+  });
+
+  test("rejects invalid TRUST_PROXY boolean", () => {
+    expect(() =>
+      parseApiRuntimeConfig(base({ TRUST_PROXY: "maybe" })),
+    ).toThrow(ConfigValidationError);
+  });
 });

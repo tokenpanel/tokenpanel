@@ -2,7 +2,7 @@ import type { MigrationDb } from "../../src/migrator/migration-db.ts";
 
 /**
  * Additive: settlement_outbox for durable pending settlement / missing usage.
- * Dual-write begins in application code; enforcement switch is a later canary.
+ * Dual-write / outbox settlement recovery for failed in-request settles.
  */
 export const id = "2026-07-13T18-00-00Z__settlement-outbox";
 export const phase = "pre" as const;

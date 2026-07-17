@@ -8,21 +8,16 @@ import {
 } from "@tokenpanel/db";
 import { Effect } from "effect";
 import { apiKeyThrottle } from "../lib/throttle.ts";
-import {
-  API_KEY_LOOKUP_PREFIX_CHARS,
-  CUSTOMER_KEY_PREFIX_LITERAL,
-  MANAGEMENT_KEY_PREFIX_LITERAL,
-} from "../config/security-policy.ts";
+import { getRequestClientIp } from "../lib/client-ip.ts";
 import {
   resolvePublicPrincipal,
   touchPublicKeyLastUsed,
   type ResolvedPublicPrincipal,
 } from "../domains/auth/session.ts";
 import { runMiddlewareEffect } from "../http/adapters/boundary.ts";
-import { isAppError } from "../errors/families.ts";
+import { isAppError, AuthorizationError } from "../errors/families.ts";
 import { renderAdminError } from "../http/renderers/admin.ts";
 import { getAppRuntime } from "../runtime/app-runtime.ts";
-import { AuthorizationError } from "../errors/families.ts";
 
 /**
  * Discriminated public principal. Both kinds carry orgId (always owned by the
@@ -48,17 +43,6 @@ export type PublicAuthVariables = {
   customer?: CustomerDoc;
   apiKey?: ApiKeyDoc;
 };
-
-const PREFIX_LENGTH = API_KEY_LOOKUP_PREFIX_CHARS;
-const CUSTOMER_KEY_PREFIX = CUSTOMER_KEY_PREFIX_LITERAL;
-const MANAGEMENT_KEY_PREFIX = MANAGEMENT_KEY_PREFIX_LITERAL;
-const MIN_FULL_KEY_LENGTH = PREFIX_LENGTH;
-
-function classifyKey(fullKey: string): "customer" | "management" | null {
-  if (fullKey.startsWith(CUSTOMER_KEY_PREFIX)) return "customer";
-  if (fullKey.startsWith(MANAGEMENT_KEY_PREFIX)) return "management";
-  return null;
-}
 
 function toPublicPrincipal(r: ResolvedPublicPrincipal): PublicPrincipal {
   if (r.kind === "customer") {
@@ -87,28 +71,23 @@ export const requirePublicPrincipal: MiddlewareHandler<{
   Variables: PublicAuthVariables;
 }> = async (c, next) => {
   const auth = c.req.header("authorization");
+  const clientIp = getRequestClientIp(c);
+  // Count failures for any Bearer attempt (shape checked only for early gate
+  // path that previously required a classifiable key). IP is the sole bucket.
+  const attemptedBearer =
+    !!auth &&
+    auth.startsWith("Bearer ") &&
+    auth.slice("Bearer ".length).length > 0;
 
-  // Throttle before DB.
-  if (auth) {
-    const parts = auth.split(" ");
-    if (parts.length === 2 && parts[0] === "Bearer" && parts[1]) {
-      const fullKey = parts[1];
-      if (fullKey.length >= MIN_FULL_KEY_LENGTH && classifyKey(fullKey)) {
-        const throttlePrefix = fullKey.slice(0, PREFIX_LENGTH);
-        const gate = apiKeyThrottle.check(throttlePrefix);
-        if (!gate.allowed) {
-          return c.json({ error: "unauthorized" }, 401, {
-            "Retry-After": String(gate.retryAfterSeconds),
-          });
-        }
-      }
+  // Throttle before DB — per client IP (not key prefix).
+  if (attemptedBearer) {
+    const gate = apiKeyThrottle.check(clientIp);
+    if (!gate.allowed) {
+      return c.json({ error: "unauthorized" }, 401, {
+        "Retry-After": String(gate.retryAfterSeconds),
+      });
     }
   }
-
-  const throttlePrefix =
-    auth && auth.startsWith("Bearer ")
-      ? auth.slice("Bearer ".length).slice(0, PREFIX_LENGTH)
-      : null;
 
   const denied = await runMiddlewareEffect(
     c,
@@ -123,8 +102,8 @@ export const requirePublicPrincipal: MiddlewareHandler<{
           c.set("customer", principal.customer);
           c.set("apiKey", principal.apiKey);
         }
-        if (throttlePrefix) {
-          apiKeyThrottle.recordSuccess(throttlePrefix);
+        if (attemptedBearer) {
+          apiKeyThrottle.recordSuccess(clientIp);
         }
         // Fire-and-forget lastUsedAt
         void getAppRuntime().runPromise(
@@ -138,16 +117,16 @@ export const requirePublicPrincipal: MiddlewareHandler<{
         // Auth failures count against throttle.
         if (
           err._tag === "AuthenticationError" &&
-          throttlePrefix !== null
+          attemptedBearer
         ) {
-          apiKeyThrottle.recordFailure(throttlePrefix);
+          apiKeyThrottle.recordFailure(clientIp);
         }
         // Customer inactive: valid key → clear throttle, return 403.
         if (
           err._tag === "AuthorizationError" &&
-          throttlePrefix !== null
+          attemptedBearer
         ) {
-          apiKeyThrottle.recordSuccess(throttlePrefix);
+          apiKeyThrottle.recordSuccess(clientIp);
         }
         if (err._tag === "AuthorizationError") {
           return {

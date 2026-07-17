@@ -46,12 +46,15 @@ export function makeTestConfig(
         "mongodb://localhost:27017/?directConnection=true",
       name: over.database?.name ?? "tokenpanel_test",
     }),
-    reservationCanaryOrgIds:
-      over.reservationCanaryOrgIds ?? new Set<string>(),
     operational: Object.freeze({
       ...DEFAULT_OPERATIONAL_CONFIG,
       ...(over.operational ?? {}),
     }),
+    trustProxy: over.trustProxy ?? false,
+    trustedProxies: Object.freeze(
+      over.trustedProxies ? [...over.trustedProxies] : [],
+    ),
+    trustCloudflare: over.trustCloudflare ?? false,
   });
 }
 

@@ -170,7 +170,13 @@ app.onError((err, c) => {
 const port = runtimeConfig.port;
 
 console.log("mongodb ready");
-Bun.serve({ port, fetch: app.fetch });
+// Pass Bun server into Hono env so getConnInfo / client-IP can use requestIP.
+Bun.serve({
+  port,
+  fetch(req, server) {
+    return app.fetch(req, { server });
+  },
+});
 console.log(`api listening on http://localhost:${port}`);
 
 // Start settlement reconcile worker via WorkerControl (task 10.9).

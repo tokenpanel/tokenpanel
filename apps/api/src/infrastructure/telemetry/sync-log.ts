@@ -2,7 +2,7 @@
  * Promise-path structured log sink (section 14.4).
  *
  * Owned console sink for non-Effect call sites (billing settle, reservation
- * shadow compare, reconcile batch). Prefer Effect `Logger` when inside Effects.
+ * reconcile batch). Prefer Effect `Logger` when inside Effects.
  * Boundary gate allowlists this file as a console owner.
  */
 export type SyncLogLevel = "debug" | "info" | "warn" | "error";

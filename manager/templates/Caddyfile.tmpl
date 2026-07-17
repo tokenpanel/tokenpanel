@@ -8,6 +8,10 @@
 
 ${DOMAIN} {
 	reverse_proxy api:3000 {
+		# Client IP for API credential throttles (TRUST_PROXY=true on api).
+		# X-Real-IP = TCP peer of Caddy (true client when Caddy is edge;
+		# Cloudflare edge when CF is in front — then enable TRUST_CLOUDFLARE
+		# and pass CF-Connecting-IP, which reverse_proxy forwards by default).
 		header_up X-Real-IP {remote_host}
 		header_up X-Forwarded-Proto {scheme}
 	}

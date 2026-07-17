@@ -4,8 +4,6 @@
  * Policy version: 2026-07-15
  * Owner: domains/billing. Pre-flight spend estimates, completion caps,
  * token accounting denominators, currency, and reservation invariants.
- * Not deployment-tunable (canary org list is runtime config).
- *
  * Note: DEFAULT_COMPLETION_CAP_TOKENS (4096) is intentionally separate from
  * Anthropic protocol ANTHROPIC_DEFAULT_MAX_TOKENS (also 4096) — same primitive,
  * different owners (design §7: do not merge coincidentally equal values).
@@ -59,8 +57,8 @@ export const CURRENCY_POLICY = {
 } as const;
 
 /**
- * Reservation / canary policy (ADR 001).
- * Canary orgs: atomic reservedMinor hold. Non-canary: shadow-compare only.
+ * Reservation policy: every org holds estimated spend in reservedMinor
+ * before the provider call; settle debits actual and releases the hold.
  */
 export const RESERVATION_POLICY = {
   /** Available = max(0, amountMinor - max(0, reservedMinor)). */

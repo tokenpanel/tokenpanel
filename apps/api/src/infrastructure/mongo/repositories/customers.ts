@@ -127,7 +127,7 @@ export type CustomersRepoService = {
     readonly session?: ClientSession;
   }) => Effect.Effect<boolean, MongoFailure>;
 
-  /** Bare debit (non-canary): amountMinor $gte price → $inc. */
+  /** Bare debit when no reservation hold exists: amountMinor $gte price → $inc. */
   readonly debitBalance: (params: {
     readonly customerId: ObjectId;
     readonly organizationId: ObjectId;

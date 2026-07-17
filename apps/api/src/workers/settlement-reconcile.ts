@@ -139,8 +139,6 @@ export function makeManagedRuntimeWorkerControl(params: {
       uri: "mongodb://localhost",
       name: "tokenpanel",
     },
-    reservationCanaryOrgIds:
-      params.config.reservationCanaryOrgIds ?? new Set<string>(),
     operational: params.config.operational,
   };
 

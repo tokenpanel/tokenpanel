@@ -1,7 +1,8 @@
 /**
- * Balance preflight / reserve / shadow-canary / release / debit workflow (9.3).
+ * Balance preflight / reserve / release / debit workflow (9.3).
  *
  * Single application Effect path — no Promise dual-path.
+ * Every org uses atomic reservedMinor holds before provider calls.
  */
 
 import { Effect } from "effect";
@@ -14,7 +15,6 @@ import {
   RateLimitExceededError,
   SystemError,
 } from "../../errors/families.ts";
-import { AppConfig } from "../../runtime/services/app-config.ts";
 import { Clock } from "../../runtime/services/clock.ts";
 import {
   checkLimits,
@@ -33,8 +33,6 @@ import {
 import { estimatePreFlightSpend } from "./estimate.ts";
 import {
   availableMinor,
-  isCanaryOrg,
-  wouldLegacyBalanceSucceed,
   wouldReserveSucceed,
   type BalanceSnapshot,
 } from "./reservation.ts";
@@ -48,11 +46,10 @@ export type BalanceReservation = {
 export type PreFlightResult = {
   readonly model: ModelDoc;
   readonly rules: readonly RateLimitRule[];
-  /** Non-null when canary path held balance (caller must settle or release). */
+  /** Non-null when balance was held (caller must settle or release). */
   readonly reservation: BalanceReservation | null;
   readonly estimatedTokens: number;
   readonly estimatedSpendMinor: number;
-  readonly canary: boolean;
 };
 
 export type BillingWorkflowError =
@@ -64,7 +61,6 @@ export type BillingWorkflowError =
 
 export type BillingWorkflowServices =
   | Clock
-  | AppConfig
   | CustomersRepo
   | ModelsRepo
   | PlansRepo
@@ -91,34 +87,27 @@ function mapSystem(message: string) {
     });
 }
 
-/**
- * Pure rate + balance decision inputs for tests / shadow compare.
- */
-export function decidePreFlightEnforcement(params: {
-  readonly snap: BalanceSnapshot;
-  readonly needMinor: number;
-  readonly currency: string;
-  readonly canary: boolean;
-}): {
-  readonly legacyOk: boolean;
-  readonly reservationOk: boolean;
-  readonly enforceReservation: boolean;
-} {
-  const legacy = wouldLegacyBalanceSucceed(
-    params.snap,
-    params.needMinor,
-    params.currency,
-  );
-  const reservation = wouldReserveSucceed(
-    params.snap,
-    params.needMinor,
-    params.currency,
-  );
-  return {
-    legacyOk: legacy.ok,
-    reservationOk: reservation.ok,
-    enforceReservation: params.canary,
-  };
+function failReserveDecision(
+  snap: BalanceSnapshot,
+  needMinor: number,
+  currency: string,
+): InsufficientBalanceError {
+  const decision = wouldReserveSucceed(snap, needMinor, currency);
+  if (!decision.ok && decision.reason === "currency_mismatch") {
+    return new InsufficientBalanceError({
+      code: "currency_mismatch",
+      message: "Customer balance currency does not match model currency",
+      balanceCurrency: snap.currency,
+      modelCurrency: currency,
+    });
+  }
+  return new InsufficientBalanceError({
+    code: "insufficient_balance",
+    message: "Insufficient available balance to complete request",
+    requiredMinor: needMinor,
+    currency,
+    balanceMinor: availableMinor(snap),
+  });
 }
 
 /** Resolve active model by alias (Effect). */
@@ -145,8 +134,8 @@ export const resolveModelOp = (
   });
 
 /**
- * Application pre-flight: model access, rate limits (Clock), balance
- * reserve (canary) or legacy check (non-canary).
+ * Application pre-flight: model access, rate limits (Clock), atomic balance
+ * reserve before the provider call.
  *
  * When `model` is omitted, loads via ModelsRepo from orgId + aliasId.
  */
@@ -187,11 +176,6 @@ export const preFlightWorkflow = (params: {
       params.model ?? (yield* resolveModelOp(params.orgId, params.aliasId));
 
     const clock = yield* Clock;
-    const config = yield* AppConfig;
-    const canary = isCanaryOrg(
-      params.orgId.toHexString(),
-      config.reservationCanaryOrgIds,
-    );
 
     const estimate = estimatePreFlightSpend({
       model,
@@ -253,87 +237,48 @@ export const preFlightWorkflow = (params: {
         };
       }
 
-      const decision = decidePreFlightEnforcement({
-        snap,
-        needMinor: estimate.estimatedSpendMinor,
-        currency: estimate.currency,
-        canary,
-      });
-
-      if (canary) {
-        if (params.dryRun) {
-          if (!decision.reservationOk) {
-            return yield* Effect.fail(
-              new InsufficientBalanceError({
-                code: "insufficient_balance",
-                message: "Insufficient available balance to complete request",
-                requiredMinor: estimate.estimatedSpendMinor,
-                currency: estimate.currency,
-                balanceMinor: availableMinor(snap),
-              }),
-            );
-          }
-          if (estimate.estimatedSpendMinor > 0) {
-            reservation = {
-              reservedMinor: estimate.estimatedSpendMinor,
-              customerId: params.customerId,
-              organizationId: params.orgId,
-            };
-          }
-        } else {
-          const held = yield* reserveBalance({
+      if (params.dryRun) {
+        const decision = wouldReserveSucceed(
+          snap,
+          estimate.estimatedSpendMinor,
+          estimate.currency,
+        );
+        if (!decision.ok) {
+          return yield* Effect.fail(
+            failReserveDecision(
+              snap,
+              estimate.estimatedSpendMinor,
+              estimate.currency,
+            ),
+          );
+        }
+        reservation = {
+          reservedMinor: estimate.estimatedSpendMinor,
+          customerId: params.customerId,
+          organizationId: params.orgId,
+        };
+      } else {
+        const held = yield* reserveBalance({
+          customerId: params.customerId,
+          organizationId: params.orgId,
+          needMinor: estimate.estimatedSpendMinor,
+          currency: estimate.currency,
+        }).pipe(Effect.mapError(mapSystem("Balance reservation failed")));
+        if (!held.reserved) {
+          return yield* Effect.fail(
+            failReserveDecision(
+              snap,
+              estimate.estimatedSpendMinor,
+              estimate.currency,
+            ),
+          );
+        }
+        if (held.reservedMinor > 0) {
+          reservation = {
+            reservedMinor: held.reservedMinor,
             customerId: params.customerId,
             organizationId: params.orgId,
-            needMinor: estimate.estimatedSpendMinor,
-            currency: estimate.currency,
-          }).pipe(Effect.mapError(mapSystem("Balance reservation failed")));
-          if (!held.reserved) {
-            return yield* Effect.fail(
-              new InsufficientBalanceError({
-                code: "insufficient_balance",
-                message: "Insufficient available balance to complete request",
-                requiredMinor: estimate.estimatedSpendMinor,
-                currency: estimate.currency,
-                balanceMinor: availableMinor(snap),
-              }),
-            );
-          }
-          if (held.reservedMinor > 0) {
-            reservation = {
-              reservedMinor: held.reservedMinor,
-              customerId: params.customerId,
-              organizationId: params.orgId,
-            };
-          }
-        }
-      } else {
-        // Legacy enforcement reader.
-        if (!decision.legacyOk) {
-          const legacy = wouldLegacyBalanceSucceed(
-            snap,
-            estimate.estimatedSpendMinor,
-            estimate.currency,
-          );
-          if (!legacy.ok && legacy.reason === "currency_mismatch") {
-            return yield* Effect.fail(
-              new InsufficientBalanceError({
-                code: "currency_mismatch",
-                message:
-                  "Customer balance currency does not match model currency",
-                balanceCurrency: snap.currency,
-                modelCurrency: estimate.currency,
-              }),
-            );
-          }
-          return yield* Effect.fail(
-            new InsufficientBalanceError({
-              code: "insufficient_balance",
-              message: "Insufficient balance to complete request",
-              balanceMinor: snap.amountMinor,
-              requiredMinor: estimate.estimatedSpendMinor,
-              currency: estimate.currency,
-            }),
-          );
+          };
         }
       }
     }
@@ -344,7 +289,6 @@ export const preFlightWorkflow = (params: {
       reservation,
       estimatedTokens: estimate.estimatedTokens,
       estimatedSpendMinor: estimate.estimatedSpendMinor,
-      canary,
     };
   });
 
@@ -361,7 +305,7 @@ export const releaseReservationWorkflow = (
     }).pipe(Effect.catchAll(() => Effect.succeed(false)));
   });
 
-/** Settle after hold: debit actual + release reserved (canary path). */
+/** Settle after hold: debit actual + release reserved. */
 export const debitWithReservationWorkflow = (params: {
   readonly customerId: ObjectId;
   readonly organizationId: ObjectId;

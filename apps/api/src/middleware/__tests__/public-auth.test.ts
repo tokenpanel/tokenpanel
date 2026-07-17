@@ -6,6 +6,7 @@ import {
   CUSTOMER_KEY_PREFIX_LITERAL,
   MANAGEMENT_KEY_PREFIX_LITERAL,
 } from "../../config/security-policy.ts";
+import { UNKNOWN_CLIENT_IP } from "../../lib/client-ip.ts";
 import { requirePublicPrincipal } from "../public-auth.ts";
 
 test("key prefixes match security-policy literals", () => {
@@ -48,16 +49,11 @@ test("prefix slice keeps the literal + 8 hex chars of entropy", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Middleware throttle-gate flow. These mount requirePublicPrincipal on a real
-// Hono app and drive it with HTTP requests so the check() gating logic is
-// exercised end-to-end (not just the FailureThrottle unit in isolation).
+// Middleware throttle-gate flow. Mount requirePublicPrincipal and drive with
+// HTTP so check() gating is exercised end-to-end. Buckets are client IP only
+// (separate FailureThrottle singleton per surface).
 //
-// Tests pre-seed the throttle singleton to a locked state for a chosen
-// prefix, then confirm the middleware denies at the gate — BEFORE reaching
-// getDb(). Denial at the gate is asserted via 401 + a Retry-After header; if
-// the gate were bypassed (regression), the middleware would proceed to getDb,
-// which throws in this environment (no MONGODB_URI) and surfaces as a 500, so
-// the assertion cleanly distinguishes a gate denial from a pass-through.
+// Pre-seed the IP bucket to locked, then confirm 401 + Retry-After before DB.
 // ---------------------------------------------------------------------------
 
 function buildGatedApp(): Hono {
@@ -69,14 +65,49 @@ function buildGatedApp(): Hono {
 
 beforeEach(() => apiKeyThrottle.clear());
 
-test("middleware: 16-char prefix lockout is enforced at the gate (401 + Retry-After)", async () => {
-  const locked16 = "tp_live_abcd1234"; // 16-char slice
-  // Pre-lock the 16-char bucket (maxAttempts = 10).
-  for (let i = 0; i < 10; i++) apiKeyThrottle.recordFailure(locked16);
+test("middleware: IP lockout is enforced at the gate (401 + Retry-After)", async () => {
+  // app.request has no socket peer → getRequestClientIp uses UNKNOWN_CLIENT_IP.
+  for (let i = 0; i < 10; i++) {
+    apiKeyThrottle.recordFailure(UNKNOWN_CLIENT_IP);
+  }
 
   const app = buildGatedApp();
   const res = await app.request("/v1/chat", {
-    headers: { authorization: `Bearer ${locked16}secretpad` },
+    headers: {
+      authorization: `Bearer ${CUSTOMER_KEY_PREFIX_LITERAL}abcd1234secretpad`,
+    },
+  });
+  expect(res.status).toBe(401);
+  expect(res.headers.get("retry-after")).not.toBeNull();
+});
+
+test("middleware: lockout is scoped to IP (other IP not locked)", async () => {
+  for (let i = 0; i < 10; i++) {
+    apiKeyThrottle.recordFailure("203.0.113.1");
+  }
+
+  const app = buildGatedApp();
+  // Request uses UNKNOWN_CLIENT_IP — different bucket → gate open.
+  const res = await app.request("/v1/chat", {
+    headers: {
+      authorization: `Bearer ${CUSTOMER_KEY_PREFIX_LITERAL}abcd1234secretpad`,
+    },
+  });
+  expect(res.headers.get("retry-after")).toBeNull();
+  expect(res.status).not.toBe(401);
+});
+
+test("middleware: key prefix is not part of the throttle bucket", async () => {
+  for (let i = 0; i < 10; i++) {
+    apiKeyThrottle.recordFailure(UNKNOWN_CLIENT_IP);
+  }
+
+  const app = buildGatedApp();
+  // Different key still blocked — same client IP bucket.
+  const res = await app.request("/v1/chat", {
+    headers: {
+      authorization: `Bearer ${CUSTOMER_KEY_PREFIX_LITERAL}zzzz9999otherpad`,
+    },
   });
   expect(res.status).toBe(401);
   expect(res.headers.get("retry-after")).not.toBeNull();

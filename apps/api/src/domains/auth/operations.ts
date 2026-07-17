@@ -226,6 +226,10 @@ export const login = (
 
 /**
  * First-run signup: create default org + admin user + JWT.
+ *
+ * Concurrency: unique `_locks.first_run_signup` claim prevents two concurrent
+ * count-then-create races from creating multiple initial admins/orgs. Claim is
+ * released if setup fails after acquisition so a retry can succeed.
  */
 export const signup = (
   input: SignupInput,
@@ -255,12 +259,35 @@ export const signup = (
       );
     }
 
-    const slug = yield* allocateUniqueSlug("default");
-    const passwordHash = yield* crypto.hashPassword(input.password);
+    const claimed = yield* users.claimBootstrap();
+    if (!claimed) {
+      return yield* Effect.fail(
+        new ConflictError({
+          code: "setup_already_complete",
+          message: "Setup already complete",
+        }),
+      );
+    }
+
+    // Ensure claim is released on any failure after this point.
+    const release = users.releaseBootstrapClaim().pipe(
+      Effect.catchAll(() => Effect.void),
+    );
+
+    const slug = yield* allocateUniqueSlug("default").pipe(
+      Effect.tapError(() => release),
+    );
+    const passwordHash = yield* crypto.hashPassword(input.password).pipe(
+      Effect.tapError(() => release),
+    );
 
     // Pre-generate coordinated ids (24 hex) so ownerId can reference user before insert.
-    const userIdHex = yield* crypto.randomToken(12);
-    const orgIdHex = yield* crypto.randomToken(12);
+    const userIdHex = yield* crypto.randomToken(12).pipe(
+      Effect.tapError(() => release),
+    );
+    const orgIdHex = yield* crypto.randomToken(12).pipe(
+      Effect.tapError(() => release),
+    );
     void clock;
 
     const org = yield* orgs
@@ -280,6 +307,7 @@ export const signup = (
               })
             : e,
         ),
+        Effect.tapError(() => release),
       );
 
     const user = yield* users
@@ -301,7 +329,10 @@ export const signup = (
       .pipe(
         Effect.catchAll((e) =>
           Effect.gen(function* () {
-            yield* orgs.delete(org._id.toHexString());
+            yield* orgs.delete(org._id.toHexString()).pipe(
+              Effect.catchAll(() => Effect.void),
+            );
+            yield* release;
             if (e._tag === "PersistenceDuplicateKeyError") {
               return yield* Effect.fail(
                 new ConflictError({
@@ -320,7 +351,7 @@ export const signup = (
       userId: user._id.toHexString(),
       orgId: org._id.toHexString(),
       role: "admin",
-    });
+    }).pipe(Effect.tapError(() => release));
 
     return {
       token: issued.token,

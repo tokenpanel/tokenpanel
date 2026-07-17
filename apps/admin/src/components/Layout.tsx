@@ -498,6 +498,7 @@ function CloseMobileSidebarOnNavigate(): null {
 
 export default function Layout(): React.ReactElement {
   const location = useLocation();
+  const { user } = useAuth();
   // Dark-only shell — no theme toggle / useTheme.
 
   return (
@@ -536,7 +537,9 @@ export default function Layout(): React.ReactElement {
           <HeaderBreadcrumb pathname={location.pathname} />
         </header>
         <main className="flex-1 overflow-y-auto">
-          <Outlet />
+          {/* Remount page tree on org switch so lists + one-time secrets
+              cannot leak across organizations via stale local state. */}
+          <Outlet key={user?.activeOrganizationId ?? "no-org"} />
         </main>
       </SidebarInset>
     </div>

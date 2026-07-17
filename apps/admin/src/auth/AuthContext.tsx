@@ -88,6 +88,11 @@ interface AuthContextValue {
     password: string;
     confirmPassword: string;
   }) => Promise<void>;
+  acceptInvite: (input: {
+    token: string;
+    username: string;
+    password: string;
+  }) => Promise<void>;
   refreshStatus: () => Promise<void>;
   switchOrganization: (organizationId: string) => Promise<void>;
   updateEmail: (email: string) => Promise<void>;
@@ -224,6 +229,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [],
   );
 
+  const acceptInvite = useCallback(
+    async (input: {
+      token: string;
+      username: string;
+      password: string;
+    }) => {
+      const res = await postJson<SignupResponse>("/admin/auth/accept-invite", {
+        token: input.token,
+        username: input.username,
+        password: input.password,
+      });
+      setToken(res.token);
+      setUser(normalizeUser(res.user));
+      setNeedsSetup(false);
+    },
+    [],
+  );
+
   const switchOrganization = useCallback(
     async (organizationId: string) => {
       const res = await postJson<{
@@ -281,6 +304,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       login,
       logout,
       signup,
+      acceptInvite,
       refreshStatus,
       switchOrganization,
       updateEmail,
@@ -293,6 +317,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       login,
       logout,
       signup,
+      acceptInvite,
       refreshStatus,
       switchOrganization,
       updateEmail,

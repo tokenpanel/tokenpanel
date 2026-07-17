@@ -116,4 +116,38 @@ export function deleteJson<T>(path: string, options?: FetchOptions): Promise<T> 
   return apiFetch<T>(path, { ...options, method: "DELETE" });
 }
 
-export { apiFetch };
+/**
+ * Streaming POST (SSE / NDJSON). Uses the same base URL + auth + 401 handling
+ * as apiFetch, but returns the raw Response without consuming the body.
+ */
+export async function apiStreamPost(
+  path: string,
+  body: unknown,
+  options?: { signal?: AbortSignal | undefined },
+): Promise<Response> {
+  const finalHeaders: Record<string, string> = {
+    ...authHeader(),
+    "Content-Type": "application/json",
+  };
+
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}${path}`, {
+      method: "POST",
+      headers: finalHeaders,
+      body: JSON.stringify(body),
+      ...(options?.signal !== undefined ? { signal: options.signal } : {}),
+    });
+  } catch (err) {
+    throw new ApiError(0, "network_error", { cause: String(err) });
+  }
+
+  if (res.status === 401) {
+    clearToken();
+    window.dispatchEvent(new CustomEvent(AUTH_INVALIDATED_EVENT));
+  }
+
+  return res;
+}
+
+export { apiFetch, API_BASE };

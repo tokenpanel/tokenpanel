@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import * as playgroundApi from "../api/playground.ts";
+import { apiStreamPost, ApiError } from "../api/client.ts";
 import {
   applyEventToState,
   formatMinor,
@@ -246,19 +247,11 @@ export default function PlaygroundPage(): React.ReactElement {
   }
 
   async function streamOne(aliasId: string, payload: Record<string, unknown>, signal: AbortSignal): Promise<StreamState[string]> {
-    const token = localStorage.getItem("tp_admin_token");
     let st: StreamState[string] = { content: "", reasoning: "", done: false, error: null, provider: null, cost: null, billed: false, usage: null };
     const sync = (): void => setStreamStates((s) => (s[aliasId] ? { ...s, [aliasId]: st } : s));
     try {
-      const res = await fetch("/admin/playground/chat", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        body: JSON.stringify(payload),
-        signal,
-      });
+      // Use central client (API_BASE + Bearer + 401 invalidation) — not raw same-origin fetch.
+      const res = await apiStreamPost("/admin/playground/chat", payload, { signal });
       if (!res.ok || !res.body) {
         const msg = await safeErr(res);
         st = { ...st, done: true, error: msg };
@@ -298,7 +291,12 @@ export default function PlaygroundPage(): React.ReactElement {
         st = { ...st, done: true, error: "aborted" };
         return st;
       }
-      const msg = err instanceof Error ? err.message : "stream failed";
+      const msg =
+        err instanceof ApiError
+          ? err.message
+          : err instanceof Error
+            ? err.message
+            : "stream failed";
       st = { ...st, done: true, error: msg };
       sync();
       return st;

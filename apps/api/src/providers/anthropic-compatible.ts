@@ -27,6 +27,7 @@ import {
   publicProviderErrorMessage,
 } from "./provider-errors.ts";
 import { providerHttpRequest } from "../infrastructure/provider-http/scoped-fetch.ts";
+import { mergeAbortTimeout } from "../infrastructure/provider-http/abort-timeout.ts";
 import { httpFailureToProviderError } from "./map-http-error.ts";
 
 import {
@@ -219,6 +220,7 @@ export function createAnthropicCompatibleAdapter(): ProviderAdapter {
           method: "GET",
           headers: headers(ctx),
           ...(ctx.signal !== undefined ? { signal: ctx.signal } : {}),
+          ...(ctx.timeoutMs !== undefined ? { timeoutMs: ctx.timeoutMs } : {}),
           label: "anthropic listModels",
           operation: "listModels",
         }).pipe(Effect.mapError(httpFailureToProviderError));
@@ -274,6 +276,7 @@ export function createAnthropicCompatibleAdapter(): ProviderAdapter {
             : ctx.signal !== undefined
               ? { signal: ctx.signal }
               : {}),
+          ...(ctx.timeoutMs !== undefined ? { timeoutMs: ctx.timeoutMs } : {}),
           label: "anthropic chatComplete",
           operation: "chatComplete",
           ...(req.model !== undefined ? { model: req.model } : {}),
@@ -327,12 +330,35 @@ export function createAnthropicCompatibleAdapter(): ProviderAdapter {
     },
 
     async *streamChat(ctx, req): AsyncGenerator<StreamChunk, void, void> {
-      const res = await fetch(joinUrl(ctx.baseUrl, "/messages"), {
-        method: "POST",
-        headers: headers(ctx),
-        body: JSON.stringify(buildBody(req, true)),
-        signal: req.signal ?? ctx.signal ?? null,
-      });
+      // Timeout applies to TTFB/headers only — long streams must not be cut off.
+      const abort = mergeAbortTimeout(
+        req.signal ?? ctx.signal,
+        ctx.timeoutMs,
+      );
+      let res: Response;
+      try {
+        res = await fetch(joinUrl(ctx.baseUrl, "/messages"), {
+          method: "POST",
+          headers: headers(ctx),
+          body: JSON.stringify(buildBody(req, true)),
+          signal: abort.signal ?? null,
+        });
+      } catch (err) {
+        abort.dispose();
+        if (abort.timedOut()) {
+          throw makeProviderError({
+            message: publicProviderErrorMessage("anthropic streamChat"),
+            category: "timeout_ambiguous",
+            phase: "headers",
+            retryable: true,
+            fallbackEligible: true,
+            maybeAcceptedUpstream: true,
+            diagnostic: "provider_timeout",
+          });
+        }
+        throw err;
+      }
+      abort.dispose();
       if (!res.ok) {
         throw providerHttpError(
           res.status,

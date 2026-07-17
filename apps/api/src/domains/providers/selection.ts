@@ -74,6 +74,7 @@ export type LoadProviderDeps = {
     providerOrg?: string | null;
     headers?: Record<string, string>;
     signal?: AbortSignal;
+    timeoutMs?: number;
   }) => AdapterContext;
 };
 
@@ -476,6 +477,7 @@ export function defaultLoadProviderDeps(params: {
     providerOrg?: string | null;
     headers?: Record<string, string>;
     signal?: AbortSignal;
+    timeoutMs?: number;
   }) => AdapterContext;
 }): LoadProviderDeps {
   return {

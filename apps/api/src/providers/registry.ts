@@ -29,12 +29,18 @@ export function buildAdapterContext(opts: {
   apiKey: string;
   providerOrg?: string | null | undefined;
   headers?: Record<string, string> | undefined;
+  signal?: AbortSignal | undefined;
+  timeoutMs?: number | undefined;
 }): AdapterContext {
   return {
     baseUrl: opts.baseUrl,
     apiKey: opts.apiKey,
     ...(opts.providerOrg !== undefined ? { providerOrg: opts.providerOrg } : {}),
     ...(opts.headers ? { headers: opts.headers } : {}),
+    ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
+    ...(opts.timeoutMs !== undefined && opts.timeoutMs > 0
+      ? { timeoutMs: opts.timeoutMs }
+      : {}),
   };
 }
 

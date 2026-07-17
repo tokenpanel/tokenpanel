@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { Effect } from "effect";
 import { sValidator } from "../http/validation/validator.ts";
 import type { AuthVariables } from "../middleware/auth.ts";
 import { requireAuth, requirePermission } from "../middleware/auth.ts";
@@ -12,7 +13,8 @@ import { runAdminEffect } from "../http/adapters/boundary.ts";
 import { isAppError } from "../errors/families.ts";
 import { InviteBody, AcceptInviteBody } from "../http/validation/identity.ts";
 import { withParseApi } from "../http/validation/with-parse-api.ts";
-import { Effect } from "effect";
+import { inviteThrottle } from "../lib/throttle.ts";
+import { getRequestClientIp } from "../lib/client-ip.ts";
 
 export const inviteBody = withParseApi(InviteBody);
 export const acceptInviteBody = withParseApi(AcceptInviteBody);
@@ -75,13 +77,35 @@ acceptInviteRoute.post(
   sValidator("json", acceptInviteBody),
   async (c) => {
     const body = c.req.valid("json");
+    const clientIp = getRequestClientIp(c);
+    const gate = inviteThrottle.check(clientIp);
+    if (!gate.allowed) {
+      return c.json(
+        { error: "too_many_attempts" },
+        429,
+        { "Retry-After": String(gate.retryAfterSeconds) },
+      );
+    }
     return runAdminEffect(
       c,
       acceptInvite({
         token: body.token,
         username: body.username,
         password: body.password,
-      }),
+      }).pipe(
+        Effect.tap(() =>
+          Effect.sync(() => inviteThrottle.recordSuccess(clientIp)),
+        ),
+        Effect.tapError((err) =>
+          Effect.sync(() => {
+            // Count credential / token failures toward lockout (Argon2 oracle +
+            // token brute-force). Validation-style domain errors still cost.
+            if (isAppError(err)) {
+              inviteThrottle.recordFailure(clientIp);
+            }
+          }),
+        ),
+      ),
       {
         operation: "acceptInvite",
         successStatus: 201,

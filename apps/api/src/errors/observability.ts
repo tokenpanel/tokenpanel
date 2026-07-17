@@ -158,6 +158,8 @@ export function logFieldsForAppError(
     err._tag === "ProviderTimeoutError" ||
     err._tag === "ProviderProtocolError"
   ) {
+    // Never log upstream response bodies: secret regexes miss prompts/PII.
+    // Retain only bounded metadata (status, length) for ops correlation.
     return {
       ...base,
       retryClass: err.retryClass,
@@ -166,7 +168,9 @@ export function logFieldsForAppError(
       ...(err.model !== undefined ? { model: err.model } : {}),
       ...(err.httpStatus !== undefined ? { httpStatus: err.httpStatus } : {}),
       ...(err.diagnostic !== undefined
-        ? { privateDiagnostic: redactString(err.diagnostic) }
+        ? {
+            privateDiagnostic: `[upstream_body_omitted chars=${err.diagnostic.length}]`,
+          }
         : {}),
     };
   }

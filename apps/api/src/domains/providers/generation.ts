@@ -155,8 +155,25 @@ export type GenerationSessionParams = {
  * Unit tests should pass explicit `deps` instead.
  */
 export function liveLoadProviderDeps(): LoadProviderDeps {
+  let resolvedTimeoutMs: number | undefined;
+
+  async function providerTimeoutMs(): Promise<number> {
+    if (resolvedTimeoutMs !== undefined) return resolvedTimeoutMs;
+    const { getAppRuntime } = await import("../../runtime/app-runtime.ts");
+    const { AppConfig } = await import("../../runtime/services/app-config.ts");
+    resolvedTimeoutMs = await getAppRuntime().runPromise(
+      Effect.gen(function* () {
+        const config = yield* AppConfig;
+        return config.operational.providerHttpTimeoutMs;
+      }),
+    );
+    return resolvedTimeoutMs;
+  }
+
   return defaultLoadProviderDeps({
     loadProvider: async (orgId, providerId) => {
+      // Resolve timeout on first provider load (same process lifetime).
+      await providerTimeoutMs();
       // Lazy import avoids circular init with runtime boot.
       const { getAppRuntime } = await import("../../runtime/app-runtime.ts");
       const provider = await getAppRuntime().runPromise(
@@ -174,7 +191,13 @@ export function liveLoadProviderDeps(): LoadProviderDeps {
       return provider;
     },
     getAdapter,
-    buildAdapterContext,
+    buildAdapterContext: (p) =>
+      buildAdapterContext({
+        ...p,
+        ...(resolvedTimeoutMs !== undefined && resolvedTimeoutMs > 0
+          ? { timeoutMs: resolvedTimeoutMs }
+          : {}),
+      }),
   });
 }
 

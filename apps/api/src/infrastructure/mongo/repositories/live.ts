@@ -57,6 +57,7 @@ import { UsageRepository } from "../../../domains/ports/usage-repository.ts";
 import { tryMongo } from "./try-mongo.ts";
 import { newObjectId, toObjectId } from "./object-id.ts";
 import { readOne, readMany, writeOne } from "./decode-helpers.ts";
+import { isDuplicateKeyError } from "../../../lib/crypto.ts";
 
 function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -197,8 +198,54 @@ export const UserRepositoryLive = Layer.effect(
     // Lazy: do not touch mongo.db until a repository method runs (test Layers
     // may install Mongo without a full TypedDb).
     const db = (): typeof mongo.db => mongo.db;
+    const locks = () =>
+      mongo.rawDb.collection<{ _id: string; createdAt: Date }>("_locks");
+    const BOOTSTRAP_LOCK_ID = "first_run_signup";
+    /** If process dies mid-signup, reclaim after this age (no users exist). */
+    const BOOTSTRAP_STALE_MS = 2 * 60 * 1000;
+
     return {
       countUsers: () => tryMongo(() => db().users.countDocuments({})),
+      claimBootstrap: () =>
+        tryMongo(async () => {
+          const tryInsert = async (): Promise<boolean> => {
+            try {
+              await locks().insertOne({
+                _id: BOOTSTRAP_LOCK_ID,
+                createdAt: clock.now(),
+              });
+              return true;
+            } catch (err) {
+              if (isDuplicateKeyError(err)) return false;
+              throw err;
+            }
+          };
+
+          if (await tryInsert()) return true;
+
+          // Another claim exists. If users already present → setup done.
+          const userCount = await db().users.countDocuments({});
+          if (userCount > 0) return false;
+
+          // No users: either concurrent in-flight signup or crash left a stale lock.
+          const existing = await locks().findOne({ _id: BOOTSTRAP_LOCK_ID });
+          if (!existing) {
+            // Lost the race delete/insert window — try once more.
+            return tryInsert();
+          }
+          const ageMs = clock.now().getTime() - existing.createdAt.getTime();
+          if (ageMs < BOOTSTRAP_STALE_MS) {
+            // Fresh claim: another request is still setting up.
+            return false;
+          }
+          // Stale empty claim: reclaim so first-run is not permanently stuck.
+          await locks().deleteOne({ _id: BOOTSTRAP_LOCK_ID });
+          return tryInsert();
+        }),
+      releaseBootstrapClaim: () =>
+        tryMongo(async () => {
+          await locks().deleteOne({ _id: BOOTSTRAP_LOCK_ID });
+        }),
       findById: (id) =>
         Effect.gen(function* () {
           const raw = yield* tryMongo(() =>

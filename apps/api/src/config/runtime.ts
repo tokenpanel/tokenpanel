@@ -33,9 +33,9 @@ export type ApiOperationalConfig = Readonly<{
   /**
    * Application-level provider HTTP timeout.
    * Env: PROVIDER_HTTP_TIMEOUT_MS. Default: 0.
-   * 0 = no app-level timeout (current implicit behavior: only request
-   * AbortSignal / client disconnect cancels fetch). Non-zero will be applied
-   * by provider adapters when they migrate to Effect (section 9).
+   * 0 = no app-level timeout (only request AbortSignal / client disconnect).
+   * Non-zero: enforced on listModels/chatComplete (full request) and on
+   * streamChat TTFB/headers only (stream body is not timed out).
    */
   providerHttpTimeoutMs: number;
   /**

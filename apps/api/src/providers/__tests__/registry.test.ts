@@ -62,6 +62,7 @@ test("buildAdapterContext omits undefined providerOrg + headers, includes when p
   expect(c1.apiKey).toBe("k");
   expect("providerOrg" in c1).toBe(false);
   expect("headers" in c1).toBe(false);
+  expect("timeoutMs" in c1).toBe(false);
 
   const c2 = buildAdapterContext({ baseUrl: "https://x.com", apiKey: "k", providerOrg: "org-1", headers: { "X-Custom": "v" } });
   expect(c2.providerOrg).toBe("org-1");
@@ -69,4 +70,18 @@ test("buildAdapterContext omits undefined providerOrg + headers, includes when p
 
   const c3 = buildAdapterContext({ baseUrl: "https://x.com", apiKey: "k", providerOrg: null });
   expect(c3.providerOrg).toBeNull();
+
+  const c4 = buildAdapterContext({
+    baseUrl: "https://x.com",
+    apiKey: "k",
+    timeoutMs: 30_000,
+  });
+  expect(c4.timeoutMs).toBe(30_000);
+
+  const c5 = buildAdapterContext({
+    baseUrl: "https://x.com",
+    apiKey: "k",
+    timeoutMs: 0,
+  });
+  expect("timeoutMs" in c5).toBe(false);
 });

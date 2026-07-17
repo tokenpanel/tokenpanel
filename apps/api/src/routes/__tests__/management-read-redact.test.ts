@@ -123,3 +123,17 @@ test("toModelCapability: omits metadata from management model DTO", () => {
   expect(out.displayName).toBe("My GPT");
   expect(out.active).toBe(true);
 });
+
+test("toModelCapability: omits entries, marginBps, ids, timestamps", () => {
+  const out = toModelCapability(modelDoc());
+  expect("entries" in out).toBe(false);
+  expect("marginBps" in out).toBe(false);
+  expect("_id" in out).toBe(false);
+  expect("organizationId" in out).toBe(false);
+  expect("createdAt" in out).toBe(false);
+  expect("updatedAt" in out).toBe(false);
+  expect(out.price).toEqual({
+    inputMinorPerMillion: 300,
+    outputMinorPerMillion: 600,
+  });
+});

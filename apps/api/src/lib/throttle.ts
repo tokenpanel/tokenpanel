@@ -123,7 +123,7 @@ export const loginThrottle = new FailureThrottle({
   lockoutMs: THROTTLE_LOCKOUT_MS,
 });
 
-/** Invite accept failures. Key = client IP. (Wire when accept-invite throttles.) */
+/** Invite accept failures. Key = client IP. */
 export const inviteThrottle = new FailureThrottle({
   maxAttempts: THROTTLE_INVITE_MAX_ATTEMPTS_COUNT,
   windowMs: THROTTLE_WINDOW_MS,

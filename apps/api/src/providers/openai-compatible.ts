@@ -19,6 +19,7 @@ import {
   publicProviderErrorMessage,
 } from "./provider-errors.ts";
 import { providerHttpRequest } from "../infrastructure/provider-http/scoped-fetch.ts";
+import { mergeAbortTimeout } from "../infrastructure/provider-http/abort-timeout.ts";
 import { httpFailureToProviderError } from "./map-http-error.ts";
 
 import {
@@ -168,6 +169,7 @@ export function createOpenAICompatibleAdapter(): ProviderAdapter {
           method: "GET",
           headers: authHeaders(ctx),
           ...(ctx.signal !== undefined ? { signal: ctx.signal } : {}),
+          ...(ctx.timeoutMs !== undefined ? { timeoutMs: ctx.timeoutMs } : {}),
           label: "openai listModels",
           operation: "listModels",
         }).pipe(Effect.mapError(httpFailureToProviderError));
@@ -229,6 +231,7 @@ export function createOpenAICompatibleAdapter(): ProviderAdapter {
             : ctx.signal !== undefined
               ? { signal: ctx.signal }
               : {}),
+          ...(ctx.timeoutMs !== undefined ? { timeoutMs: ctx.timeoutMs } : {}),
           label: "openai chatComplete",
           operation: "chatComplete",
           ...(req.model !== undefined ? { model: req.model } : {}),
@@ -288,12 +291,35 @@ export function createOpenAICompatibleAdapter(): ProviderAdapter {
     },
 
     async *streamChat(ctx, req): AsyncGenerator<StreamChunk, void, void> {
-      const res = await fetch(joinUrl(ctx.baseUrl, "/chat/completions"), {
-        method: "POST",
-        headers: authHeaders(ctx),
-        body: JSON.stringify(buildChatBody(req, true)),
-        signal: req.signal ?? ctx.signal ?? null,
-      });
+      // Timeout applies to TTFB/headers only — long streams must not be cut off.
+      const abort = mergeAbortTimeout(
+        req.signal ?? ctx.signal,
+        ctx.timeoutMs,
+      );
+      let res: Response;
+      try {
+        res = await fetch(joinUrl(ctx.baseUrl, "/chat/completions"), {
+          method: "POST",
+          headers: authHeaders(ctx),
+          body: JSON.stringify(buildChatBody(req, true)),
+          signal: abort.signal ?? null,
+        });
+      } catch (err) {
+        abort.dispose();
+        if (abort.timedOut()) {
+          throw makeProviderError({
+            message: publicProviderErrorMessage("openai streamChat"),
+            category: "timeout_ambiguous",
+            phase: "headers",
+            retryable: true,
+            fallbackEligible: true,
+            maybeAcceptedUpstream: true,
+            diagnostic: "provider_timeout",
+          });
+        }
+        throw err;
+      }
+      abort.dispose();
       // Throw typed pre-stream errors so fallback can classify 429/5xx.
       if (!res.ok) {
         throw providerHttpError(

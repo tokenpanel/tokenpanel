@@ -23,6 +23,14 @@ export type NewUserRecord = {
 
 export type UserRepositoryService = {
   readonly countUsers: () => Effect.Effect<number, RepoError>;
+  /**
+   * Atomically claim first-run signup (unique lock doc).
+   * Returns true if this caller owns the claim; false if already claimed.
+   * Release with `releaseBootstrapClaim` if signup fails after claim.
+   */
+  readonly claimBootstrap: () => Effect.Effect<boolean, RepoError>;
+  /** Drop first-run claim so a failed signup can be retried. */
+  readonly releaseBootstrapClaim: () => Effect.Effect<void, RepoError>;
   readonly findById: (id: HexId) => Effect.Effect<UserDoc | null, RepoError>;
   readonly findByUsername: (
     username: string,

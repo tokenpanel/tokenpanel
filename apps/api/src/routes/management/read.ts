@@ -236,7 +236,9 @@ app.get(
     return runManagementEffect(
       c,
       listModels(orgId.toHexString()).pipe(
-        Effect.map((items) => ({ items })),
+        Effect.map((items) => ({
+          items: items.map(toModelCapability),
+        })),
       ),
       { operation: "mgmt.listModels" },
     );
@@ -251,7 +253,9 @@ app.get(
     return runManagementEffect(
       c,
       listActiveModels(orgId.toHexString()).pipe(
-        Effect.map((items) => ({ items })),
+        Effect.map((items) => ({
+          items: items.map(toModelCapability),
+        })),
       ),
       { operation: "mgmt.listActiveModels" },
     );
@@ -267,7 +271,9 @@ app.get(
     if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
     return runManagementEffect(
       c,
-      getModel({ organizationId: orgId.toHexString(), modelId: id }),
+      getModel({ organizationId: orgId.toHexString(), modelId: id }).pipe(
+        Effect.map(toModelCapability),
+      ),
       { operation: "mgmt.getModel" },
     );
   },

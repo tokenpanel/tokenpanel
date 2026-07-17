@@ -5,12 +5,17 @@
  * compose Hono → Bun.serve → WorkerControl.start → register shutdown.
  */
 import { Hono } from "hono";
+import { bodyLimit } from "hono/body-limit";
 import { cors } from "hono/cors";
 import { serveStatic } from "hono/bun";
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { Effect } from "effect";
 import { ConfigValidationError } from "./config/runtime.ts";
+import {
+  MAX_REQUEST_BODY_BYTES,
+  MAX_CHAT_REQUEST_BODY_BYTES,
+} from "./config/security-policy.ts";
 import { resolveMongo } from "./infrastructure/mongo/resolve-db.ts";
 import type { AuthVariables } from "./middleware/auth.ts";
 import authRoutes from "./routes/auth.ts";
@@ -33,6 +38,7 @@ import publicOpenAI from "./routes/public/openai.ts";
 import publicAnthropic from "./routes/public/anthropic.ts";
 import { requirePublicPrincipal } from "./middleware/public-auth.ts";
 import { requireManagementPrincipal } from "./middleware/management-auth.ts";
+import { securityHeaders } from "./middleware/security-headers.ts";
 import "./providers/index.ts";
 import {
   bootApi,
@@ -68,6 +74,27 @@ const { config: runtimeConfig, runtime, mongo } = boot;
 
 const app = new Hono<{ Variables: AuthVariables }>();
 
+// Direct-deployment headers (Caddy also sets overlapping ones at the edge).
+app.use("*", securityHeaders);
+
+// Hard cap request bodies before any JSON parse / Effect Schema decode.
+// Chat (/v1, playground) may carry base64 media → higher cap; admin/management
+// stay on the tighter default. Applied as one middleware so limits do not stack
+// (a global 1 MiB would reject chat before a route-level 10 MiB ran).
+const bodyTooLarge = (c: { json: (b: unknown, s: 413) => Response }) =>
+  c.json({ error: "payload_too_large", message: "Request body too large" }, 413);
+
+app.use("*", async (c, next) => {
+  const path = c.req.path;
+  const isChatSurface =
+    path.startsWith("/v1/") || path.startsWith("/admin/playground/");
+  const maxSize = isChatSurface
+    ? MAX_CHAT_REQUEST_BODY_BYTES
+    : MAX_REQUEST_BODY_BYTES;
+  const limit = bodyLimit({ maxSize, onError: bodyTooLarge });
+  return limit(c, next);
+});
+
 // Admin panel (apps/admin) and API (apps/api) run on separate origins in dev.
 // Auth is JWT Bearer (no cookies), so reflecting Origin is safe.
 const allowedOrigins = runtimeConfig.corsOrigins;
@@ -79,7 +106,7 @@ app.use(
       if (allowedOrigins === null) return origin;
       return allowedOrigins.includes(origin) ? origin : null;
     },
-    allowMethods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allowHeaders: ["Content-Type", "Authorization"],
     credentials: false,
     maxAge: 600,

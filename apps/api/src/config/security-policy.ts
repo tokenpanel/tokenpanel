@@ -120,3 +120,28 @@ export const THROTTLE_INVITE_MAX_ATTEMPTS_COUNT = 5;
 
 /** Public API-key auth: failures from one IP before lockout. Unit: count. */
 export const THROTTLE_API_KEY_MAX_ATTEMPTS_COUNT = 10;
+
+// ---------------------------------------------------------------------------
+// Request body / protocol payload bounds (DoS resistance)
+// ---------------------------------------------------------------------------
+
+/** Default max request body for non-chat routes. Unit: bytes. */
+export const MAX_REQUEST_BODY_BYTES = 1 * 1024 * 1024; // 1 MiB
+
+/**
+ * Max body for chat/completions, messages, and playground (base64 media).
+ * Unit: bytes.
+ */
+export const MAX_CHAT_REQUEST_BODY_BYTES = 10 * 1024 * 1024; // 10 MiB
+
+/** Max messages in one chat request. Unit: count. */
+export const MAX_CHAT_MESSAGES_COUNT = 200;
+
+/** Max plain-text content length per message/part. Unit: count (chars). */
+export const MAX_CHAT_TEXT_CHARS = 500_000;
+
+/** Max base64 media payload per content part. Unit: count (chars). */
+export const MAX_CHAT_MEDIA_BASE64_CHARS = 7_000_000;
+
+/** Max tools array length on chat requests. Unit: count. */
+export const MAX_CHAT_TOOLS_COUNT = 128;

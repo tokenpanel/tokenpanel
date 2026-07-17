@@ -1,7 +1,4 @@
 import type { Db, MongoClient } from "mongodb";
-import { createHash } from "node:crypto";
-import { join } from "node:path";
-import { readdir, readFile } from "node:fs/promises";
 import type {
   MigrationFile,
   MigrationPhase,
@@ -10,7 +7,8 @@ import type {
 } from "./types.ts";
 import { acquireLock } from "./lock.ts";
 import { createMigrationDb } from "./migration-db.ts";
-import { lintMigration } from "./safe-migrate.ts";
+import { loadMigrationTree } from "./validator.ts";
+export { validateMigrationMeta } from "./validator.ts";
 
 const MIGRATIONS_COLLECTION = "_migrations";
 
@@ -19,87 +17,6 @@ interface MigrationDoc {
   phase: string;
   appliedAt: Date;
   checksum: string;
-}
-
-function sha256(content: string): string {
-  return createHash("sha256").update(content).digest("hex");
-}
-
-/**
- * Validate that a migration file's exported metadata matches its location:
- *  - `meta.phase` must equal the directory phase (`pre`/`post`), so a `post/`
- *    migration that accidentally lives in `pre/` (or vice versa) cannot run in
- *    the wrong phase.
- *  - `meta.id` must match the filename stem, so renaming a file or editing its
- *    `id` export is caught (the id is the `_migrations` record key).
- *
- * Pure (no I/O) so it can be unit-tested directly.
- */
-export function validateMigrationMeta(
-  filename: string,
-  meta: { id: string; phase: string },
-  expectedPhase: MigrationPhase,
-): string[] {
-  const errors: string[] = [];
-  const stem = filename.replace(/\.ts$/, "");
-  if (meta.phase !== expectedPhase) {
-    errors.push(
-      `file declares phase="${meta.phase}" but lives in migrations/${expectedPhase}/`,
-    );
-  }
-  if (meta.id !== stem) {
-    errors.push(`exported id="${meta.id}" does not match filename "${stem}"`);
-  }
-  return errors;
-}
-
-async function loadMigrations(phase: MigrationPhase): Promise<MigrationFile[]> {
-  const dir = join(import.meta.dir, "..", "..", "migrations", phase);
-  const files = await readdir(dir).catch(() => []);
-  const sorted = files.filter((f) => f.endsWith(".ts") && !f.startsWith(".")).sort();
-
-  const migrations: MigrationFile[] = [];
-  for (const file of sorted) {
-    const filePath = join(dir, file);
-    const content = await readFile(filePath, "utf-8");
-
-    if (phase === "pre") {
-      const violations = lintMigration(content);
-      if (violations.length > 0) {
-        throw new Error(
-          `SafeMigrate violation in migrations/pre/${file}:\n` +
-            violations.map((v) => `  ✗ ${v}`).join("\n") +
-            "\nDestructive operations must go in migrations/post/.",
-        );
-      }
-    }
-
-    const mod = await import(filePath);
-
-    if (typeof mod.id !== "string" || typeof mod.phase !== "string" || typeof mod.up !== "function") {
-      throw new Error(
-        `Invalid migration file: ${file} — must export id (string), phase ('pre'|'post'), up (async function)`,
-      );
-    }
-
-    const metaErrors = validateMigrationMeta(file, { id: mod.id, phase: mod.phase }, phase);
-    if (metaErrors.length > 0) {
-      throw new Error(
-        `Invalid migration file: migrations/${phase}/${file}:\n` +
-          metaErrors.map((e) => `  ✗ ${e}`).join("\n"),
-      );
-    }
-
-    migrations.push({
-      id: mod.id,
-      phase: mod.phase as MigrationPhase,
-      checksum: sha256(content),
-      transactional: mod.transactional !== false,
-      up: mod.up,
-      down: mod.down,
-    });
-  }
-  return migrations;
 }
 
 /**
@@ -155,7 +72,7 @@ export async function runMigrations(
       applied.map((a) => [a._id, a.checksum]),
     );
 
-    const files = await loadMigrations(phase);
+    const files = (await loadMigrationTree())[phase];
 
     for (const m of files) {
       // Abort before starting the next migration if the heartbeat lost the
@@ -195,8 +112,9 @@ export async function getMigrationStatus(db: Db): Promise<MigrationStatus> {
   let pending = 0;
   const pendingIds: string[] = [];
 
+  const migrations = await loadMigrationTree();
   for (const phase of ["pre", "post"] as MigrationPhase[]) {
-    const files = await loadMigrations(phase).catch(() => []);
+    const files = migrations[phase];
     for (const m of files) {
       if (!appliedIds.has(m.id)) {
         pending++;

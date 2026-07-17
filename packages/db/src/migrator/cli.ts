@@ -78,6 +78,7 @@ async function main(): Promise<void> {
 
 export const id = "${id}";
 export const phase = "${phase}" as const;
+export const transactional = true as const;
 
 export async function up(mdb: MigrationDb): Promise<void> {
   // TODO: implement migration (use mdb — every op is session-bound).

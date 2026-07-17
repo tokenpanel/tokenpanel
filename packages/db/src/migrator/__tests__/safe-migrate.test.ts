@@ -1,4 +1,4 @@
-import { lintMigration } from "../safe-migrate.ts";
+import { lintMigration, lintMigrationImports } from "../safe-migrate.ts";
 import { test, expect } from "bun:test";
 
 test("lintMigration: allows additive operations in pre/", () => {
@@ -101,6 +101,34 @@ test("lintMigration: rejects .findOneAndDelete() in pre/", () => {
   expect(v.some((s) => s.includes("findOneAndDelete"))).toBe(true);
 });
 
+test("lintMigration: rejects collection rename and document replacement in pre/", () => {
+  const content = `
+    export async function up(db) {
+      await db.collection("old").rename("new");
+      await db.collection("test").replaceOne({ id: 1 }, { id: 1 });
+      await db.collection("test").findOneAndReplace({ id: 1 }, { id: 1 });
+    }
+  `;
+  const v = lintMigration(content);
+  expect(v.some((s) => s.includes(".rename()"))).toBe(true);
+  expect(v.some((s) => s.includes("replaceOne"))).toBe(true);
+  expect(v.some((s) => s.includes("findOneAndReplace"))).toBe(true);
+});
+
+test("lintMigration: rejects aggregation writes and replacement pipelines in pre/", () => {
+  const content = `
+    export async function up(db) {
+      await db.collection("test").aggregate([{ $out: "other" }]).toArray();
+      await db.collection("test").aggregate([{ $merge: "other" }]).toArray();
+      await db.collection("test").updateMany({}, [{ $replaceWith: "$payload" }]);
+    }
+  `;
+  const v = lintMigration(content);
+  expect(v.some((s) => s.includes("$out"))).toBe(true);
+  expect(v.some((s) => s.includes("$merge"))).toBe(true);
+  expect(v.some((s) => s.includes("$replaceWith"))).toBe(true);
+});
+
 test("lintMigration: rejects bulkWrite delete operations in pre/", () => {
   const content = `
     export async function up(db, session) {
@@ -189,6 +217,16 @@ test("lintMigration: rejects unknown db.command in pre/ (suspicious)", () => {
   expect(v.some((s) => s.includes("not in safe allowlist"))).toBe(true);
 });
 
+test("lintMigration: rejects computed db.command in pre/", () => {
+  const content = `
+    export async function up(db) {
+      const op = "drop";
+      await db.command({ [op]: "test" });
+    }
+  `;
+  expect(lintMigration(content).some((s) => s.includes("dynamic/computed command"))).toBe(true);
+});
+
 test("lintMigration: allows $setOnInsert (not in forbidden list)", () => {
   const content = `
     export async function up(db, session) {
@@ -210,4 +248,19 @@ test("lintMigration: allows destructive ops in down() (only up is linted)", () =
     }
   `;
   expect(lintMigration(content)).toEqual([]);
+});
+
+test("lintMigrationImports: allows type-only imports", () => {
+  const content = `
+    import type { MigrationDb } from "../../src/migrator/migration-db.ts";
+    import type { ObjectId } from "mongodb";
+  `;
+  expect(lintMigrationImports(content)).toEqual([]);
+});
+
+test("lintMigrationImports: rejects runtime and dynamic imports", () => {
+  const runtime = `import { getRawDb } from "../../src/client.ts";`;
+  const dynamic = `const helper = await import("./helper.ts");`;
+  expect(lintMigrationImports(runtime).some((s) => s.includes("runtime imports"))).toBe(true);
+  expect(lintMigrationImports(dynamic).some((s) => s.includes("dynamic import"))).toBe(true);
 });

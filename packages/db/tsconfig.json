@@ -11,6 +11,6 @@
       "@tokenpanel/contracts/*": ["../contracts/src/*"]
     }
   },
-  "include": ["src"],
+  "include": ["src", "migrations"],
   "exclude": ["dist", "node_modules"]
 }

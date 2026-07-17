@@ -85,11 +85,11 @@ function BrandPanel(): React.ReactElement {
           <Sparkles className="size-6 text-sidebar-primary" />
         </div>
         <h2 className="text-2xl font-semibold leading-tight tracking-tight">
-          Set up your<br />AI reseller gateway.
+          Set up your<br />AI control plane.
         </h2>
         <p className="max-w-sm text-sm text-sidebar-foreground/60">
           Create your admin account and organization to start managing providers,
-          models, customers, and billing.
+          models, accounts, budgets, and usage.
         </p>
       </div>
       <div className="relative text-xs text-sidebar-foreground/40">

@@ -3,7 +3,7 @@
 # Paths are substituted by envsubst.
 
 [Unit]
-Description=TokenPanel — AI reseller gateway + admin panel
+Description=TokenPanel — AI usage tracking, access control, and admin panel
 Documentation=https://github.com/tokenpanel/tokenpanel
 Requires=docker.service
 After=docker.service network-online.target

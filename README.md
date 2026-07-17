@@ -4,34 +4,36 @@
 
 # TokenPanel
 
-## Launch your own AI API business
+## AI spend control and access management
 
-TokenPanel is an open-source, self-hosted AI reseller panel. Connect OpenAI-compatible or Anthropic-compatible providers, create customer API keys, set model prices, enforce limits, track balances, and see revenue, cost, and profit from one dashboard.
+TokenPanel is an open-source, self-hosted platform for tracking AI usage, managing users and accounts, enforcing budgets and rolling limits, and exposing a governed OpenAI- and Anthropic-compatible API.
+
+Connect providers, issue API keys, set model prices and budgets, enforce limits, and see cost and usage from one dashboard — whether for internal teams, clients, or product metering.
 
 No enterprise feature wall. No paid source tier for core features. TokenPanel is licensed under AGPLv3 so the platform stays open when modified and offered as a hosted service.
 
 ## Who is this for?
 
-- Developers selling AI API access to customers
-- SaaS founders adding usage-based AI billing
-- Agencies managing client AI usage
-- Teams that need per-user or per-customer AI budgets
+- Platform and infra teams centralizing AI provider access
+- Product teams metering AI usage for customers
+- Agencies allocating AI budget per client
+- Teams that need per-user or per-account AI budgets and limits
 
 ## Why TokenPanel
 
-Most LLM gateways focus on routing requests across providers. TokenPanel focuses on operating an AI business on top of that gateway.
+Most LLM gateways focus on routing requests across providers. TokenPanel adds who can use what, at what cost, and under which limits.
 
 Use it when you need:
 
-- Customer accounts, prepaid balances, subscriptions, and API keys
-- OpenAI-compatible and Anthropic-compatible APIs for your customers
+- Accounts, prepaid balances, subscriptions, and API keys
+- OpenAI-compatible and Anthropic-compatible APIs for your apps and users
 - Model aliases with provider fallback chains
-- Per-model pricing, upstream cost tracking, and margin visibility
+- Per-model pricing and upstream cost tracking
 - Token, request, and spend limits over custom windows like 1h, 5h, weekly, or 30d
-- Usage analytics by customer, model, cost, revenue, and profit
+- Usage analytics by account, model, cost, and spend
 - A self-hosted dashboard your team can actually run day to day
 
-If LiteLLM is the provider gateway, TokenPanel is the open-source customer, billing, and dashboard layer around AI resale.
+If LiteLLM is the provider gateway, TokenPanel is the open-source access, billing, and dashboard layer on top.
 
 ## Quick Start
 
@@ -45,12 +47,12 @@ Prefer local development? Jump to [Local Development](#local-development).
 
 ## Features
 
-**Customer management**
+**Accounts and access**
 
-- Create customers with balances, status, metadata, and external IDs
-- Issue customer API keys with one-time secret display
+- Create accounts with balances, status, metadata, and external IDs
+- Issue API keys with one-time secret display
 - Restrict keys to specific model aliases
-- Suspend or close customers without rotating provider credentials
+- Suspend or close accounts without rotating provider credentials
 
 **AI gateway**
 
@@ -68,22 +70,22 @@ Prefer local development? Jump to [Local Development](#local-development).
 - Publish your own model aliases instead of exposing upstream names
 - Configure ordered fallback chains across providers and upstream models
 
-**Billing and limits**
+**Budgets and limits**
 
 - Store money as integer minor units, never floats
-- Track upstream cost separately from customer price
-- Debit customer balances after successful usage
+- Track upstream cost separately from charged price
+- Debit account balances after successful usage
 - Record append-only usage and balance ledgers
 - Enforce rolling token, request, and spend limits
-- Define plan defaults and per-customer overrides
+- Define plan defaults and per-account overrides
 
 **Dashboard**
 
-- Overview of customers, models, providers, plans, and balances
-- Customer drawer with balance history, subscriptions, usage, and keys
+- Overview of accounts, models, providers, plans, and balances
+- Account drawer with balance history, subscriptions, usage, and keys
 - Plan editor with included credit, included tokens, and custom limits
-- Analytics for requests, tokens, cost, revenue, and profit
-- Admin playground for testing one or more models before customers use them
+- Analytics for requests, tokens, cost, and spend
+- Admin playground for testing one or more models before rollout
 - Multi-organization console with invites and per-organization roles
 
 **Operations**

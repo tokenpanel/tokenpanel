@@ -2,9 +2,9 @@
 
 ## Architecture
 
-**TokenPanel** — admin panel + API for reselling AI services: track token
-usage, customer balances, subscriptions, budgets, and rolling limits
-(5-hour, weekly, etc.).
+**TokenPanel** — admin panel + API for AI usage tracking and access control:
+track token usage, account balances, subscriptions, budgets, and rolling
+limits (5-hour, weekly, etc.).
 
 ### Stack
 

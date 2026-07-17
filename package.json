@@ -1,6 +1,6 @@
 {
   "name": "tokenpanel",
-  "description": "Open-source AI reseller gateway with customer billing, usage controls, and an admin dashboard.",
+  "description": "Open-source platform for AI usage tracking, access management, budgets, limits, and an admin dashboard.",
   "private": true,
   "license": "AGPL-3.0-only",
   "type": "module",

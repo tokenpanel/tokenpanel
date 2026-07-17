@@ -229,7 +229,7 @@ start_docker() {
 cat <<'BANNER'
   ╔══════════════════════════════════════════╗
   ║       TokenPanel Installer               ║
-  ║       AI reseller gateway + admin        ║
+  ║       AI spend & access control          ║
   ╚══════════════════════════════════════════╝
 BANNER
 

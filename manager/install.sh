@@ -55,7 +55,7 @@ install_packages() {
 cat <<'BANNER'
   ╔══════════════════════════════════════╗
   ║     TokenPanel Installer             ║
-  ║     AI reseller gateway + admin      ║
+  ║     AI spend & access control        ║
   ╚══════════════════════════════════════╝
 BANNER
 

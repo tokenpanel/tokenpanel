@@ -51,7 +51,7 @@ tokenpanel start        # preflight + up + health check
 tokenpanel stop         # stop all services
 tokenpanel restart      # stop + start
 tokenpanel update       # 6-phase safe update (tokenpanel-db3)
-tokenpanel backup       # mongodump with space check (tokenpanel-wuv)
+tokenpanel backup       # write-quiet mongodump (stops api briefly for consistent snapshot)
 tokenpanel restore <f>  # restore from backup
 tokenpanel migrate      # run pending migrations
 tokenpanel logs [-f]    # tail container logs

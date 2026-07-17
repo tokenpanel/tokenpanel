@@ -1,11 +1,62 @@
 #!/usr/bin/env bash
 # Backup system: mongodump with dynamic space check + smart retention.
+#
+# Consistency model
+# -----------------
+# Live mongodump without write quiesce is NOT a single logical snapshot:
+# collections are copied at different wall-clock times while the API may still
+# mutate related billing/usage/balance state.
+#
+# We cannot use `mongodump --oplog` + `mongorestore --oplogReplay` here:
+#   - --oplog requires a full-instance dump (no single-db / --db limit)
+#   - --oplogReplay forbids --nsFrom/--nsTo/--nsInclude (breaks restore-into-temp)
+# So we stop the API (the sole app writer) for the dump window, then restart it.
+# That yields a write-quiet, cross-collection-consistent archive while keeping
+# the existing single-DB dump + temp-DB swap restore path.
 
 source "${SCRIPT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}/output.sh"
 source "${SCRIPT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}/prompt.sh"
 
 # URI-encoded Mongo credentials (MONGO_USER_URI / MONGO_PASS_URI) are derived
 # in config.sh (_ensure_uri_creds), which is always sourced before this file.
+
+# 1 if create_backup stopped the api and must restart it; 0 otherwise.
+BACKUP_API_WAS_RUNNING=0
+
+_api_is_running() {
+  docker compose -f "$APP_YML" ps --status running --services 2>/dev/null \
+    | grep -qx 'api'
+}
+
+# Stop api if it is up so mongodump sees one write-quiet moment.
+# Sets BACKUP_API_WAS_RUNNING so _resume_writers only restarts what we stopped.
+_quiesce_writers() {
+  BACKUP_API_WAS_RUNNING=0
+  if _api_is_running; then
+    step "backup" "stopping api for consistent snapshot..."
+    if ! docker compose -f "$APP_YML" stop api; then
+      err "failed to stop api — refusing live dump (would not be consistent)"
+      return 1
+    fi
+    BACKUP_API_WAS_RUNNING=1
+    ok "api stopped (writes quiesced)"
+  else
+    info "api not running — dump already write-quiet"
+  fi
+}
+
+# Restart api only if this backup run stopped it. Safe to call multiple times.
+_resume_writers() {
+  if [ "${BACKUP_API_WAS_RUNNING:-0}" -eq 1 ]; then
+    step "backup" "restarting api..."
+    if docker compose -f "$APP_YML" start api >/dev/null 2>&1; then
+      ok "api restarted"
+    else
+      err "failed to restart api — start it manually: tokenpanel start"
+    fi
+    BACKUP_API_WAS_RUNNING=0
+  fi
+}
 
 create_backup() {
   local label="${1:-manual}"
@@ -60,14 +111,26 @@ create_backup() {
   fi
   ok "disk: ${free_mb}MB free, need ~${required_mb}MB — ok"
 
-  step "backup" "dumping database..."
-  docker compose -f "$APP_YML" exec -T mongo mongodump \
+  # Safety net for signals / unexpected abort while API is stopped.
+  # EXIT runs on shell exit only — failure paths below also resume explicitly
+  # because `return` from this function does not fire EXIT.
+  trap '_resume_writers' EXIT
+
+  if ! _quiesce_writers; then
+    trap - EXIT
+    return 1
+  fi
+
+  step "backup" "dumping database (write-quiet)..."
+  if ! docker compose -f "$APP_YML" exec -T mongo mongodump \
     --uri="mongodb://${MONGO_USER_URI}:${MONGO_PASS_URI}@localhost:27017/${MONGODB_DB}?authSource=admin&directConnection=true" \
-    --archive --gzip --quiet > "$backup_file" || {
+    --archive --gzip --quiet > "$backup_file"; then
     err "mongodump failed"
     rm -f "$backup_file"
+    trap - EXIT
+    _resume_writers
     return 1
-  }
+  fi
 
   local actual_size_mb
   actual_size_mb="$(($(stat -c %s "$backup_file" 2>/dev/null || stat -f %z "$backup_file") / 1048576))"
@@ -81,8 +144,15 @@ create_backup() {
   else
     err "backup verification failed — archive may be corrupt"
     rm -f "$backup_file"
+    trap - EXIT
+    _resume_writers
     return 1
   fi
+
+  # Resume API before retention (retention is local FS only) so write traffic
+  # returns ASAP. Clear EXIT trap only after a successful explicit resume.
+  trap - EXIT
+  _resume_writers
 
   apply_retention
 

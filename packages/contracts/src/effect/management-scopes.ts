@@ -5,21 +5,17 @@ import { Schema } from "effect";
 import {
   MANAGEMENT_SCOPE_DEFINITIONS,
   MANAGEMENT_SCOPES,
-  MANAGEMENT_SCOPES_META,
   type ManagementScope,
   type ManagementScopeDefinition,
-  type ManagementScopeMeta,
 } from "../management-scopes.ts";
 
 export {
   MANAGEMENT_SCOPE_DEFINITIONS,
   MANAGEMENT_SCOPES,
-  MANAGEMENT_SCOPES_META,
 };
 export type {
   ManagementScope,
   ManagementScopeDefinition,
-  ManagementScopeMeta,
 };
 
 /** Non-empty tuple of scope string literals for Schema.Literal. */

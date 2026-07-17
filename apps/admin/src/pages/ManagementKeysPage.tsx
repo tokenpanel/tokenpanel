@@ -1,11 +1,9 @@
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { getJson, patchJson, postJson, deleteJson } from "../api/client.ts";
 import type {
   ManagementKey,
   ManagementKeyCreateResponse,
   ManagementKeyListResponse,
-  ManagementScopeMeta,
-  ManagementScopeMetaListResponse,
 } from "../api/management-keys.ts";
 import { useAuth } from "../auth/AuthContext.tsx";
 import { formatRelative } from "../utils/format.ts";
@@ -28,37 +26,9 @@ import { KeyRound, Copy, Check, Plus, ShieldCheck } from "lucide-react";
 import { PageHeader } from "@/components/PageHeader";
 import { EmptyState } from "@/components/EmptyState";
 import { FadeIn } from "@/components/anim";
-import {
-  MANAGEMENT_SCOPES,
-  MANAGEMENT_SCOPES_META,
-} from "@tokenpanel/contracts";
+import { MANAGEMENT_SCOPE_DEFINITIONS } from "@tokenpanel/contracts";
 
-const ALL_SCOPES = MANAGEMENT_SCOPES;
-
-type ScopeToggle = { scope: string; label: string; group: string; description: string };
-
-/** Offline fallback when the scopes meta endpoint is unavailable. */
-const SCOPE_META_FALLBACK: ScopeToggle[] = MANAGEMENT_SCOPES_META.map((m) => ({
-  scope: m.scope,
-  label: m.description,
-  group: m.group,
-  description: m.description,
-}));
-
-function scopeToggles(meta: ManagementScopeMeta[] | null): ScopeToggle[] {
-  if (!meta || meta.length === 0) return SCOPE_META_FALLBACK;
-  return ALL_SCOPES.map((scope) => {
-    const m = meta.find((x) => x.scope === scope);
-    return {
-      scope,
-      label: m?.description ?? scope,
-      group: m?.group ?? "Other",
-      description: m?.description ?? "",
-    };
-  });
-}
-
-function groupBy<T, K extends string>(items: T[], key: (t: T) => K): Record<K, T[]> {
+function groupBy<T, K extends string>(items: readonly T[], key: (t: T) => K): Record<K, T[]> {
   const out = {} as Record<K, T[]>;
   for (const item of items) {
     const k = key(item);
@@ -67,13 +37,15 @@ function groupBy<T, K extends string>(items: T[], key: (t: T) => K): Record<K, T
   return out;
 }
 
+/** Create/edit scope checkboxes — static product contract (not an API fetch). */
+const SCOPES_BY_GROUP = groupBy(MANAGEMENT_SCOPE_DEFINITIONS, (s) => s.group);
+
 export default function ManagementKeysPage(): React.ReactElement {
   const { user } = useAuth();
   const isAdmin = user?.role === "admin";
   const activeOrgId = user?.activeOrganizationId;
 
   const [keys, setKeys] = useState<ManagementKey[]>([]);
-  const [scopes, setScopes] = useState<ManagementScopeMeta[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -100,13 +72,9 @@ export default function ManagementKeysPage(): React.ReactElement {
       setLoading(true);
       setError(null);
       try {
-        const [keyRes, scopeRes] = await Promise.all([
-          getJson<ManagementKeyListResponse>("/admin/management-keys"),
-          getJson<ManagementScopeMetaListResponse>("/admin/management-keys/__scopes/meta").catch(() => null),
-        ]);
+        const keyRes = await getJson<ManagementKeyListResponse>("/admin/management-keys");
         if (cancelled) return;
         setKeys(keyRes.items);
-        setScopes(scopeRes?.items ?? null);
       } catch (err) {
         if (cancelled) return;
         setError(err instanceof Error ? err.message : "Failed to load management keys.");
@@ -205,14 +173,9 @@ export default function ManagementKeysPage(): React.ReactElement {
     });
   }
 
-  const grouped = useMemo(() => groupBy(scopeToggles(scopes), (s) => s.group), [scopes]);
-
   return (
     <div className="flex flex-col gap-6 p-6 lg:p-8">
-      <PageHeader
-        title="Management Keys"
-        description="Server-to-server API keys with fine-grained scopes for backend integrations."
-      />
+      <PageHeader title="Management Keys" icon={<ShieldCheck strokeWidth={1.75} />} />
 
       {error ? (
         <Alert variant="destructive">
@@ -285,25 +248,25 @@ export default function ManagementKeysPage(): React.ReactElement {
                   Each scope is independent — grant only what the integration needs.
                 </p>
                 <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                  {Object.entries(grouped).map(([group, items]) => (
+                  {Object.entries(SCOPES_BY_GROUP).map(([group, items]) => (
                     <div key={group} className="flex flex-col gap-2 rounded-md border border-border p-3">
                       <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                         {group}
                       </div>
                       {items.map((s) => (
                         <label
-                          key={s.scope}
+                          key={s.value}
                           className="flex cursor-pointer items-start gap-2 text-sm"
                           title={s.description}
                         >
                           <Checkbox
-                            checked={selected.has(s.scope)}
-                            onCheckedChange={() => toggleScope(s.scope)}
+                            checked={selected.has(s.value)}
+                            onCheckedChange={() => toggleScope(s.value)}
                             className="mt-0.5"
                           />
                           <span className="flex flex-col">
-                            <span className="font-medium leading-tight">{s.label}</span>
-                            <code className="font-mono text-[10px] text-muted-foreground">{s.scope}</code>
+                            <span className="font-medium leading-tight">{s.description}</span>
+                            <code className="font-mono text-[10px] text-muted-foreground">{s.value}</code>
                           </span>
                         </label>
                       ))}

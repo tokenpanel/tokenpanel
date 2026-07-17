@@ -32,7 +32,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Copy, Check, User, Mail, ShieldCheck, Lock } from "lucide-react";
+import { Copy, Check, User, Mail, ShieldCheck, Lock, Settings } from "lucide-react";
 import { PageHeader } from "@/components/PageHeader";
 import { EmptyState } from "@/components/EmptyState";
 import { FadeIn } from "@/components/anim";
@@ -216,7 +216,7 @@ export default function SettingsPage(): React.ReactElement {
 
   return (
     <div className="flex flex-col gap-6 p-6 lg:p-8">
-      <PageHeader title="Settings" description="Profile and organization management." />
+      <PageHeader title="Settings" icon={<Settings strokeWidth={1.75} />} />
 
       {error ? (
         <Alert variant="destructive">

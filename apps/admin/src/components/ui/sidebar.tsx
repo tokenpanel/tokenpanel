@@ -24,9 +24,10 @@ import {
 
 const SIDEBAR_COOKIE_NAME = "sidebar_state";
 const SIDEBAR_COOKIE_MAX_AGE = 60 * 60 * 24 * 7;
-const SIDEBAR_WIDTH = "16rem";
-const SIDEBAR_WIDTH_MOBILE = "18rem";
-const SIDEBAR_WIDTH_ICON = "3rem";
+const SIDEBAR_WIDTH = "16.5rem";
+/** Mobile drawer: leave room for scrim so outside-tap can dismiss. */
+const SIDEBAR_WIDTH_MOBILE = "16rem";
+const SIDEBAR_WIDTH_ICON = "3.25rem";
 const SIDEBAR_KEYBOARD_SHORTCUT = "b";
 
 type SidebarContextProps = {
@@ -162,14 +163,20 @@ function Sidebar({
 
   if (isMobile) {
     return (
-      <Sheet open={openMobile} onOpenChange={setOpenMobile} {...props}>
+      <Sheet open={openMobile} onOpenChange={setOpenMobile}>
         <SheetContent
           data-sidebar="sidebar"
           data-slot="sidebar"
           data-mobile="true"
-          className="w-(--sidebar-width) bg-sidebar p-0 text-sidebar-foreground [&>button]:hidden"
-          style={{ "--sidebar-width": SIDEBAR_WIDTH_MOBILE } as React.CSSProperties}
           side={side}
+          // Force width past sheetVariants `w-3/4` so drawer stays compact
+          // and leaves a tappable scrim for outside-dismiss.
+          className={cn(
+            "w-[min(var(--sidebar-width),calc(100vw-3.5rem))]! max-w-[min(var(--sidebar-width),calc(100vw-3.5rem))]! bg-sidebar p-0 text-sidebar-foreground",
+            "[&>button]:text-sidebar-foreground/70 [&>button]:hover:text-sidebar-foreground [&>button]:hover:bg-sidebar-accent",
+            className,
+          )}
+          style={{ "--sidebar-width": SIDEBAR_WIDTH_MOBILE } as React.CSSProperties}
         >
           <SheetHeader className="sr-only">
             <SheetTitle>Sidebar</SheetTitle>
@@ -374,7 +381,7 @@ function SidebarGroupLabel({
       data-slot="sidebar-group-label"
       data-sidebar="group-label"
       className={cn(
-        "flex h-8 shrink-0 items-center rounded-md px-2 text-xs font-medium text-sidebar-foreground/70 ring-sidebar-ring outline-hidden transition-opacity duration-200 ease-linear focus-visible:ring-2 [&>svg]:size-4 [&>svg]:shrink-0",
+        "flex h-8 shrink-0 items-center rounded-md px-2.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-sidebar-foreground/70 ring-sidebar-ring outline-hidden transition-opacity duration-200 ease-linear focus-visible:ring-2 [&>svg]:size-4 [&>svg]:shrink-0",
         "group-data-[collapsible=icon]:opacity-0",
         className,
       )}
@@ -424,7 +431,7 @@ function SidebarMenu({ className, ...props }: React.ComponentProps<"ul">): React
     <ul
       data-slot="sidebar-menu"
       data-sidebar="menu"
-      className={cn("flex w-full min-w-0 flex-col gap-1", className)}
+      className={cn("flex w-full min-w-0 flex-col gap-0.5", className)}
       {...props}
     />
   );
@@ -442,7 +449,22 @@ function SidebarMenuItem({ className, ...props }: React.ComponentProps<"li">): R
 }
 
 const sidebarMenuButtonVariants = cva(
-  "peer/menu-button flex w-full items-center gap-2 overflow-hidden rounded-md p-2 text-left text-sm ring-sidebar-ring outline-hidden transition-[width,height,padding] duration-200 ease-linear group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:bg-sidebar-accent data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0",
+  [
+    "peer/menu-button flex w-full items-center gap-2.5 overflow-hidden rounded-lg p-2 text-left text-sm",
+    "ring-sidebar-ring outline-hidden transition-[width,height,padding,background-color,color,box-shadow] duration-150 ease-out",
+    "group-has-data-[sidebar=menu-action]/menu-item:pr-8",
+    "group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2!",
+    "text-sidebar-foreground/85",
+    "hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
+    "focus-visible:ring-2",
+    "active:bg-sidebar-accent active:text-sidebar-accent-foreground",
+    "disabled:pointer-events-none disabled:opacity-50",
+    "aria-disabled:pointer-events-none aria-disabled:opacity-50",
+    "data-[active=true]:bg-sidebar-accent data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground",
+    "data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground",
+    "[&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0",
+    "data-[active=true]:[&>svg]:text-sidebar-accent-foreground",
+  ].join(" "),
   {
     variants: {
       variant: {
@@ -451,8 +473,8 @@ const sidebarMenuButtonVariants = cva(
           "bg-background shadow-[0_0_0_1px_var(--sidebar-border)] hover:bg-sidebar-accent hover:text-sidebar-accent-foreground hover:shadow-[0_0_0_1px_var(--sidebar-accent)]",
       },
       size: {
-        default: "h-8 text-sm",
-        sm: "h-7 text-xs",
+        default: "h-9 text-sm",
+        sm: "h-8 text-xs",
         lg: "h-12 text-sm group-data-[collapsible=icon]:p-0!",
       },
     },

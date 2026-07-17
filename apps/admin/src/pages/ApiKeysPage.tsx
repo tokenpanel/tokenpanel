@@ -165,7 +165,7 @@ export default function ApiKeysPage(): React.ReactElement {
 
   return (
     <div className="flex flex-col gap-6 p-6 lg:p-8">
-      <PageHeader title="API Keys" description="Manage customer API keys." />
+      <PageHeader title="API Keys" icon={<KeyRound strokeWidth={1.75} />} />
 
       {error ? (
         <Alert variant="destructive">

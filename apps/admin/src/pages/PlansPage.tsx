@@ -415,7 +415,7 @@ export default function PlansPage(): React.ReactElement {
 
   return (
     <div className="flex flex-col gap-6 p-6 lg:p-8">
-      <PageHeader title="Plans" description="Subscription plans, pricing, and rate-limit defaults.">
+      <PageHeader title="Plans" icon={<CreditCard strokeWidth={1.75} />}>
         {showForm ? (
           <Button variant="outline" size="sm" onClick={cancelForm} disabled={saving}>Cancel</Button>
         ) : (

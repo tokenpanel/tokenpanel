@@ -7,18 +7,9 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { PasswordInput } from "@/components/ui/password-input";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import {
-  Loader2,
-  KeyRound,
-  ShieldCheck,
-  Waypoints,
-  Github,
-  type LucideIcon,
-} from "lucide-react";
-import BrandLogo from "@/components/BrandLogo";
+import { Loader2 } from "lucide-react";
+import { AuthBrandPanel, AuthMobileBrand } from "@/components/AuthBrandPanel";
 import { cn } from "@/lib/utils";
-
-const GITHUB_REPO_URL = "https://github.com/tokenpanel/tokenpanel";
 
 interface FromState {
   from?: { pathname: string };
@@ -27,140 +18,6 @@ interface FromState {
 export function fromPath(locationState: unknown): string {
   const state = locationState as FromState | null;
   return state?.from?.pathname ?? "/";
-}
-
-interface Capability {
-  icon: LucideIcon;
-  title: string;
-  description: string;
-}
-
-const CAPABILITIES: readonly Capability[] = [
-  {
-    icon: Waypoints,
-    title: "OpenAI & Anthropic-compatible gateway",
-    description: "One governed API surface for your apps and teams.",
-  },
-  {
-    icon: ShieldCheck,
-    title: "Per-account budgets & rolling limits",
-    description: "Cap spend, tokens, and requests over custom windows.",
-  },
-  {
-    icon: KeyRound,
-    title: "API keys with model access controls",
-    description: "Issue scoped keys without exposing provider secrets.",
-  },
-];
-
-function CapabilityRow({
-  icon: Icon,
-  title,
-  description,
-  index,
-}: Capability & { index: number }): ReactElement {
-  return (
-    <li
-      className="animate-fade-in-up flex gap-3.5 rounded-xl border border-sidebar-border/80 bg-sidebar-accent/35 p-3.5"
-      style={{ animationDelay: `${0.12 + index * 0.06}s` }}
-    >
-      <div className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-sidebar-border bg-sidebar/60 text-sidebar-primary">
-        <Icon className="size-4" strokeWidth={1.75} />
-      </div>
-      <div className="min-w-0 flex flex-col gap-0.5 pt-0.5">
-        <span className="text-sm font-medium leading-snug text-sidebar-foreground">
-          {title}
-        </span>
-        <span className="text-[13px] leading-snug text-sidebar-foreground/50">
-          {description}
-        </span>
-      </div>
-    </li>
-  );
-}
-
-function BrandPanel(): ReactElement {
-  return (
-    <aside className="relative hidden min-h-[100dvh] w-[min(50%,34rem)] shrink-0 flex-col justify-between overflow-hidden border-r border-sidebar-border bg-sidebar px-10 py-10 text-sidebar-foreground lg:flex xl:w-[min(48%,38rem)] xl:px-12">
-      {/* Ambient depth: soft primary wash + faint grid */}
-      <div
-        className="pointer-events-none absolute inset-0"
-        aria-hidden
-        style={{
-          backgroundImage: [
-            "radial-gradient(ellipse 80% 55% at 0% 0%, color-mix(in oklch, var(--sidebar-primary) 18%, transparent), transparent 55%)",
-            "radial-gradient(ellipse 60% 40% at 100% 100%, color-mix(in oklch, var(--sidebar-primary) 10%, transparent), transparent 50%)",
-          ].join(", "),
-        }}
-      />
-      <div
-        className="pointer-events-none absolute inset-0 opacity-[0.035]"
-        aria-hidden
-        style={{
-          backgroundImage:
-            "linear-gradient(to right, var(--sidebar-foreground) 1px, transparent 1px), linear-gradient(to bottom, var(--sidebar-foreground) 1px, transparent 1px)",
-          backgroundSize: "48px 48px",
-          maskImage:
-            "radial-gradient(ellipse 70% 60% at 50% 40%, black 20%, transparent 75%)",
-        }}
-      />
-
-      <div className="relative flex items-center gap-2.5">
-        <BrandLogo className="size-8 shadow-sm" />
-        <span className="text-[15px] font-semibold tracking-tight">TokenPanel</span>
-      </div>
-
-      <div className="relative flex w-full flex-col gap-9">
-        <div className="animate-fade-in-up flex flex-col gap-5">
-          <div className="flex flex-col gap-2.5">
-            <h2 className="text-[2rem] font-semibold leading-none tracking-tight xl:text-[2.375rem]">
-              TokenPanel
-            </h2>
-            <p className="text-base font-medium leading-snug tracking-tight text-sidebar-foreground/80">
-              AI spend control and access management
-            </p>
-          </div>
-          <p className="w-full text-[15px] leading-relaxed text-sidebar-foreground/50">
-            See what each account spends, decide who can call which models, and
-            set budgets and rolling limits before costs run away. Issue scoped
-            API keys and route traffic through one OpenAI- and
-            Anthropic-compatible API without sharing provider credentials.
-          </p>
-        </div>
-
-        <ul className="flex w-full flex-col gap-2.5">
-          {CAPABILITIES.map((item, index) => (
-            <CapabilityRow key={item.title} {...item} index={index} />
-          ))}
-        </ul>
-      </div>
-
-      <div className="relative flex items-center justify-between gap-4">
-        <p className="text-xs text-sidebar-foreground/35">
-          &copy; {new Date().getFullYear()} TokenPanel
-        </p>
-        <a
-          href={GITHUB_REPO_URL}
-          target="_blank"
-          rel="noopener noreferrer"
-          aria-label="TokenPanel on GitHub"
-          className="inline-flex items-center gap-1.5 text-xs text-sidebar-foreground/45 no-underline transition-colors hover:text-sidebar-foreground/80"
-        >
-          <Github className="size-3.5" strokeWidth={1.75} aria-hidden />
-          GitHub
-        </a>
-      </div>
-    </aside>
-  );
-}
-
-function MobileBrand(): ReactElement {
-  return (
-    <div className="mb-8 flex items-center gap-2.5 lg:hidden">
-      <BrandLogo className="size-8 shadow-sm" />
-      <span className="text-[15px] font-semibold tracking-tight">TokenPanel</span>
-    </div>
-  );
 }
 
 export default function LoginPage(): ReactElement {
@@ -210,7 +67,7 @@ export default function LoginPage(): ReactElement {
 
   return (
     <div className="flex min-h-[100dvh] bg-background">
-      <BrandPanel />
+      <AuthBrandPanel />
 
       <main className="relative flex flex-1 flex-col justify-center px-6 py-10 sm:px-10">
         <div
@@ -219,7 +76,7 @@ export default function LoginPage(): ReactElement {
             "sm:max-w-[24rem]",
           )}
         >
-          <MobileBrand />
+          <AuthMobileBrand />
 
           <header className="mb-8 flex flex-col gap-2">
             <h1 className="text-2xl font-semibold tracking-tight">Welcome back</h1>

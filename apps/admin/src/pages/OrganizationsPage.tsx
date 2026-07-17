@@ -217,7 +217,7 @@ export default function OrganizationsPage(): React.ReactElement {
 
   return (
     <div className="flex flex-col gap-6 p-6 lg:p-8">
-      <PageHeader title="Organizations" description="Create and manage the organizations you belong to.">
+      <PageHeader title="Organizations" icon={<Building2 strokeWidth={1.75} />}>
         <Button onClick={openCreate}>
           <Plus className="size-4" />
           New organization

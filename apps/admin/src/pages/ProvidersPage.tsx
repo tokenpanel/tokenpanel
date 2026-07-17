@@ -362,7 +362,7 @@ export default function ProvidersPage(): React.ReactElement {
 
   return (
     <div className="flex flex-col gap-6 p-6 lg:p-8">
-      <PageHeader title="Providers" description="Manage AI service providers and discover available models.">
+      <PageHeader title="Providers" icon={<Plug strokeWidth={1.75} />}>
         <Button variant="outline" size="sm" onClick={() => void loadProviders()} disabled={loading}>
           <RefreshCw className={loading ? "size-4 animate-spin" : "size-4"} />
           Refresh

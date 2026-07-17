@@ -50,13 +50,11 @@ export {
 export {
   MANAGEMENT_SCOPE_DEFINITIONS,
   MANAGEMENT_SCOPES,
-  MANAGEMENT_SCOPES_META,
   managementScopeSchema,
 } from "./management-scopes.ts";
 export type {
   ManagementScope,
   ManagementScopeDefinition,
-  ManagementScopeMeta,
 } from "./management-scopes.ts";
 
 export {

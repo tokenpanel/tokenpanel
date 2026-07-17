@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useState, type FormEvent, type ReactElement } from "react";
 import { Navigate, useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext.tsx";
 import { ApiError } from "../api/client.ts";
@@ -7,8 +7,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { PasswordInput } from "@/components/ui/password-input";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Loader2, Sparkles } from "lucide-react";
-import BrandLogo from "@/components/BrandLogo";
+import { Loader2 } from "lucide-react";
+import { AuthBrandPanel, AuthMobileBrand } from "@/components/AuthBrandPanel";
 
 interface SignupForm {
   adminEmail: string;
@@ -66,39 +66,6 @@ export function validate(form: SignupForm): FieldErrors {
   return errs;
 }
 
-function BrandPanel(): React.ReactElement {
-  return (
-    <div className="relative hidden flex-col justify-between overflow-hidden bg-sidebar p-10 text-sidebar-foreground lg:flex">
-      <div
-        className="pointer-events-none absolute inset-0 opacity-[0.04]"
-        style={{
-          backgroundImage:
-            "radial-gradient(circle at 20% 20%, var(--sidebar-primary) 0, transparent 40%), radial-gradient(circle at 80% 80%, var(--sidebar-primary) 0, transparent 40%)",
-        }}
-      />
-      <div className="relative flex items-center gap-2.5">
-        <BrandLogo className="size-9 shadow-sm" />
-        <span className="text-base font-semibold tracking-tight">TokenPanel</span>
-      </div>
-      <div className="relative flex flex-col gap-4">
-        <div className="flex size-12 items-center justify-center rounded-xl bg-sidebar-primary/10">
-          <Sparkles className="size-6 text-sidebar-primary" />
-        </div>
-        <h2 className="text-2xl font-semibold leading-tight tracking-tight">
-          Set up your<br />AI control plane.
-        </h2>
-        <p className="max-w-sm text-sm text-sidebar-foreground/60">
-          Create your admin account and organization to start managing providers,
-          models, accounts, budgets, and usage.
-        </p>
-      </div>
-      <div className="relative text-xs text-sidebar-foreground/40">
-        &copy; {new Date().getFullYear()} TokenPanel
-      </div>
-    </div>
-  );
-}
-
 function Field({
   id,
   label,
@@ -109,9 +76,9 @@ function Field({
   label: string;
   error?: string | undefined;
   children: React.ReactNode;
-}): React.ReactElement {
+}): ReactElement {
   return (
-    <div className="flex flex-col gap-1.5">
+    <div className="flex flex-col gap-2">
       <Label htmlFor={id}>{label}</Label>
       {children}
       {error ? <span className="text-xs text-destructive">{error}</span> : null}
@@ -119,7 +86,7 @@ function Field({
   );
 }
 
-export default function SignupPage(): React.ReactElement {
+export default function SignupPage(): ReactElement {
   const { user, loading, needsSetup, signup } = useAuth();
   const navigate = useNavigate();
   const [form, setForm] = useState<SignupForm>(EMPTY);
@@ -130,8 +97,9 @@ export default function SignupPage(): React.ReactElement {
 
   if (loading) {
     return (
-      <div className="flex min-h-screen items-center justify-center text-muted-foreground">
-        Loading…
+      <div className="flex min-h-[100dvh] items-center justify-center text-muted-foreground">
+        <Loader2 className="size-5 animate-spin" aria-hidden />
+        <span className="sr-only">Loading</span>
       </div>
     );
   }
@@ -196,17 +164,23 @@ export default function SignupPage(): React.ReactElement {
   }
 
   return (
-    <div className="flex min-h-screen bg-background">
-      <BrandPanel />
-      <div className="flex flex-1 items-center justify-center p-6">
-        <div className="w-full max-w-[460px] animate-fade-in-up">
-          <div className="mb-6 flex flex-col gap-1.5">
-            <h1 className="text-xl font-semibold tracking-tight">Create your admin account</h1>
-            <p className="text-sm text-muted-foreground">
+    <div className="flex min-h-[100dvh] bg-background">
+      <AuthBrandPanel />
+
+      <main className="relative flex flex-1 flex-col justify-center px-6 py-10 sm:px-10">
+        <div className="mx-auto w-full max-w-[28rem] animate-fade-in-up">
+          <AuthMobileBrand />
+
+          <header className="mb-8 flex flex-col gap-2">
+            <h1 className="text-2xl font-semibold tracking-tight">
+              Create your admin account
+            </h1>
+            <p className="text-sm leading-relaxed text-muted-foreground">
               This becomes the first admin of your organization.
             </p>
-          </div>
-          <form className="flex flex-col gap-4" onSubmit={onSubmit} noValidate>
+          </header>
+
+          <form className="flex flex-col gap-5" onSubmit={onSubmit} noValidate>
             {error ? (
               <Alert variant="destructive">
                 <AlertDescription>{error}</AlertDescription>
@@ -219,12 +193,17 @@ export default function SignupPage(): React.ReactElement {
                 type="email"
                 value={form.adminEmail}
                 autoComplete="email"
+                autoFocus
                 disabled={submitting}
                 onChange={(e) => update("adminEmail", e.target.value)}
               />
             </Field>
 
-            <Field id="signup-username" label="Admin username" error={fieldErrors.adminUsername}>
+            <Field
+              id="signup-username"
+              label="Admin username"
+              error={fieldErrors.adminUsername}
+            >
               <Input
                 id="signup-username"
                 type="text"
@@ -235,7 +214,7 @@ export default function SignupPage(): React.ReactElement {
               />
             </Field>
 
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
               <Field id="signup-password" label="Password" error={fieldErrors.password}>
                 <PasswordInput
                   id="signup-password"
@@ -247,7 +226,11 @@ export default function SignupPage(): React.ReactElement {
                   onChange={(e) => update("password", e.target.value)}
                 />
               </Field>
-              <Field id="signup-confirm" label="Confirm password" error={fieldErrors.confirmPassword}>
+              <Field
+                id="signup-confirm"
+                label="Confirm password"
+                error={fieldErrors.confirmPassword}
+              >
                 <PasswordInput
                   id="signup-confirm"
                   value={form.confirmPassword}
@@ -260,8 +243,9 @@ export default function SignupPage(): React.ReactElement {
               </Field>
             </div>
 
-            <p className="text-xs text-muted-foreground">
-              A default organization is created for you automatically. You can rename it or create more after signing in.
+            <p className="text-xs leading-relaxed text-muted-foreground">
+              A default organization is created for you automatically. You can
+              rename it or create more after signing in.
             </p>
 
             <Button type="submit" className="mt-1 w-full" disabled={submitting}>
@@ -276,7 +260,7 @@ export default function SignupPage(): React.ReactElement {
             </Button>
           </form>
         </div>
-      </div>
+      </main>
     </div>
   );
 }

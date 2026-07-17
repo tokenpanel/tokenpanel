@@ -42,6 +42,7 @@ import {
   Coins,
   Server,
   X,
+  MessageSquare,
 } from "lucide-react";
 import { PageHeader } from "@/components/PageHeader";
 import { EmptyState } from "@/components/EmptyState";
@@ -311,7 +312,7 @@ export default function PlaygroundPage(): React.ReactElement {
     <TooltipProvider delayDuration={300}>
       <div className="flex h-full flex-col">
         <div className="border-b border-border px-4 py-4 sm:px-6">
-          <PageHeader title="Playground" description="Test models and parameters with a live chat.">
+          <PageHeader title="Playground" icon={<MessageSquare strokeWidth={1.75} />}>
             <Button variant="outline" size="sm" onClick={clearConversation} disabled={streaming || messages.length === 0}>
               <Trash2 className="size-4" />
               Clear

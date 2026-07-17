@@ -5,23 +5,13 @@
     <link rel="icon" type="image/png" href="/logo.png" />
     <link rel="apple-touch-icon" href="/logo.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#090b10" />
+    <meta name="theme-color" content="#161a24" />
+    <meta name="color-scheme" content="dark" />
     <meta
       name="description"
       content="TokenPanel admin console for AI usage tracking, budgets, access control, model routing, and spend analytics."
     />
     <title>TokenPanel — Admin Console</title>
-    <script>
-      (function () {
-        try {
-          var t = localStorage.getItem("tp_admin_theme");
-          var el = document.documentElement;
-          el.classList.remove("dark", "light");
-          el.classList.add(t === "light" ? "light" : "dark");
-          el.style.colorScheme = t === "light" ? "light" : "dark";
-        } catch (_) {}
-      })();
-    </script>
   </head>
   <body>
     <div id="root"></div>

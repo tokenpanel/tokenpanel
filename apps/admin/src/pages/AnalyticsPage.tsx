@@ -16,7 +16,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Activity, Coins, TrendingUp, TrendingDown, Hash } from "lucide-react";
+import { Activity, Coins, TrendingUp, TrendingDown, Hash, BarChart3 } from "lucide-react";
 import { PageHeader } from "@/components/PageHeader";
 import { StatCard } from "@/components/StatCard";
 import { FadeIn, StaggerItem } from "@/components/anim";
@@ -87,10 +87,7 @@ export default function AnalyticsPage(): React.ReactElement {
 
   return (
     <div className="flex flex-col gap-6 p-6 lg:p-8">
-      <PageHeader
-        title="Analytics"
-        description="Organization usage over a date range (server aggregates)."
-      />
+      <PageHeader title="Analytics" icon={<BarChart3 strokeWidth={1.75} />} />
 
       <div className="flex flex-wrap items-end gap-4">
         <div className="flex flex-col gap-1.5">

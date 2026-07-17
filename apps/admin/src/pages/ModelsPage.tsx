@@ -264,7 +264,7 @@ export default function ModelsPage(): React.ReactElement {
 
   return (
     <div className="flex flex-col gap-6 p-6 lg:p-8">
-      <PageHeader title="Models" description="Aliased models with ordered provider fallback chains.">
+      <PageHeader title="Models" icon={<Boxes strokeWidth={1.75} />}>
         <Button size="sm" onClick={startAdd}>
           <Plus className="size-4" />
           Add Model
@@ -390,8 +390,8 @@ function ModelEditor({
   return (
     <div className="flex flex-col gap-6 p-6 lg:p-8">
       <PageHeader
-        title={isCreate ? "Add Model" : `Edit: ${model?.displayName ?? ""}`}
-        description={isCreate ? "Create a new aliased model with a primary provider entry." : `Alias ${model?.aliasId ?? ""}`}
+        title={isCreate ? "Add model" : (model?.displayName ?? "Edit model")}
+        icon={<Boxes strokeWidth={1.75} />}
       >
         {isCreate ? (
           <Button variant="outline" size="sm" onClick={onOpenFetch} disabled={saving}>

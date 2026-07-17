@@ -3,7 +3,7 @@
  *
  * Policy version: 2026-07-13
  * Values are stable public contract: changing a value is a breaking API change.
- * DB enum, API metadata endpoint, and admin UI all derive from this tuple.
+ * DB enum and admin UI all derive from this tuple.
  *
  * Effect Schema: `managementScopeSchema` (canonical §11 path).
  */
@@ -74,17 +74,3 @@ const scopeLiterals = MANAGEMENT_SCOPES as unknown as [
 export const managementScopeSchema = withParseApi(
   Schema.Literal(...scopeLiterals),
 );
-
-/** API `/__scopes/meta` item shape (scope field name matches historical response). */
-export type ManagementScopeMeta = {
-  scope: ManagementScope;
-  group: string;
-  description: string;
-};
-
-export const MANAGEMENT_SCOPES_META: readonly ManagementScopeMeta[] =
-  MANAGEMENT_SCOPE_DEFINITIONS.map((d) => ({
-    scope: d.value,
-    group: d.group,
-    description: d.description,
-  }));

@@ -25,14 +25,12 @@ import { withParseApi } from "../http/validation/with-parse-api.ts";
 import { KeyRepository } from "../domains/ports/key-repository.ts";
 import { NotFoundError } from "../errors/families.ts";
 import { parseObjectIdParam } from "./route-utils.ts";
-import { MANAGEMENT_SCOPES_META } from "@tokenpanel/contracts";
 
 /** @deprecated Test helper alias. */
 export const stripKey = stripManagementKey;
 export { parseObjectIdParam };
 export const KEY_PREFIX_LITERAL = MANAGEMENT_KEY_PREFIX_LITERAL;
 export const PREFIX_LENGTH = API_KEY_LOOKUP_PREFIX_CHARS;
-export { MANAGEMENT_SCOPES_META };
 
 export const managementKeyListQuery = withParseApi(ManagementKeyListQuery);
 

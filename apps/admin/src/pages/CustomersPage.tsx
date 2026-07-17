@@ -290,7 +290,7 @@ export default function CustomersPage(): React.ReactElement {
 
   return (
     <div className="flex min-h-full flex-col gap-6 p-6 lg:p-8">
-      <PageHeader title="Customers" description="Manage customer accounts, balances, subscriptions, and API keys.">
+      <PageHeader title="Customers" icon={<Users strokeWidth={1.75} />}>
         <Button size="sm" onClick={() => setCreateOpen(true)}>
           <Plus className="size-4" />
           Add Customer

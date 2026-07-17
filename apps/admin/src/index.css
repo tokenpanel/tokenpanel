@@ -2,7 +2,6 @@
 @import "tw-animate-css";
 
 @custom-variant dark (&:is(.dark *));
-@custom-variant light (&:is(.light *));
 
 @theme inline {
   --color-background: var(--background);
@@ -45,10 +44,10 @@
   --font-sans: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
 
-  --shadow-xs: 0 1px 2px 0 rgb(0 0 0 / 0.04);
-  --shadow-sm: 0 1px 3px 0 rgb(0 0 0 / 0.06), 0 1px 2px -1px rgb(0 0 0 / 0.04);
-  --shadow-md: 0 4px 12px -2px rgb(0 0 0 / 0.08), 0 2px 6px -2px rgb(0 0 0 / 0.04);
-  --shadow-lg: 0 12px 32px -4px rgb(0 0 0 / 0.1), 0 4px 12px -2px rgb(0 0 0 / 0.05);
+  --shadow-xs: var(--tp-shadow-xs);
+  --shadow-sm: var(--tp-shadow-sm);
+  --shadow-md: var(--tp-shadow-md);
+  --shadow-lg: var(--tp-shadow-lg);
 
   --animate-shimmer: shimmer 2s linear infinite;
   --animate-fade-in-up: fade-in-up 0.4s cubic-bezier(0.16, 1, 0.3, 1) both;
@@ -76,105 +75,74 @@
   100% { opacity: 1; transform: scale(1); }
 }
 
-/* Dark theme is the DEFAULT — applied to :root.
-   Light theme opt-in via `.light` class on <html>. */
+/*
+  Color system — TokenPanel (dark only)
+  -------------------------------------
+  Neutral charcoal shell. Primary CTAs are solid light (not brand blue)
+  so the UI stays monochrome and calm.
+*/
 :root {
   --radius: 0.625rem;
 
-  /* Surfaces — refined zinc neutrals */
-  --background: oklch(0.141 0.005 285);
-  --foreground: oklch(0.985 0 0);
+  /* Neutral canvas */
+  --background: oklch(0.145 0.004 260);
+  --foreground: oklch(0.96 0.002 260);
 
-  --card: oklch(0.179 0.006 285);
-  --card-foreground: oklch(0.985 0 0);
+  --card: oklch(0.185 0.004 260);
+  --card-foreground: oklch(0.96 0.002 260);
 
-  --popover: oklch(0.179 0.006 285);
-  --popover-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.2 0.004 260);
+  --popover-foreground: oklch(0.96 0.002 260);
 
-  /* Accent — indigo, tuned brighter for dark bg */
-  --primary: oklch(0.62 0.19 277);
-  --primary-foreground: oklch(0.985 0.005 277);
+  /* Primary — solid light fill + dark label (buttons, checked states) */
+  --primary: oklch(0.93 0.002 260);
+  --primary-foreground: oklch(0.18 0.004 260);
 
-  --secondary: oklch(0.27 0.006 286);
-  --secondary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.25 0.004 260);
+  --secondary-foreground: oklch(0.94 0.002 260);
 
-  --muted: oklch(0.21 0.006 285);
-  --muted-foreground: oklch(0.646 0.012 286);
+  --muted: oklch(0.225 0.004 260);
+  --muted-foreground: oklch(0.74 0.008 260);
 
-  --accent: oklch(0.27 0.006 286);
-  --accent-foreground: oklch(0.985 0 0);
+  --accent: oklch(0.255 0.004 260);
+  --accent-foreground: oklch(0.96 0.002 260);
 
-  --destructive: oklch(0.704 0.191 22);
-  --destructive-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.68 0.14 22);
+  --destructive-foreground: oklch(0.99 0.002 22);
 
-  --success: oklch(0.627 0.17 149);
-  --success-foreground: oklch(0.985 0 0);
+  --success: oklch(0.7 0.11 155);
+  --success-foreground: oklch(0.99 0.002 155);
 
-  --warning: oklch(0.741 0.16 65);
-  --warning-foreground: oklch(0.21 0.006 285);
+  --warning: oklch(0.76 0.1 75);
+  --warning-foreground: oklch(0.22 0.02 75);
 
-  --border: oklch(1 0 0 / 0.08);
-  --input: oklch(1 0 0 / 0.1);
-  --ring: oklch(0.62 0.19 277);
+  --border: oklch(1 0 0 / 0.09);
+  --input: oklch(1 0 0 / 0.12);
+  --ring: oklch(0.72 0.008 260);
 
-  /* Sidebar — slightly darker than main for depth */
-  --sidebar: oklch(0.115 0.005 285);
-  --sidebar-foreground: oklch(0.885 0.005 286);
-  --sidebar-primary: oklch(0.62 0.19 277);
-  --sidebar-primary-foreground: oklch(0.985 0.005 277);
-  --sidebar-accent: oklch(0.21 0.006 285);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 0.06);
-  --sidebar-ring: oklch(0.62 0.19 277);
+  /* Sidebar — same neutral family, slightly deeper */
+  --sidebar: oklch(0.12 0.004 260);
+  --sidebar-foreground: oklch(0.94 0.002 260);
+  --sidebar-primary: oklch(0.93 0.002 260);
+  --sidebar-primary-foreground: oklch(0.18 0.004 260);
+  --sidebar-accent: oklch(0.21 0.004 260);
+  --sidebar-accent-foreground: oklch(0.98 0.002 260);
+  --sidebar-border: oklch(1 0 0 / 0.08);
+  --sidebar-ring: oklch(0.72 0.008 260);
+
+  /* Neutral black shadows (no blue tint) */
+  --tp-shadow-xs: 0 1px 2px 0 rgb(0 0 0 / 0.28);
+  --tp-shadow-sm:
+    0 1px 3px 0 rgb(0 0 0 / 0.32),
+    0 1px 2px -1px rgb(0 0 0 / 0.24);
+  --tp-shadow-md:
+    0 4px 12px -2px rgb(0 0 0 / 0.36),
+    0 2px 6px -2px rgb(0 0 0 / 0.22);
+  --tp-shadow-lg:
+    0 12px 32px -4px rgb(0 0 0 / 0.42),
+    0 4px 12px -2px rgb(0 0 0 / 0.26);
 
   color-scheme: dark;
-}
-
-.light {
-  --background: oklch(0.99 0.001 285);
-  --foreground: oklch(0.21 0.006 285);
-
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.21 0.006 285);
-
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.21 0.006 285);
-
-  --primary: oklch(0.546 0.215 277);
-  --primary-foreground: oklch(0.985 0.005 277);
-
-  --secondary: oklch(0.96 0.005 286);
-  --secondary-foreground: oklch(0.21 0.006 285);
-
-  --muted: oklch(0.967 0.003 286);
-  --muted-foreground: oklch(0.553 0.013 286);
-
-  --accent: oklch(0.96 0.005 286);
-  --accent-foreground: oklch(0.21 0.006 285);
-
-  --destructive: oklch(0.577 0.245 27);
-  --destructive-foreground: oklch(0.985 0 0);
-
-  --success: oklch(0.518 0.16 149);
-  --success-foreground: oklch(0.985 0 0);
-
-  --warning: oklch(0.685 0.16 65);
-  --warning-foreground: oklch(0.985 0 0);
-
-  --border: oklch(0.92 0.004 286);
-  --input: oklch(0.92 0.004 286);
-  --ring: oklch(0.546 0.215 277);
-
-  --sidebar: oklch(0.985 0.001 285);
-  --sidebar-foreground: oklch(0.21 0.006 285);
-  --sidebar-primary: oklch(0.546 0.215 277);
-  --sidebar-primary-foreground: oklch(0.985 0.005 277);
-  --sidebar-accent: oklch(0.96 0.005 286);
-  --sidebar-accent-foreground: oklch(0.21 0.006 285);
-  --sidebar-border: oklch(0.92 0.004 286);
-  --sidebar-ring: oklch(0.546 0.215 277);
-
-  color-scheme: light;
 }
 
 @layer base {
@@ -194,12 +162,17 @@
     font-family: var(--font-sans);
     color: var(--foreground);
     background: var(--background);
-    font-size: 14px;
-    line-height: 1.5;
+    font-size: 15px;
+    line-height: 1.55;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     text-rendering: optimizeLegibility;
     font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+
+  ::selection {
+    background: oklch(1 0 0 / 0.14);
+    color: var(--foreground);
   }
 
   h1, h2, h3, h4, h5, h6 {
@@ -213,10 +186,13 @@
   ul { margin: 0; padding: 0; list-style: none; }
 
   a {
-    color: var(--primary);
+    color: var(--foreground);
     text-decoration: none;
   }
-  a:hover { text-decoration: underline; }
+  a:hover {
+    text-decoration: underline;
+    color: oklch(0.88 0.002 260);
+  }
 
   /* Refined scrollbar */
   ::-webkit-scrollbar { width: 10px; height: 10px; }
@@ -255,8 +231,8 @@
   }
 
   .glass {
-    background: color-mix(in oklch, var(--background) 80%, transparent);
-    backdrop-filter: blur(12px) saturate(140%);
+    background: color-mix(in oklch, var(--background) 86%, transparent);
+    backdrop-filter: blur(10px) saturate(110%);
   }
 
   /* Range slider thumb — cross-browser. The track is painted via inline

@@ -1,114 +1,48 @@
-import { z } from "zod";
-import {
-  objectId,
-  objectIdFromString,
-  money,
-  customerBalance,
-  moneyMinor,
-  currencyCode,
-  timestampFields,
-} from "./common.ts";
-
 /**
- * Customer = a client of an Organization.
- * Has a prepaid balance and may hold subscriptions.
+ * Customer + balance-adjustment schemas — Effect Schema production path (§11).
  */
-export const customerDoc = z.object({
-  _id: objectId,
-  organizationId: objectId,
-  externalId: z.string().max(128).nullish(),
-  name: z.string().min(1).max(160),
-  email: z.string().email().max(254).nullish(),
-  /** Prepaid balance in minor units + currency (+ optional canary reservedMinor). */
-  balance: customerBalance.default({
-    amountMinor: 0,
-    reservedMinor: 0,
-    currency: "USD",
-  }),
-  status: z.enum(["active", "suspended", "closed"]).default("active"),
-  metadata: z.record(z.string(), z.unknown()).default(() => ({})),
-  ...timestampFields,
-});
+import {
+  CUSTOMER_STATUSES,
+  BALANCE_ADJUSTMENT_REASONS,
+} from "@tokenpanel/contracts";
+import {
+  CustomerDoc as CustomerDocSchema,
+  CustomerCreateInput as CustomerCreateInputSchema,
+  CustomerUpdateInput as CustomerUpdateInputSchema,
+  BalanceAdjustmentDoc as BalanceAdjustmentDocSchema,
+  BalanceAdjustmentCreateInput as BalanceAdjustmentCreateInputSchema,
+  CustomerStatus,
+  BalanceAdjustmentReason,
+  MoneyMinor,
+} from "./effect/customer.ts";
+import { withParseApi } from "./parse.ts";
+import type { MutableDeep } from "./mutable.ts";
 
-export const customerCreateInput = z.object({
-  externalId: z.string().max(128).optional(),
-  name: z.string().min(1).max(160),
-  // Email is canonicalized to lowercase at parse time so storage and every
-  // attribution lookup (v1-chat-context, management lookup endpoint) agree on
-  // a single casing. Without this, a request-time `.toLowerCase()` lookup
-  // would miss an uppercase stored email, and case variants of one address
-  // could create duplicate customers within an org (the (orgId, email) index
-  // is unique after the post migration). Existing mixed-case rows are
-  // normalized by migration 2026-07-07T02-00-00Z__lowercase-customer-emails.
-  email: z
-    .string()
-    .email()
-    .max(254)
-    .optional()
-    .transform((v) => (typeof v === "string" ? v.toLowerCase() : v)),
-  startingBalance: money.optional(),
-  metadata: z.record(z.string(), z.unknown()).optional(),
-});
+export { CUSTOMER_STATUSES, BALANCE_ADJUSTMENT_REASONS };
 
-export const customerUpdateInput = z.object({
-  externalId: z.string().max(128).nullish().optional(),
-  name: z.string().min(1).max(160).optional(),
-  email: z
-    .string()
-    .email()
-    .max(254)
-    .nullish()
-    .optional()
-    .transform((v) => (typeof v === "string" ? v.toLowerCase() : v)),
-  status: z.enum(["active", "suspended", "closed"]).optional(),
-  metadata: z.record(z.string(), z.unknown()).optional(),
-});
+export const customerDoc = withParseApi(CustomerDocSchema);
+export const customerCreateInput = withParseApi(CustomerCreateInputSchema);
+export const customerUpdateInput = withParseApi(CustomerUpdateInputSchema);
+export const balanceAdjustmentDoc = withParseApi(BalanceAdjustmentDocSchema);
+export const balanceAdjustmentCreateInput = withParseApi(
+  BalanceAdjustmentCreateInputSchema,
+);
+export const customerStatus = withParseApi(CustomerStatus);
+export const balanceAdjustmentReason = withParseApi(BalanceAdjustmentReason);
+export const _balanceMoneyMinor = withParseApi(MoneyMinor);
 
-/** Balance top-up / adjustment ledger entry. Append-only. */
-export const balanceAdjustmentDoc = z.object({
-  _id: objectId,
-  organizationId: objectId,
-  customerId: objectId,
-  /** Positive for top-up, negative for debit. */
-  amountMinor: z.number().int(),
-  currency: currencyCode,
-  reason: z.enum([
-    "topup",
-    "usage_debit",
-    "refund",
-    "adjustment",
-    "overage",
-  ]),
-  /** Optional reference to the usage record that caused a debit. */
-  usageRecordId: objectId.nullish(),
-  note: z.string().max(280).nullish(),
-  occurredAt: z.instanceof(Date),
-  ...timestampFields,
-});
-
-export const balanceAdjustmentCreateInput = z.object({
-  customerId: objectIdFromString,
-  amountMinor: z.number().int(),
-  currency: currencyCode,
-  reason: z.enum([
-    "topup",
-    "usage_debit",
-    "refund",
-    "adjustment",
-    "overage",
-  ]),
-  usageRecordId: objectIdFromString.optional(),
-  note: z.string().max(280).optional(),
-  occurredAt: z.coerce.date().optional(),
-});
-
-export type CustomerDoc = z.infer<typeof customerDoc>;
-export type CustomerCreateInput = z.infer<typeof customerCreateInput>;
-export type CustomerUpdateInput = z.infer<typeof customerUpdateInput>;
-export type BalanceAdjustmentDoc = z.infer<typeof balanceAdjustmentDoc>;
-export type BalanceAdjustmentCreateInput = z.infer<
-  typeof balanceAdjustmentCreateInput
+export type CustomerDoc = MutableDeep<
+  import("effect").Schema.Schema.Type<typeof CustomerDocSchema>
 >;
-
-/** Re-export moneyMinor for convenience in consumers. */
-export { moneyMinor as _balanceMoneyMinor };
+export type CustomerCreateInput = MutableDeep<
+  import("effect").Schema.Schema.Type<typeof CustomerCreateInputSchema>
+>;
+export type CustomerUpdateInput = MutableDeep<
+  import("effect").Schema.Schema.Type<typeof CustomerUpdateInputSchema>
+>;
+export type BalanceAdjustmentDoc = MutableDeep<
+  import("effect").Schema.Schema.Type<typeof BalanceAdjustmentDocSchema>
+>;
+export type BalanceAdjustmentCreateInput = MutableDeep<
+  import("effect").Schema.Schema.Type<typeof BalanceAdjustmentCreateInputSchema>
+>;

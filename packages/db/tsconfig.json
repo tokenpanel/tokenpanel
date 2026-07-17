@@ -7,6 +7,7 @@
     "declarationMap": true,
     "paths": {
       "@tokenpanel/contracts": ["../contracts/src/index.ts"],
+      "@tokenpanel/contracts/effect": ["../contracts/src/effect/index.ts"],
       "@tokenpanel/contracts/*": ["../contracts/src/*"]
     }
   },

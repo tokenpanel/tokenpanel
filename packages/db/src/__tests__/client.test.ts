@@ -1,19 +1,26 @@
-import { test, expect, afterEach } from "bun:test";
+import { test, expect, beforeEach, afterEach } from "bun:test";
 import {
   getMongoUri,
   getDbName,
   configureDb,
   clearDbConfig,
+  closeDb,
   getMongoConnectionConfig,
   isDbConfigured,
 } from "../client.ts";
 
-afterEach(() => {
-  try {
-    clearDbConfig();
-  } catch {
-    /* connected — ignore in unit tests that only touch config */
-  }
+/** Integration suites may leave a live client + configureDb config on the module. */
+async function resetDbConfigState(): Promise<void> {
+  await closeDb().catch(() => undefined);
+  clearDbConfig();
+}
+
+beforeEach(async () => {
+  await resetDbConfigState();
+});
+
+afterEach(async () => {
+  await resetDbConfigState();
 });
 
 test("getMongoUri throws when neither configureDb nor MONGODB_URI", () => {

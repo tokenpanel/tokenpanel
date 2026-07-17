@@ -1,4 +1,5 @@
 import { test, expect } from "bun:test";
+import { Effect } from "effect";
 import {
   createAnthropicCompatibleAdapter,
   headers,
@@ -195,7 +196,7 @@ test("adapter.listModels: mocks fetch, parses data, uses display_name fallback t
   )) as unknown as typeof fetch;
   try {
     const adapter = createAnthropicCompatibleAdapter();
-    const models = await adapter.listModels(ctx());
+    const models = await Effect.runPromise(adapter.listModels(ctx()));
     expect(models).toHaveLength(2);
     expect(models[0]?.displayName).toBe("Claude 3");
     expect(models[1]?.displayName).toBe("claude-4");
@@ -209,7 +210,9 @@ test("adapter.listModels: throws on non-2xx", async () => {
   const origFetch = globalThis.fetch;
   globalThis.fetch = (async () => new Response("err", { status: 500 })) as unknown as typeof fetch;
   try {
-    await expect(createAnthropicCompatibleAdapter().listModels(ctx())).rejects.toThrow(/500/);
+    await expect(
+      Effect.runPromise(createAnthropicCompatibleAdapter().listModels(ctx())),
+    ).rejects.toThrow(/500/);
   } finally {
     globalThis.fetch = origFetch;
   }
@@ -236,11 +239,16 @@ test("adapter.chatComplete: maps response with message + usage + stop_reason", a
   }) as unknown as typeof fetch;
   try {
     const adapter = createAnthropicCompatibleAdapter();
-    const res = await adapter.chatComplete(ctx(), {
-      model: "claude-3",
-      messages: [{ role: "user", content: "hi" }, { role: "system", content: "sys" }],
-      maxTokens: 1024,
-    });
+    const res = await Effect.runPromise(
+      adapter.chatComplete(ctx(), {
+        model: "claude-3",
+        messages: [
+          { role: "user", content: "hi" },
+          { role: "system", content: "sys" },
+        ],
+        maxTokens: 1024,
+      }),
+    );
     expect(res.id).toBe("msg_1");
     expect(res.choices).toHaveLength(1);
     expect(res.choices[0]?.message.content).toBe("hello");

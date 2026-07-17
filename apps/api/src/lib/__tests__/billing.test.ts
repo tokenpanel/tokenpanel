@@ -21,7 +21,7 @@ function entry(over: Partial<ModelEntryDoc> = {}): ModelEntryDoc {
     priority: 0,
     active: true,
     ...over,
-  };
+  } as ModelEntryDoc;
 }
 
 function model(over: Partial<ModelDoc> = {}): ModelDoc {
@@ -52,7 +52,7 @@ function model(over: Partial<ModelDoc> = {}): ModelDoc {
     createdAt: new Date(),
     updatedAt: new Date(),
     ...over,
-  };
+  } as unknown as ModelDoc;
 }
 
 test("applyTokenSchedule: non-reasoning output + reasoning tier", () => {
@@ -322,21 +322,23 @@ test("checkModelAccess: included alias passes", async () => {
   await expect(checkModelAccess(["gpt", "claude"], "gpt")).resolves.toBeUndefined();
 });
 
-test("checkModelAccess: excluded alias throws BillingError 403", async () => {
+test("checkModelAccess: excluded alias throws AppError model_not_allowed", async () => {
   await expect(checkModelAccess(["claude"], "gpt")).rejects.toMatchObject({
-    status: 403,
+    _tag: "AuthorizationError",
     code: "model_not_allowed",
   });
-  await expect(checkModelAccess(["claude"], "gpt")).rejects.toBeInstanceOf(BillingError);
 });
 
-test("BillingError carries status/code/message/extra", () => {
+test("BillingError compat maps to AppError tags", () => {
   const e = new BillingError(429, "rate_limited", "too many", { retryAfterSeconds: 60 });
   expect(e.status).toBe(429);
   expect(e.code).toBe("rate_limited");
   expect(e.message).toBe("too many");
   expect(e.extra).toEqual({ retryAfterSeconds: 60 });
   expect(e).toBeInstanceOf(Error);
+  const app = e.toAppError();
+  expect(app._tag).toBe("RateLimitExceededError");
+  expect(app.code).toBe("rate_limited");
 });
 
 // estimatePromptTokens drives the conservative pre-call balance/limit check

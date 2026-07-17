@@ -300,7 +300,7 @@ test("modelUpdateInput: metadata optional (omit keeps map); empty object clears"
   expect(modelUpdateInput.safeParse({ metadata: { a: 1 } }).success).toBe(false);
 });
 
-test("modelMetadataStored: preserves own __proto__ key (unlike z.record)", () => {
+test("modelMetadataStored: preserves own __proto__ key (own-property map)", () => {
   const raw = createStringRecord();
   setStringRecordEntry(raw, "__proto__", "legacy");
   setStringRecordEntry(raw, "tier", "gold");

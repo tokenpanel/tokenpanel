@@ -1,27 +1,32 @@
 import { hashToken, randomToken, isDuplicateKeyError } from "../lib/crypto.ts";
+import {
+  API_KEY_LOOKUP_PREFIX_CHARS,
+  API_KEY_PREFIX_COLLISION_ATTEMPTS_COUNT,
+  API_KEY_SECRET_BYTES,
+  CUSTOMER_KEY_PREFIX_LITERAL,
+  MANAGEMENT_KEY_PREFIX_LITERAL,
+} from "../config/security-policy.ts";
 
 /**
  * Single owner for customer and management API-key material construction.
+ * Format constants live in config/security-policy.ts (crypto-compatible).
  * Routes retain authorization, scopes, labels, collection writes, and response
  * envelopes. Format and hashing stay compatible with existing stored keys.
  */
 
-/** Customer public API keys (`tp_live_…`). */
-export const CUSTOMER_KEY_PREFIX_LITERAL = "tp_live_";
-/** Management API keys (`tp_mgmt_…`). */
-export const MANAGEMENT_KEY_PREFIX_LITERAL = "tp_mgmt_";
-
-/**
- * Lookup/display prefix length shared with public-auth dispatcher.
- * 8 literal + 8 random hex ≈ 4.3B prefix combos.
- */
-export const API_KEY_LOOKUP_PREFIX_CHARS = 16;
+export {
+  CUSTOMER_KEY_PREFIX_LITERAL,
+  MANAGEMENT_KEY_PREFIX_LITERAL,
+  API_KEY_LOOKUP_PREFIX_CHARS,
+  API_KEY_PREFIX_COLLISION_ATTEMPTS_COUNT,
+} from "../config/security-policy.ts";
 
 /** Random secret material after the literal prefix (hex chars). */
-export const API_KEY_SECRET_HEX_CHARS = 48; // 24 bytes
+export { API_KEY_SECRET_HEX_CHARS } from "../config/security-policy.ts";
 
-/** Bounded retries when unique prefix index collides. */
-export const API_KEY_PREFIX_COLLISION_ATTEMPTS = 5;
+/** Historical alias for collision attempts. */
+export const API_KEY_PREFIX_COLLISION_ATTEMPTS =
+  API_KEY_PREFIX_COLLISION_ATTEMPTS_COUNT;
 
 export type IssuedApiKey = Readonly<{
   /** Full secret — return once to the operator; never store. */
@@ -38,7 +43,7 @@ export type IssueApiKeyResult =
 
 function buildCandidate(literal: string): IssuedApiKey {
   // literal (8) + 8 hex = 16-char prefix; rest is secret entropy.
-  const randomHex = randomToken(24); // 48 hex chars
+  const randomHex = randomToken(API_KEY_SECRET_BYTES);
   const fullKey = `${literal}${randomHex}`;
   const prefix = fullKey.slice(0, API_KEY_LOOKUP_PREFIX_CHARS);
   const keyHash = hashToken(fullKey);
@@ -55,7 +60,7 @@ export async function issueApiKeyWithRetry(params: {
   insert: (issued: IssuedApiKey) => Promise<void>;
   maxAttempts?: number;
 }): Promise<IssueApiKeyResult> {
-  const max = params.maxAttempts ?? API_KEY_PREFIX_COLLISION_ATTEMPTS;
+  const max = params.maxAttempts ?? API_KEY_PREFIX_COLLISION_ATTEMPTS_COUNT;
   let lastWasDuplicate = false;
   for (let attempt = 0; attempt < max; attempt++) {
     const issued = buildCandidate(params.literal);

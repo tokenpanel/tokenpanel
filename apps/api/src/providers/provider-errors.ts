@@ -3,6 +3,8 @@
  * Fallback is allowed only for explicit pre-commit eligible failures.
  */
 
+import { Data } from "effect";
+
 export type ProviderErrorCategory =
   | "connection"
   | "timeout_pre_send"
@@ -25,43 +27,58 @@ export type ProviderErrorPhase =
   | "stream"
   | "parse";
 
-export class ProviderError extends Error {
+export type ProviderErrorParams = {
+  readonly message: string;
   readonly category: ProviderErrorCategory;
   readonly phase: ProviderErrorPhase;
-  readonly httpStatus?: number;
-  readonly providerRequestId?: string;
+  readonly httpStatus?: number | undefined;
+  readonly providerRequestId?: string | undefined;
+  readonly retryable?: boolean | undefined;
+  readonly fallbackEligible?: boolean | undefined;
+  readonly maybeAcceptedUpstream?: boolean | undefined;
+  readonly streamCommitted?: boolean | undefined;
+  readonly diagnostic?: string | undefined;
+};
+
+/**
+ * Adapter-layer provider failure (Effect-yieldable).
+ * Construct via {@link makeProviderError} so optional flags get defaults.
+ * `instanceof ProviderError` works on the value itself (not FiberFailure wrappers).
+ */
+export class ProviderError extends Data.TaggedError("ProviderError")<{
+  readonly message: string;
+  readonly category: ProviderErrorCategory;
+  readonly phase: ProviderErrorPhase;
+  readonly httpStatus?: number | undefined;
+  readonly providerRequestId?: string | undefined;
   readonly retryable: boolean;
   readonly fallbackEligible: boolean;
-  /** True if the request may have been accepted upstream. */
   readonly maybeAcceptedUpstream: boolean;
-  /** True once any client-visible stream byte/delta was emitted. */
   readonly streamCommitted: boolean;
-  readonly diagnostic?: string;
+  readonly diagnostic?: string | undefined;
+}> {}
 
-  constructor(params: {
-    message: string;
-    category: ProviderErrorCategory;
-    phase: ProviderErrorPhase;
-    httpStatus?: number;
-    providerRequestId?: string;
-    retryable?: boolean;
-    fallbackEligible?: boolean;
-    maybeAcceptedUpstream?: boolean;
-    streamCommitted?: boolean;
-    diagnostic?: string;
-  }) {
-    super(params.message);
-    this.name = "ProviderError";
-    this.category = params.category;
-    this.phase = params.phase;
-    this.httpStatus = params.httpStatus;
-    this.providerRequestId = params.providerRequestId;
-    this.retryable = params.retryable ?? false;
-    this.fallbackEligible = params.fallbackEligible ?? false;
-    this.maybeAcceptedUpstream = params.maybeAcceptedUpstream ?? false;
-    this.streamCommitted = params.streamCommitted ?? false;
-    this.diagnostic = params.diagnostic?.slice(0, 500);
-  }
+/**
+ * Build a ProviderError with legacy optional defaults
+ * (retryable/fallbackEligible/maybeAcceptedUpstream/streamCommitted → false).
+ */
+export function makeProviderError(params: ProviderErrorParams): ProviderError {
+  return new ProviderError({
+    message: params.message,
+    category: params.category,
+    phase: params.phase,
+    retryable: params.retryable ?? false,
+    fallbackEligible: params.fallbackEligible ?? false,
+    maybeAcceptedUpstream: params.maybeAcceptedUpstream ?? false,
+    streamCommitted: params.streamCommitted ?? false,
+    ...(params.httpStatus !== undefined ? { httpStatus: params.httpStatus } : {}),
+    ...(params.providerRequestId !== undefined
+      ? { providerRequestId: params.providerRequestId }
+      : {}),
+    ...(params.diagnostic !== undefined
+      ? { diagnostic: params.diagnostic.slice(0, 500) }
+      : {}),
+  });
 }
 
 /** Classify an HTTP status for fallback policy. */
@@ -137,7 +154,7 @@ export function providerHttpError(
   label = "upstream",
 ): ProviderError {
   const c = classifyHttpStatus(status);
-  return new ProviderError({
+  return makeProviderError({
     // Never put upstream body in `message` — it flows to public API clients via
     // BillingError / route error envelopes.
     message: publicProviderErrorMessage(label, status),

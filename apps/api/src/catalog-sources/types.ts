@@ -15,11 +15,11 @@ export type FetchedModelStatus = "alpha" | "beta" | "deprecated" | "ga";
 export type FetchedModelCost = {
   inputMinorPerMillion: number;
   outputMinorPerMillion: number;
-  reasoningMinorPerMillion?: number;
-  cacheReadMinorPerMillion?: number;
-  cacheWriteMinorPerMillion?: number;
-  inputAudioMinorPerMillion?: number;
-  outputAudioMinorPerMillion?: number;
+  reasoningMinorPerMillion?: number | undefined;
+  cacheReadMinorPerMillion?: number | undefined;
+  cacheWriteMinorPerMillion?: number | undefined;
+  inputAudioMinorPerMillion?: number | undefined;
+  outputAudioMinorPerMillion?: number | undefined;
 };
 
 export type FetchedModel = {
@@ -30,18 +30,18 @@ export type FetchedModel = {
   /** Human-readable name, e.g. "GPT-5". */
   displayName: string;
   /** Sub-provider/lab that serves this model on the source (models.dev has many). */
-  subProvider?: string;
-  reasoning?: boolean;
-  toolCall?: boolean;
-  structuredOutput?: boolean;
-  temperature?: boolean;
-  attachment?: boolean;
+  subProvider?: string | undefined;
+  reasoning?: boolean | undefined;
+  toolCall?: boolean | undefined;
+  structuredOutput?: boolean | undefined;
+  temperature?: boolean | undefined;
+  attachment?: boolean | undefined;
   limits: { context: number; input?: number; output?: number };
   modalities: { input: string[]; output: string[] };
-  status?: FetchedModelStatus;
-  cost?: FetchedModelCost;
+  status?: FetchedModelStatus | undefined;
+  cost?: FetchedModelCost | undefined;
   /** Original payload for debugging/advanced mapping. */
-  raw?: Record<string, unknown>;
+  raw?: Record<string, unknown> | undefined;
 };
 
 export type CatalogSource = {

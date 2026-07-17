@@ -1,4 +1,5 @@
 import { test, expect } from "bun:test";
+import { Effect } from "effect";
 import {
   createOpenAICompatibleAdapter,
   authHeaders,
@@ -224,7 +225,7 @@ test("adapter.listModels: mocks fetch, parses data array, skips entries missing 
   }) as unknown as typeof fetch;
   try {
     const adapter = createOpenAICompatibleAdapter();
-    const models = await adapter.listModels(ctx());
+    const models = await Effect.runPromise(adapter.listModels(ctx()));
     expect(models).toHaveLength(2);
     expect(models[0]?.upstreamModelId).toBe("gpt-4o");
     expect(models[0]?.limits.context).toBe(128000);
@@ -241,7 +242,9 @@ test("adapter.listModels: throws on non-2xx", async () => {
   globalThis.fetch = (async () => new Response("upstream error", { status: 500 })) as unknown as typeof fetch;
   try {
     const adapter = createOpenAICompatibleAdapter();
-    await expect(adapter.listModels(ctx())).rejects.toThrow(/500/);
+    await expect(Effect.runPromise(adapter.listModels(ctx()))).rejects.toThrow(
+      /500/,
+    );
   } finally {
     globalThis.fetch = origFetch;
   }
@@ -266,7 +269,12 @@ test("adapter.chatComplete: maps response, parses usage, returns choices", async
   }) as unknown as typeof fetch;
   try {
     const adapter = createOpenAICompatibleAdapter();
-    const res = await adapter.chatComplete(ctx(), { model: "gpt-4o", messages: [{ role: "user", content: "hi" }] });
+    const res = await Effect.runPromise(
+      adapter.chatComplete(ctx(), {
+        model: "gpt-4o",
+        messages: [{ role: "user", content: "hi" }],
+      }),
+    );
     expect(res.id).toBe("chatcmpl-1");
     expect(res.choices).toHaveLength(1);
     expect(res.choices[0]?.message.content).toBe("hello");
@@ -282,7 +290,12 @@ test("adapter.chatComplete: empty choices → default empty assistant choice", a
   globalThis.fetch = (async () => new Response(JSON.stringify({ id: "x", model: "x", choices: [] }), { status: 200, headers: { "content-type": "application/json" } })) as unknown as typeof fetch;
   try {
     const adapter = createOpenAICompatibleAdapter();
-    const res = await adapter.chatComplete(ctx(), { model: "x", messages: [{ role: "user", content: "hi" }] });
+    const res = await Effect.runPromise(
+      adapter.chatComplete(ctx(), {
+        model: "x",
+        messages: [{ role: "user", content: "hi" }],
+      }),
+    );
     expect(res.choices).toHaveLength(1);
     expect(res.choices[0]?.message.content).toBe("");
     expect(res.choices[0]?.finishReason).toBe("stop");
@@ -296,7 +309,11 @@ test("adapter.chatComplete: throws on non-2xx", async () => {
   globalThis.fetch = (async () => new Response("err", { status: 429 })) as unknown as typeof fetch;
   try {
     const adapter = createOpenAICompatibleAdapter();
-    await expect(adapter.chatComplete(ctx(), { model: "x", messages: [] })).rejects.toThrow(/429/);
+    await expect(
+      Effect.runPromise(
+        adapter.chatComplete(ctx(), { model: "x", messages: [] }),
+      ),
+    ).rejects.toThrow(/429/);
   } finally {
     globalThis.fetch = origFetch;
   }

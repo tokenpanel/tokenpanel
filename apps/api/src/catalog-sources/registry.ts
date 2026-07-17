@@ -4,20 +4,30 @@ import type {
   FetchedModel,
 } from "./types.ts";
 import { createModelsDevSource } from "./models-dev.ts";
+import { DEFAULT_OPERATIONAL_CONFIG } from "../config/runtime.ts";
+import {
+  getApiRuntimeConfig,
+  isApiRuntimeConfigSet,
+} from "../config/state.ts";
 
 /**
  * Catalog source registry. Mirrors the provider adapter registry pattern:
  * built-in sources auto-register on module load; future sources (or plugin
  * sources) register via `registerSource` and immediately appear in the API.
  *
- * Responses are cached in-memory with a TTL so repeated dialog opens don't
- * re-fetch a multi-megabyte catalog every time, while still staying fresh.
+ * Responses are cached in-memory with a TTL from runtime operational config
+ * (CATALOG_CACHE_TTL_MS / catalogCacheTtlMs).
  */
-
-const TTL_MS = 10 * 60 * 1000;
 
 const sources = new Map<string, CatalogSource>();
 const cache = new Map<string, { data: FetchedModel[]; at: number }>();
+
+function catalogCacheTtlMs(): number {
+  if (isApiRuntimeConfigSet()) {
+    return getApiRuntimeConfig().operational.catalogCacheTtlMs;
+  }
+  return DEFAULT_OPERATIONAL_CONFIG.catalogCacheTtlMs;
+}
 
 export function registerSource(source: CatalogSource): void {
   if (!source.id || source.id.length === 0) {
@@ -49,7 +59,8 @@ export async function listModels(id: string): Promise<FetchedModel[]> {
   const source = sources.get(id);
   if (!source) return [];
   const cached = cache.get(id);
-  if (cached && Date.now() - cached.at < TTL_MS) {
+  const ttlMs = catalogCacheTtlMs();
+  if (cached && Date.now() - cached.at < ttlMs) {
     return cached.data;
   }
   const data = await source.listModels();

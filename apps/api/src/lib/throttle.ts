@@ -8,7 +8,18 @@
  * acceptable for throttling; the constant-time hash comparison (crypto.ts) is
  * the durable protection against offline guessing. `now` is injectable so tests
  * can drive the clock deterministically without sleeping.
+ *
+ * Policy values: config/security-policy.ts.
  */
+import {
+  THROTTLE_API_KEY_MAX_ATTEMPTS_COUNT,
+  THROTTLE_INVITE_MAX_ATTEMPTS_COUNT,
+  THROTTLE_LOCKOUT_MS,
+  THROTTLE_LOGIN_MAX_ATTEMPTS_COUNT,
+  THROTTLE_MAX_STORE_SIZE_COUNT,
+  THROTTLE_WINDOW_MS,
+} from "../config/security-policy.ts";
+
 export type ThrottleCheckResult = {
   allowed: boolean;
   retryAfterSeconds: number;
@@ -36,7 +47,7 @@ export class FailureThrottle {
   constructor(opts: ThrottleOpts) {
     this.opts = opts;
     this.now = opts.now ?? Date.now;
-    this.maxStoreSize = opts.maxStoreSize ?? 50_000;
+    this.maxStoreSize = opts.maxStoreSize ?? THROTTLE_MAX_STORE_SIZE_COUNT;
   }
 
   private purge(key: string, now: number): void {
@@ -98,26 +109,23 @@ export class FailureThrottle {
   }
 }
 
-const FIFTEEN_MIN = 15 * 60 * 1000;
-
 /** Throttle for admin login attempts, keyed by username. */
 export const loginThrottle = new FailureThrottle({
-  maxAttempts: 5,
-  windowMs: FIFTEEN_MIN,
-  lockoutMs: FIFTEEN_MIN,
+  maxAttempts: THROTTLE_LOGIN_MAX_ATTEMPTS_COUNT,
+  windowMs: THROTTLE_WINDOW_MS,
+  lockoutMs: THROTTLE_LOCKOUT_MS,
 });
 
 /** Throttle for invite-token acceptance, keyed by the invite token. */
 export const inviteThrottle = new FailureThrottle({
-  maxAttempts: 5,
-  windowMs: FIFTEEN_MIN,
-  lockoutMs: FIFTEEN_MIN,
+  maxAttempts: THROTTLE_INVITE_MAX_ATTEMPTS_COUNT,
+  windowMs: THROTTLE_WINDOW_MS,
+  lockoutMs: THROTTLE_LOCKOUT_MS,
 });
 
 /** Throttle for public API-key auth failures, keyed by key prefix. */
 export const apiKeyThrottle = new FailureThrottle({
-  maxAttempts: 10,
-  windowMs: FIFTEEN_MIN,
-  lockoutMs: FIFTEEN_MIN,
+  maxAttempts: THROTTLE_API_KEY_MAX_ATTEMPTS_COUNT,
+  windowMs: THROTTLE_WINDOW_MS,
+  lockoutMs: THROTTLE_LOCKOUT_MS,
 });
-

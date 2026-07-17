@@ -17,7 +17,7 @@ export type StreamPanelState = {
     promptTokens: number;
     completionTokens: number;
     totalTokens: number;
-    reasoningTokens?: number;
+    reasoningTokens?: number | undefined;
   } | null;
 };
 

@@ -2,6 +2,14 @@ import { createHash, createHmac, timingSafeEqual, randomBytes, createCipheriv, c
 import { ObjectId } from "mongodb";
 import type { UserRole } from "@tokenpanel/db";
 import {
+  ENCRYPT_AUTH_TAG_BYTES,
+  ENCRYPT_IV_BYTES,
+  ENCRYPT_KEY_BYTES,
+  JWT_ALG,
+  JWT_DEFAULT_TTL_SECONDS,
+  JWT_TYP,
+} from "../config/security-policy.ts";
+import {
   getApiRuntimeConfig,
   isApiRuntimeConfigSet,
 } from "../config/state.ts";
@@ -115,9 +123,9 @@ function sign(data: string, secret: string): string {
 export function signJwt(
   payload: Omit<JwtPayload, "exp"> & { exp?: number },
   secret: string,
-  ttlSeconds = 86400,
+  ttlSeconds = JWT_DEFAULT_TTL_SECONDS,
 ): string {
-  const header = { alg: "HS256", typ: "JWT" };
+  const header = { alg: JWT_ALG, typ: JWT_TYP };
   const now = Math.floor(Date.now() / 1000);
   const fullPayload: JwtPayload = {
     sub: payload.sub,
@@ -162,7 +170,7 @@ export function verifyJwt(token: string, secret: string): JwtPayload {
     typeof header !== "object" ||
     header === null ||
     !("alg" in header) ||
-    (header as { alg: unknown }).alg !== "HS256"
+    (header as { alg: unknown }).alg !== JWT_ALG
   ) {
     throw new JwtError("unsupported alg");
   }
@@ -193,8 +201,9 @@ export function verifyJwt(token: string, secret: string): JwtPayload {
  * Output format: base64(iv|ciphertext|tag).
  *
  * Secret source (in order):
- * 1. Explicit override via setJwtSecretForCrypto (tests)
+ * 1. Explicit override via setJwtSecretForCrypto (tests / boot pin)
  * 2. API runtime config set at boot (production path)
+ * No process.env fallback (task 14.1).
  * Never logs the secret. Exact bytes are preserved (no trim).
  */
 let jwtSecretOverride: string | null = null;
@@ -207,20 +216,20 @@ export function setJwtSecretForCrypto(secret: string | null): void {
 function resolveJwtSecret(): string {
   if (jwtSecretOverride !== null) return jwtSecretOverride;
   if (isApiRuntimeConfigSet()) return getApiRuntimeConfig().jwtSecret;
-  // Transitional fallback for unit tests that only set process.env.
-  const secret = process.env.JWT_SECRET;
-  if (!secret) throw new Error("JWT_SECRET not set");
-  return secret;
+  throw new Error("JWT_SECRET not set");
 }
 
 function encryptionKey(): Buffer {
   const secret = resolveJwtSecret();
-  return createHash("sha256").update(secret, "utf8").digest().subarray(0, 32) as Buffer;
+  return createHash("sha256")
+    .update(secret, "utf8")
+    .digest()
+    .subarray(0, ENCRYPT_KEY_BYTES) as Buffer;
 }
 
 export function encryptSecret(plaintext: string): string {
   const key = encryptionKey();
-  const iv = randomBytes(12);
+  const iv = randomBytes(ENCRYPT_IV_BYTES);
   const cipher = createCipheriv("aes-256-gcm", key, iv);
   const ct = Buffer.concat([cipher.update(plaintext, "utf8"), cipher.final()]);
   const tag = cipher.getAuthTag();
@@ -230,10 +239,15 @@ export function encryptSecret(plaintext: string): string {
 export function decryptSecret(encoded: string): string {
   const key = encryptionKey();
   const buf = Buffer.from(encoded, "base64");
-  if (buf.length < 12 + 16) throw new Error("ciphertext too short");
-  const iv = buf.subarray(0, 12) as Buffer;
-  const tag = buf.subarray(buf.length - 16) as Buffer;
-  const ct = buf.subarray(12, buf.length - 16) as Buffer;
+  if (buf.length < ENCRYPT_IV_BYTES + ENCRYPT_AUTH_TAG_BYTES) {
+    throw new Error("ciphertext too short");
+  }
+  const iv = buf.subarray(0, ENCRYPT_IV_BYTES) as Buffer;
+  const tag = buf.subarray(buf.length - ENCRYPT_AUTH_TAG_BYTES) as Buffer;
+  const ct = buf.subarray(
+    ENCRYPT_IV_BYTES,
+    buf.length - ENCRYPT_AUTH_TAG_BYTES,
+  ) as Buffer;
   const decipher = createDecipheriv("aes-256-gcm", key, iv);
   decipher.setAuthTag(tag);
   return Buffer.concat([decipher.update(ct), decipher.final()]).toString("utf8");

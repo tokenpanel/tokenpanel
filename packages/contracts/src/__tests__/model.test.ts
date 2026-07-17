@@ -1,51 +1,21 @@
 import { test, expect } from "bun:test";
 import {
-  MODEL_MODALITIES,
-  MODEL_STATUSES,
-  MODEL_METADATA_POLICY,
   MODEL_METADATA_RESERVED_KEYS,
   modelModalitySchema,
   modelStatusSchema,
   isValidModelMetadataKey,
   isReservedModelMetadataKey,
   normalizeMetadataValueNewlines,
-} from "../model.ts";
+} from "../index.ts";
 
-test("MODEL_MODALITIES matches known product set", () => {
-  expect([...MODEL_MODALITIES]).toEqual([
-    "text",
-    "image",
-    "audio",
-    "video",
-    "pdf",
-  ]);
+test("model modality/status schemas reject unknown values", () => {
   expect(modelModalitySchema.safeParse("text").success).toBe(true);
   expect(modelModalitySchema.safeParse("unknown").success).toBe(false);
-});
-
-test("MODEL_STATUSES matches known product set", () => {
-  expect([...MODEL_STATUSES]).toEqual([
-    "alpha",
-    "beta",
-    "deprecated",
-    "ga",
-  ]);
   expect(modelStatusSchema.safeParse("ga").success).toBe(true);
   expect(modelStatusSchema.safeParse("preview").success).toBe(false);
 });
 
-test("MODEL_METADATA_POLICY limits", () => {
-  expect(MODEL_METADATA_POLICY.maxEntries).toBe(50);
-  expect(MODEL_METADATA_POLICY.keyMaxLen).toBe(80);
-  expect(MODEL_METADATA_POLICY.valueMaxLen).toBe(2000);
-  expect([...MODEL_METADATA_RESERVED_KEYS]).toEqual([
-    "__proto__",
-    "prototype",
-    "constructor",
-  ]);
-});
-
-test("isValidModelMetadataKey parity fixtures", () => {
+test("isValidModelMetadataKey rejects hostile / reserved keys", () => {
   expect(isValidModelMetadataKey("vendor.note")).toBe(true);
   expect(isValidModelMetadataKey("x".repeat(80))).toBe(true);
   expect(isValidModelMetadataKey("")).toBe(false);

@@ -1,10 +1,16 @@
 /**
  * Domain API client for /admin/customers and related balance/subscription/usage/keys.
  */
+import type {
+  BalanceAdjustmentReason,
+  CustomerStatus,
+  PlanInterval,
+  SubscriptionStatus,
+} from "@tokenpanel/contracts";
 import { deleteJson, getJson, patchJson, postJson } from "./client.ts";
 import type { Money } from "./types.ts";
 
-export type CustomerStatus = "active" | "suspended" | "closed";
+export type { CustomerStatus };
 
 export type AdminCustomer = {
   _id: string;
@@ -28,7 +34,7 @@ export type BalanceAdjustment = {
   _id: string;
   amountMinor: number;
   currency: string;
-  reason: "topup" | "usage_debit" | "refund" | "adjustment" | "overage";
+  reason: BalanceAdjustmentReason;
   note?: string | null;
   occurredAt: string;
   createdAt: string;
@@ -37,7 +43,7 @@ export type BalanceAdjustment = {
 export type PlanSummary = {
   _id: string;
   name: string;
-  interval: "day" | "week" | "month" | "year";
+  interval: PlanInterval;
   intervalCount: number;
   price: Money;
   active: boolean;
@@ -46,7 +52,7 @@ export type PlanSummary = {
 export type Subscription = {
   _id: string;
   planId: string;
-  status: "active" | "canceled" | "expired" | "past_due";
+  status: SubscriptionStatus;
   periodStart: string;
   periodEnd: string;
 };

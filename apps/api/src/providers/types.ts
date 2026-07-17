@@ -1,55 +1,70 @@
+/**
+ * Provider adapter types.
+ * Optional fields use `?: T | undefined` so exactOptionalPropertyTypes allows
+ * explicit undefined from optional chaining / schema outputs without casts.
+ */
+
+import type { Effect } from "effect";
+import type { ProviderError } from "./provider-errors.ts";
+
 export type ContentPart = {
   type: "text" | "image_url" | "input_audio";
-  text?: string;
-  imageUrl?: { url: string };
-  inputData?: string;
+  text?: string | undefined;
+  imageUrl?: { url: string } | undefined;
+  inputData?: string | undefined;
 };
 
 export type ChatMessage = {
   role: "system" | "user" | "assistant" | "tool";
   content: string | ContentPart[];
-  toolCallId?: string;
-  toolCalls?: unknown[];
-  reasoning?: string;
+  toolCallId?: string | undefined;
+  toolCalls?: unknown[] | undefined;
+  reasoning?: string | undefined;
 };
 
 export type DiscoveredModel = {
   upstreamModelId: string;
   displayName: string;
-  reasoning?: boolean;
-  toolCall?: boolean;
-  structuredOutput?: boolean;
-  temperature?: boolean;
-  attachment?: boolean;
-  limits: { context: number; input?: number; output?: number };
-  modalities: { input: string[]; output: string[] };
-  status?: "alpha" | "beta" | "deprecated" | "ga";
-  cost?: {
-    inputMinorPerMillion: number;
-    outputMinorPerMillion: number;
-    reasoningMinorPerMillion?: number;
-    cacheReadMinorPerMillion?: number;
-    cacheWriteMinorPerMillion?: number;
-    inputAudioMinorPerMillion?: number;
-    outputAudioMinorPerMillion?: number;
+  reasoning?: boolean | undefined;
+  toolCall?: boolean | undefined;
+  structuredOutput?: boolean | undefined;
+  temperature?: boolean | undefined;
+  attachment?: boolean | undefined;
+  limits: {
+    context: number;
+    input?: number | undefined;
+    output?: number | undefined;
   };
-  raw?: Record<string, unknown>;
+  modalities: { input: string[]; output: string[] };
+  status?: "alpha" | "beta" | "deprecated" | "ga" | undefined;
+  cost?:
+    | {
+        inputMinorPerMillion: number;
+        outputMinorPerMillion: number;
+        reasoningMinorPerMillion?: number | undefined;
+        cacheReadMinorPerMillion?: number | undefined;
+        cacheWriteMinorPerMillion?: number | undefined;
+        inputAudioMinorPerMillion?: number | undefined;
+        outputAudioMinorPerMillion?: number | undefined;
+      }
+    | undefined;
+  raw?: Record<string, unknown> | undefined;
 };
 
 export type ChatRequest = {
   model: string;
   messages: ChatMessage[];
-  stream?: boolean;
-  temperature?: number;
-  maxTokens?: number;
-  topP?: number;
-  tools?: unknown[];
-  toolChoice?: unknown;
-  stop?: string[];
-  responseFormat?: unknown;
-  reasoning?: { effort?: "low" | "medium" | "high" } | boolean;
-  signal?: AbortSignal;
-  extra?: Record<string, unknown>;
+  stream?: boolean | undefined;
+  temperature?: number | undefined;
+  maxTokens?: number | undefined;
+  topP?: number | undefined;
+  tools?: unknown[] | undefined;
+  toolChoice?: unknown | undefined;
+  stop?: string[] | undefined;
+  responseFormat?: unknown | undefined;
+  reasoning?: { effort?: "low" | "medium" | "high" | undefined } | boolean | undefined;
+  signal?: AbortSignal | undefined;
+  extra?: Record<string, unknown> | undefined;
 };
 
 export type ChatResponse = {
@@ -63,50 +78,63 @@ export type ChatResponse = {
   usage: {
     promptTokens: number;
     completionTokens: number;
-    reasoningTokens?: number;
-    cacheReadTokens?: number;
-    cacheWriteTokens?: number;
+    reasoningTokens?: number | undefined;
+    cacheReadTokens?: number | undefined;
+    cacheWriteTokens?: number | undefined;
     totalTokens: number;
     /** Adapter-stamped cache billing mode; see CacheAccountingMode. */
-    cacheAccounting?: "subset" | "additive";
+    cacheAccounting?: "subset" | "additive" | undefined;
   };
   /** Explicit usage provenance; missing must not settle as free. */
-  usageStatus?: "reported" | "missing";
-  usageMissingReason?: string;
-  providerRequestId?: string;
+  usageStatus?: "reported" | "missing" | undefined;
+  usageMissingReason?: string | undefined;
+  providerRequestId?: string | undefined;
 };
 
 export type StreamChunk = {
   type: "delta" | "done" | "error";
-  delta?: {
-    content?: string;
-    toolCalls?: unknown[];
-    reasoning?: string;
-  };
-  finishReason?: string;
-  usage?: ChatResponse["usage"];
+  delta?:
+    | {
+        content?: string | undefined;
+        toolCalls?: unknown[] | undefined;
+        reasoning?: string | undefined;
+      }
+    | undefined;
+  finishReason?: string | undefined;
+  usage?: ChatResponse["usage"] | undefined;
   /**
    * True only when a protocol terminal event was observed
    * (OpenAI `[DONE]`, Anthropic `message_stop`). EOF without a terminal event
    * yields `done` with `streamComplete: false` so routes do not settle
    * partial/truncated usage as authoritative.
    */
-  streamComplete?: boolean;
-  error?: { code: string; message: string };
+  streamComplete?: boolean | undefined;
+  error?: { code: string; message: string } | undefined;
 };
 
 export type AdapterContext = {
   baseUrl: string;
   apiKey: string;
-  providerOrg?: string | null;
-  headers?: Record<string, string>;
-  signal?: AbortSignal;
+  providerOrg?: string | null | undefined;
+  headers?: Record<string, string> | undefined;
+  signal?: AbortSignal | undefined;
 };
 
+/**
+ * Provider SDK adapter.
+ * `listModels` / `chatComplete` return Effects (R=never); callers yield* or
+ * Effect.runPromise in tests. `streamChat` stays an AsyncGenerator — throws
+ * ProviderError on pre-stream / body-read failures.
+ */
 export type ProviderAdapter = {
   sdkType: string;
-  listModels(ctx: AdapterContext): Promise<DiscoveredModel[]>;
-  chatComplete(ctx: AdapterContext, req: ChatRequest): Promise<ChatResponse>;
+  listModels(
+    ctx: AdapterContext,
+  ): Effect.Effect<DiscoveredModel[], ProviderError>;
+  chatComplete(
+    ctx: AdapterContext,
+    req: ChatRequest,
+  ): Effect.Effect<ChatResponse, ProviderError>;
   streamChat(
     ctx: AdapterContext,
     req: ChatRequest,

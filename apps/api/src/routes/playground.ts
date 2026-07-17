@@ -1,26 +1,42 @@
 import { Hono } from "hono";
-import { z } from "zod";
-import { zValidator } from "@hono/zod-validator";
+import { Cause, Effect, Exit } from "effect";
 import { ObjectId } from "mongodb";
-import {
-  getDb,
-  type ModelDoc,
-  type ModelEntryDoc,
-  type ProviderDoc,
+import type {
+  CustomerDoc,
+  ModelDoc,
+  ModelEntryDoc,
+  ProviderDoc,
+  RateLimitRule,
 } from "@tokenpanel/db";
 import { requireAuth, requireRole, type AuthVariables } from "../middleware/auth.ts";
-import {
-  preFlight,
-  callWithFallback,
-  streamWithFallback,
-  computeCharges,
-  settleUsageOrOutbox,
-  BillingError,
-} from "../lib/billing.ts";
-import { normalizeProcessedTotalTokens } from "../providers/provider-usage.ts";
-import { getEffectiveRules } from "../lib/rate-limits.ts";
+import { billingAppError } from "../lib/billing-errors.ts";
+import { resolveModelOp } from "../domains/billing/workflow.ts";
+import { getEffectiveRulesOp } from "../domains/limits/operations.ts";
 import type { ChatRequest, ChatMessage, ContentPart } from "../providers/index.ts";
-import { newGatewayRequestId } from "../services/settlement-outbox.ts";
+import {
+  applyDoneUsage,
+  classifyGenerationFailure,
+  completeGeneration,
+  emptyStreamUsage,
+  openStreamGeneration,
+  type GenerationCompleteResult,
+} from "../domains/providers/generation.ts";
+import { CustomerRepository } from "../domains/ports/customer-repository.ts";
+import {
+  formatOpenAIErrorBody,
+  openAISseTerminalFromAppError,
+} from "../http/renderers/openai.ts";
+import { isAppError, SystemError } from "../errors/families.ts";
+import { publicMessageForCode, SAFE_MESSAGES } from "../errors/safe-messages.ts";
+import {
+  mapExitToHttpResponse,
+  runOpenAIEffect,
+} from "../http/adapters/boundary.ts";
+import {
+  PlaygroundChatBody,
+  sValidator,
+} from "../http/validation/index.ts";
+import { getAppRuntime } from "../runtime/app-runtime.ts";
 
 const playground = new Hono<{ Variables: AuthVariables }>();
 
@@ -29,50 +45,9 @@ const playground = new Hono<{ Variables: AuthVariables }>();
 // paid upstream calls or probe provider credentials.
 playground.use("*", requireAuth, requireRole("admin"));
 
-const messageSchema = z.object({
-  role: z.enum(["system", "user", "assistant", "tool"]),
-  content: z.union([
-    z.string(),
-    z.array(
-      z.object({
-        type: z.enum(["text", "image_url", "input_audio"]),
-        text: z.string().optional(),
-        image_url: z.object({ url: z.string() }).optional(),
-        input_audio: z.object({ data: z.string() }).optional(),
-      }).passthrough(),
-    ),
-  ]),
-  tool_call_id: z.string().optional(),
-  tool_calls: z.array(z.any()).optional(),
-});
+type PlaygroundMessage = PlaygroundChatBody["messages"][number];
 
-const chatBody = z.object({
-  /** Model alias to test. */
-  model: z.string().min(1).max(80),
-  messages: z.array(messageSchema).min(1),
-  stream: z.boolean().optional(),
-  temperature: z.number().optional(),
-  max_tokens: z.number().int().positive().optional(),
-  max_completion_tokens: z.number().int().positive().optional(),
-  top_p: z.number().optional(),
-  top_k: z.number().int().nonnegative().optional(),
-  frequency_penalty: z.number().optional(),
-  presence_penalty: z.number().optional(),
-  seed: z.number().int().optional(),
-  stop: z.union([z.string(), z.array(z.string())]).optional(),
-  response_format: z.any().optional(),
-  reasoning_effort: z.enum(["low", "medium", "high"]).optional(),
-  /**
-   * Optional customer to attribute usage + billing to. When omitted the call
-   * is free (admin test mode): no balance debit, no rate-limit counters, but
-   * a usage_record is still written with billed=false and a synthetic
-   * playground customer id derived from the admin user's org so analytics can
-   * filter it out if desired.
-   */
-  customerId: z.string().min(1).max(64).optional(),
-}).passthrough();
-
-function translateMessage(m: z.infer<typeof messageSchema>): ChatMessage {
+function translateMessage(m: PlaygroundMessage): ChatMessage {
   let content: string | ContentPart[];
   if (typeof m.content === "string") {
     content = m.content;
@@ -87,7 +62,7 @@ function translateMessage(m: z.infer<typeof messageSchema>): ChatMessage {
     role: m.role,
     content,
     toolCallId: m.tool_call_id,
-    toolCalls: m.tool_calls,
+    toolCalls: m.tool_calls ? [...m.tool_calls] : undefined,
   };
 }
 
@@ -107,6 +82,11 @@ function formatError(code: string, message: string, extra?: Record<string, unkno
   };
 }
 
+type PlaygroundContext = {
+  readonly customer: CustomerDoc | null;
+  readonly rules: readonly RateLimitRule[];
+};
+
 /**
  * Resolve (or synthesize) the customer context for a playground call.
  * - With customerId: validate it belongs to this org, load it, load its
@@ -114,36 +94,58 @@ function formatError(code: string, message: string, extra?: Record<string, unkno
  * - Without customerId: synthetic playground context — no balance, no rules,
  *   usage_record still written (billed=false) for cost visibility.
  */
-async function resolvePlaygroundContext(orgId: ObjectId, customerIdRaw: string | undefined) {
-  const db = await getDb();
-  if (!customerIdRaw) {
-    return { customer: null, rules: [] as Awaited<ReturnType<typeof getEffectiveRules>> };
-  }
-  if (!ObjectId.isValid(customerIdRaw)) {
-    throw new BillingError(400, "invalid_customer_id", "customerId must be a valid ObjectId");
-  }
-  const customer = await db.customers.findOne({ _id: new ObjectId(customerIdRaw), organizationId: orgId });
-  if (!customer) throw new BillingError(404, "customer_not_found", "Customer not found in this org");
-  const rules = await getEffectiveRules(db, customer._id);
-  return { customer, rules };
+function resolvePlaygroundContextEffect(
+  orgId: ObjectId,
+  customerIdRaw: string | undefined,
+) {
+  return Effect.gen(function* () {
+    if (!customerIdRaw) {
+      return {
+        customer: null,
+        rules: [] as readonly RateLimitRule[],
+      } satisfies PlaygroundContext;
+    }
+    if (!ObjectId.isValid(customerIdRaw)) {
+      return yield* Effect.fail(
+        billingAppError(
+          400,
+          "invalid_customer_id",
+          "customerId must be a valid ObjectId",
+        ),
+      );
+    }
+    const repo = yield* CustomerRepository;
+    const customer = yield* repo
+      .findById(orgId.toHexString(), customerIdRaw)
+      .pipe(
+        Effect.mapError(
+          (e) =>
+            new SystemError({
+              code: "system_error",
+              message: SAFE_MESSAGES.internal_server_error,
+              diagnostic: e instanceof Error ? e.message : String(e),
+            }),
+        ),
+      );
+    if (!customer) {
+      return yield* Effect.fail(
+        billingAppError(
+          404,
+          "customer_not_found",
+          "Customer not found in this org",
+        ),
+      );
+    }
+    const rules = yield* getEffectiveRulesOp(customer._id);
+    return { customer, rules } satisfies PlaygroundContext;
+  });
 }
 
-playground.post("/chat", zValidator("json", chatBody), async (c) => {
-  const orgId = c.get("orgId");
-  const body = c.req.valid("json");
-  const stream = body.stream ?? false;
-
-  let ctx: { customer: Awaited<ReturnType<typeof resolvePlaygroundContext>>["customer"]; rules: Awaited<ReturnType<typeof getEffectiveRules>> };
-  try {
-    ctx = await resolvePlaygroundContext(orgId, body.customerId);
-  } catch (err) {
-    if (err instanceof BillingError) {
-      return c.json(formatError(err.code, err.message, err.extra), err.status as 400 | 404);
-    }
-    throw err;
-  }
-
-  const request: ChatRequest = {
+function buildPlaygroundChatRequest(
+  body: PlaygroundChatBody,
+  stream: boolean,
+): ChatRequest {
+  return {
     model: body.model,
     messages: body.messages.map(translateMessage),
     stream,
@@ -157,110 +159,135 @@ playground.post("/chat", zValidator("json", chatBody), async (c) => {
     // and anything else the adapter understands (openai-compatible merges `extra`).
     extra: pickExtras(body),
   };
+}
 
-  let preflight: { model: ModelDoc; rules: Awaited<ReturnType<typeof getEffectiveRules>> };
-  try {
-    preflight = await preFlight({
-      orgId,
-      // Use the real customer id when billing; else a zero ObjectId placeholder
-      // so preFlight's rate-limit check is a no-op (empty rules).
-      customerId: ctx.customer?._id ?? new ObjectId(),
-      apiKeyModelWhitelist: [], // admin playground bypasses per-key model whitelist
-      aliasId: body.model,
-      // Playground is admin-only test mode: no balance pre-check (an admin can
-      // test regardless of a selected customer's balance). 0/0 → estimate skipped.
-      estimatedPromptTokens: 0,
-      maxCompletionTokens: 0,
-    });
-  } catch (err) {
-    if (err instanceof BillingError) {
-      const headers: Record<string, string> = {};
-      if (err.extra && typeof err.extra["retryAfterSeconds"] === "number") {
-        headers["Retry-After"] = String(err.extra["retryAfterSeconds"]);
-      }
-      return c.json(formatError(err.code, err.message, err.extra), err.status as 400 | 402 | 403 | 404 | 429 | 502, headers);
-    }
-    throw err;
-  }
+function playgroundCompletionJson(
+  result: GenerationCompleteResult,
+  modelAlias: string,
+  billed: boolean,
+) {
+  const r = result.response;
+  return {
+    id: r.id,
+    object: "chat.completion" as const,
+    created: Math.floor(Date.now() / 1000),
+    model: modelAlias,
+    provider: {
+      providerId: result.provider._id.toHexString(),
+      upstreamModelId: result.entry.upstreamModelId,
+      sdkType: result.provider.sdkType,
+    },
+    choices: r.choices.map((ch) => ({
+      index: ch.index,
+      message: {
+        role: ch.message.role,
+        content: ch.message.content,
+        reasoning_content: ch.message.reasoning,
+        tool_calls: ch.message.toolCalls,
+      },
+      finish_reason: ch.finishReason,
+    })),
+    usage: {
+      prompt_tokens: r.usage.promptTokens,
+      completion_tokens: r.usage.completionTokens,
+      total_tokens: r.usage.totalTokens,
+      ...(r.usage.reasoningTokens !== undefined
+        ? { reasoning_tokens: r.usage.reasoningTokens }
+        : {}),
+      ...(r.usage.cacheReadTokens !== undefined
+        ? { prompt_tokens_details: { cached_tokens: r.usage.cacheReadTokens } }
+        : {}),
+    },
+    cost: {
+      costMinor: result.charges.costMinor,
+      priceMinor: result.charges.priceMinor,
+      currency: result.charges.currency,
+    },
+    billed,
+  };
+}
 
-  const { model } = preflight;
-  const rules = ctx.rules; // use customer's real rules if a customer was selected
-  const start = Date.now();
-  const gatewayRequestId = newGatewayRequestId();
+type PlaygroundPrep = {
+  readonly ctx: PlaygroundContext;
+  readonly request: ChatRequest;
+  readonly model: ModelDoc;
+};
 
-  // Non-streaming -----------------------------------------------------------
+playground.post("/chat", sValidator("json", PlaygroundChatBody), async (c) => {
+  const orgId = c.get("orgId");
+  const body = c.req.valid("json");
+  const stream = body.stream ?? false;
+  const abortSignal = c.req.raw.signal;
+
+  // Admin playground: validate model only (no balance pre-check). Rate limits
+  // come from the selected customer when present (ctx.rules).
+  const prep = Effect.gen(function* () {
+    const ctx = yield* resolvePlaygroundContextEffect(orgId, body.customerId);
+    const model = yield* resolveModelOp(orgId, body.model);
+    const request = buildPlaygroundChatRequest(body, stream);
+    return { ctx, model, request } satisfies PlaygroundPrep;
+  });
+
   if (!stream) {
-    try {
-      const outcome = await callWithFallback({ orgId, model, request });
-      const durationMs = Date.now() - start;
-      const charges = computeCharges({ entry: outcome.entry, model, usage: outcome.response.usage });
-
-      // Only debit + meter when a real customer is selected. Without a
-      // customer, settleUsage still inserts a usage_record (actorKind
-      // "playground", billed=false) so admins see cost visibility without
-      // charging anyone — previously this used a sentinel ObjectId hack that
-      // the new nullable-customerId schema makes unnecessary.
-      await settleUsageOrOutbox({
-        orgId,
-        actor: {
-          actorKind: "playground",
-          customerId: ctx.customer?._id ?? null,
-          apiKeyId: null,
-        },
-        model,
-        entry: outcome.entry,
-        provider: outcome.provider,
-        protocol: "openai",
-        response: outcome.response,
-        providerRequestId: outcome.response.providerRequestId,
-        gatewayRequestId,
-        status: 200,
-        durationMs,
-        rules,
-        occurredAt: new Date(start),
-        priceMinorOverride: ctx.customer ? charges.priceMinor : 0,
-      });
-
-      const r = outcome.response;
-      return c.json({
-        id: r.id,
-        object: "chat.completion",
-        created: Math.floor(Date.now() / 1000),
-        model: body.model,
-        provider: {
-          providerId: outcome.provider._id.toHexString(),
-          upstreamModelId: outcome.entry.upstreamModelId,
-          sdkType: outcome.provider.sdkType,
-        },
-        choices: r.choices.map((ch) => ({
-          index: ch.index,
-          message: {
-            role: ch.message.role,
-            content: ch.message.content,
-            reasoning_content: ch.message.reasoning,
-            tool_calls: ch.message.toolCalls,
+    // Wire format is OpenAI-shaped (playground UI reuses that envelope).
+    return runOpenAIEffect(
+      c,
+      Effect.gen(function* () {
+        const p = yield* prep;
+        const result = yield* completeGeneration({
+          orgId,
+          model: p.model,
+          request: p.request,
+          actor: {
+            actorKind: "playground" as const,
+            customerId: p.ctx.customer?._id ?? null,
+            apiKeyId: null,
           },
-          finish_reason: ch.finishReason,
-        })),
-        usage: {
-          prompt_tokens: r.usage.promptTokens,
-          completion_tokens: r.usage.completionTokens,
-          total_tokens: r.usage.totalTokens,
-          ...(r.usage.reasoningTokens !== undefined ? { reasoning_tokens: r.usage.reasoningTokens } : {}),
-          ...(r.usage.cacheReadTokens !== undefined ? { prompt_tokens_details: { cached_tokens: r.usage.cacheReadTokens } } : {}),
-        },
-        cost: { costMinor: charges.costMinor, priceMinor: charges.priceMinor, currency: charges.currency },
-        billed: ctx.customer !== null,
-      });
-    } catch (err) {
-      if (err instanceof BillingError) {
-        return c.json(formatError(err.code, err.message, err.extra), err.status as 400 | 402 | 403 | 404 | 429 | 502);
-      }
-      return c.json(formatError("upstream_error", err instanceof Error ? err.message : "upstream failed"), 502 as 502);
-    }
+          rules: p.ctx.rules,
+          protocol: "openai",
+          reservation: null,
+          reservedMinor: 0,
+          startedAtMs: Date.now(),
+          priceMinorOverride: p.ctx.customer ? undefined : 0,
+          signal: abortSignal,
+        });
+        return playgroundCompletionJson(
+          result,
+          body.model,
+          p.ctx.customer !== null,
+        );
+      }),
+      { operation: "playground.chat" },
+    );
   }
 
-  // Streaming ----------------------------------------------------------------
+  // --- Streaming: Effect prep only; SSE stays at HTTP boundary ---
+  const prepExit = await getAppRuntime().runPromiseExit(prep, {
+    signal: abortSignal,
+  });
+  if (Exit.isFailure(prepExit)) {
+    const failures = [...Cause.failures(prepExit.cause)];
+    return mapExitToHttpResponse(
+      prepExit,
+      c,
+      {
+        surface: "openai",
+        operation: "playground.chat.streamPrep",
+      },
+      failures,
+    );
+  }
+
+  const { ctx, model, request } = prepExit.value;
+  const rules = ctx.rules;
+  const start = Date.now();
+  const actor = {
+    actorKind: "playground" as const,
+    customerId: ctx.customer?._id ?? null,
+    apiKeyId: null,
+  };
+  const priceMinorOverride = ctx.customer ? undefined : 0;
+
   c.header("Content-Type", "text/event-stream");
   c.header("Cache-Control", "no-cache");
   c.header("Connection", "keep-alive");
@@ -269,42 +296,87 @@ playground.post("/chat", zValidator("json", chatBody), async (c) => {
   const id = `playground-${Date.now().toString(36)}`;
   const created = Math.floor(Date.now() / 1000);
 
-  let promptTokens = 0;
-  let completionTokens = 0;
-  let reasoningTokens = 0;
-  let cacheReadTokens = 0;
-  let cacheWriteTokens = 0;
-  /** Provider-reported total from chunk.usage (may exceed prompt+completion). */
-  let reportedTotalTokens: number | undefined;
-  let cacheAccounting: "subset" | "additive" = "subset";
-  let finishReason = "stop";
+  const session = openStreamGeneration({
+    orgId,
+    model,
+    request,
+    actor,
+    rules,
+    protocol: "openai",
+    reservation: null,
+    reservedMinor: 0,
+    startedAtMs: start,
+    priceMinorOverride,
+    signal: abortSignal,
+  });
+
   let activeEntry: ModelEntryDoc | null = null;
   let activeProvider: ProviderDoc | null = null;
-  let streamComplete = false;
-  /** Exactly one terminal error event per stream. */
+  const usage = emptyStreamUsage("openai");
   let terminalErrorEmitted = false;
+  let clientDisconnected = false;
 
-  const streamGen = streamWithFallback({ orgId, model, request });
+  const onAbort = () => {
+    clientDisconnected = true;
+    session.noteInterrupt();
+  };
+  abortSignal.addEventListener("abort", onAbort, { once: true });
+
   const encoder = new TextEncoder();
 
   const body$ = new ReadableStream({
     async start(controller) {
       const enqueue = (obj: unknown) => {
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify(obj)}\n\n`));
+        if (clientDisconnected) return;
+        try {
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify(obj)}\n\n`));
+        } catch {
+          clientDisconnected = true;
+        }
       };
       const enqueueTerminalError = (code: string, message: string) => {
-        if (terminalErrorEmitted) return;
+        if (terminalErrorEmitted || clientDisconnected) return;
         terminalErrorEmitted = true;
-        enqueue(formatError(code, message));
+        enqueue(formatError(code, publicMessageForCode(code, message)));
+      };
+      const enqueueAppError = (err: unknown) => {
+        const classified = isAppError(err)
+          ? err
+          : classifyGenerationFailure(err);
+        if (isAppError(classified) && !terminalErrorEmitted) {
+          terminalErrorEmitted = true;
+          try {
+            controller.enqueue(
+              encoder.encode(openAISseTerminalFromAppError(classified)),
+            );
+          } catch {
+            clientDisconnected = true;
+          }
+        } else if (!terminalErrorEmitted) {
+          enqueueTerminalError("upstream_error", SAFE_MESSAGES.upstream_error);
+        }
       };
       try {
-        // Send a header event so the client can show which provider/model served.
-        // Format kept as a chat.completion.chunk so standard OpenAI SSE parsers work;
-        // the provider metadata rides on a separate, optional event type.
         enqueue({ id, object: "playground.meta", created, model: body.model });
-        for await (const { entry, provider, chunk } of streamGen) {
+        for await (const event of session.iterate()) {
+          if (clientDisconnected || abortSignal.aborted) {
+            session.noteInterrupt();
+            break;
+          }
+          if (event.kind !== "chunk") {
+            if (event.kind === "terminal_fail" && !clientDisconnected) {
+              enqueueAppError(
+                classifyGenerationFailure(event.err, {
+                  streamCommitted: event.streamCommitted,
+                }),
+              );
+            }
+            continue;
+          }
+          const { entry, provider, chunk } = event;
           activeEntry = entry;
           activeProvider = provider;
+          session.noteChunk(entry.id, chunk);
           if (chunk.type === "delta") {
             const delta: Record<string, unknown> = {};
             if (chunk.delta?.content !== undefined) delta.content = chunk.delta.content;
@@ -318,45 +390,18 @@ playground.post("/chat", zValidator("json", chatBody), async (c) => {
               choices: [{ index: 0, delta, finish_reason: null }],
             });
           } else if (chunk.type === "done") {
-            if (chunk.streamComplete) streamComplete = true;
-            if (chunk.finishReason) finishReason = chunk.finishReason;
-            if (chunk.streamComplete && chunk.usage) {
-              promptTokens = chunk.usage.promptTokens;
-              completionTokens = chunk.usage.completionTokens;
-              reasoningTokens = chunk.usage.reasoningTokens ?? 0;
-              cacheReadTokens = chunk.usage.cacheReadTokens ?? 0;
-              cacheWriteTokens = chunk.usage.cacheWriteTokens ?? 0;
-              // Retain provider total (e.g. 10+5 with total 20) for the normalizer.
-              reportedTotalTokens =
-                typeof chunk.usage.totalTokens === "number"
-                  ? chunk.usage.totalTokens
-                  : undefined;
-              if (
-                chunk.usage.cacheAccounting === "subset" ||
-                chunk.usage.cacheAccounting === "additive"
-              ) {
-                cacheAccounting = chunk.usage.cacheAccounting;
-              }
-            }
+            applyDoneUsage(usage, chunk);
           } else if (chunk.type === "error") {
             enqueueTerminalError(
               "upstream_error",
-              chunk.error?.message ?? "stream error",
+              chunk.error?.message ?? SAFE_MESSAGES.upstream_error,
             );
           }
         }
-        // Mode-correct total for SSE + settlement (prefer provider total).
-        // null = overflow / unsafe — fail-closed for settlement below.
-        const normalizedTotal = normalizeProcessedTotalTokens({
-          promptTokens,
-          completionTokens,
-          cacheReadTokens,
-          cacheWriteTokens,
-          totalTokens: reportedTotalTokens,
-          cacheAccounting,
-        });
-        if (!streamComplete) {
-          // Error-only terminal — never finish_reason "error" + [DONE].
+
+        if (clientDisconnected || abortSignal.aborted) {
+          // no fabricated body
+        } else if (!usage.streamComplete) {
           enqueueTerminalError(
             "stream_truncated",
             "Upstream stream ended without a terminal event; response may be incomplete",
@@ -367,105 +412,98 @@ playground.post("/chat", zValidator("json", chatBody), async (c) => {
             object: "chat.completion.chunk",
             created,
             model: body.model,
-            choices: [{ index: 0, delta: {}, finish_reason: finishReason }],
+            choices: [{ index: 0, delta: {}, finish_reason: usage.finishReason }],
           });
-          const usagePayload = {
-            prompt_tokens: promptTokens,
-            completion_tokens: completionTokens,
-            total_tokens: normalizedTotal ?? 0,
-            ...(reasoningTokens > 0 ? { reasoning_tokens: reasoningTokens } : {}),
-            ...(cacheReadTokens > 0 ? { prompt_tokens_details: { cached_tokens: cacheReadTokens } } : {}),
-          };
-          if (promptTokens > 0 || completionTokens > 0) {
-            enqueue({ id, object: "chat.completion.chunk", created, model: body.model, choices: [], usage: usagePayload });
-          }
-        }
-        // Final cost event so the UI can show $ without re-fetching (even on
-        // truncated streams, so operators see which provider accepted work).
-        if (activeEntry && activeProvider) {
-          const usage = {
-            promptTokens,
-            completionTokens,
-            reasoningTokens,
-            cacheReadTokens,
-            cacheWriteTokens,
-            totalTokens: normalizedTotal ?? 0,
-            cacheAccounting,
-          };
-          const charges = computeCharges({
-            entry: activeEntry,
-            model,
-            usage,
-            cacheAccounting,
-          });
-          const hasAuthoritativeUsage =
-            streamComplete &&
-            normalizedTotal !== null &&
-            (promptTokens > 0 || completionTokens > 0);
-          let settled = false;
-          try {
-            const result = await settleUsageOrOutbox({
-              orgId,
-              actor: {
-                actorKind: "playground",
-                customerId: ctx.customer?._id ?? null,
-                apiKeyId: null,
+          if (usage.promptTokens > 0 || usage.completionTokens > 0) {
+            const total =
+              usage.reportedTotalTokens !== undefined
+                ? usage.reportedTotalTokens
+                : usage.promptTokens + usage.completionTokens;
+            enqueue({
+              id,
+              object: "chat.completion.chunk",
+              created,
+              model: body.model,
+              choices: [],
+              usage: {
+                prompt_tokens: usage.promptTokens,
+                completion_tokens: usage.completionTokens,
+                total_tokens: total,
+                ...(usage.reasoningTokens > 0 ? { reasoning_tokens: usage.reasoningTokens } : {}),
+                ...(usage.cacheReadTokens > 0
+                  ? { prompt_tokens_details: { cached_tokens: usage.cacheReadTokens } }
+                  : {}),
               },
-              model,
-              entry: activeEntry,
-              provider: activeProvider,
-              protocol: "openai",
-              gatewayRequestId,
-              providerUsage: hasAuthoritativeUsage
-                ? { status: "reported", usage }
-                : {
-                    status: "missing",
-                    reason: !streamComplete
-                      ? "stream_truncated"
-                      : normalizedTotal === null
-                        ? "usage_overflow"
-                        : "stream_usage_absent",
-                  },
-              status: 200,
-              durationMs: Date.now() - start,
-              rules,
-              priceMinorOverride: ctx.customer ? charges.priceMinor : 0,
-              occurredAt: new Date(start),
             });
-            settled = result.settled;
-          } catch (settleErr) {
-            console.error("[playground] stream settlement/outbox failed:", settleErr);
           }
-          // Never report billed:true for truncated/missing-usage paths.
-          const billed =
-            settled && streamComplete && hasAuthoritativeUsage && ctx.customer !== null;
-          enqueue({
-            id,
-            object: "playground.cost",
-            created,
-            model: body.model,
-            provider: {
-              providerId: activeProvider._id.toHexString(),
-              upstreamModelId: activeEntry.upstreamModelId,
-              sdkType: activeProvider.sdkType,
-            },
-            cost: { costMinor: charges.costMinor, priceMinor: charges.priceMinor, currency: charges.currency },
-            billed,
-            streamComplete,
-          });
         }
-        if (streamComplete) {
-          controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+
+        const finalizeResult = await session.finalize({
+          activeEntry,
+          activeProvider,
+          usage,
+          swallowSettleErrors: true,
+        });
+        if (activeEntry && activeProvider && finalizeResult.action !== "released") {
+          const charges = finalizeResult.charges;
+          const settled = finalizeResult.action === "settled";
+          const billed =
+            settled &&
+            usage.streamComplete &&
+            finalizeResult.hasAuthoritativeUsage &&
+            ctx.customer !== null;
+          if (charges) {
+            enqueue({
+              id,
+              object: "playground.cost",
+              created,
+              model: body.model,
+              provider: {
+                providerId: activeProvider._id.toHexString(),
+                upstreamModelId: activeEntry.upstreamModelId,
+                sdkType: activeProvider.sdkType,
+              },
+              cost: {
+                costMinor: charges.costMinor,
+                priceMinor: charges.priceMinor,
+                currency: charges.currency,
+              },
+              billed,
+              streamComplete: usage.streamComplete,
+            });
+          }
+        }
+        if (usage.streamComplete && !clientDisconnected) {
+          try {
+            controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+          } catch {
+            clientDisconnected = true;
+          }
         }
       } catch (err) {
-        // Error path: no [DONE] success terminal. Exactly one terminal error.
-        enqueueTerminalError(
-          "upstream_error",
-          err instanceof Error ? err.message : "stream failed",
-        );
+        if (err instanceof Error && err.name === "AbortError") {
+          session.noteInterrupt();
+        } else if (!clientDisconnected) {
+          enqueueAppError(err);
+        }
       } finally {
-        controller.close();
+        abortSignal.removeEventListener("abort", onAbort);
+        await session.finalize({
+          activeEntry,
+          activeProvider,
+          usage,
+          swallowSettleErrors: true,
+        });
+        try {
+          controller.close();
+        } catch {
+          /* already closed */
+        }
       }
+    },
+    cancel() {
+      clientDisconnected = true;
+      session.noteInterrupt();
     },
   });
 
@@ -475,13 +513,9 @@ playground.post("/chat", zValidator("json", chatBody), async (c) => {
   });
 });
 
-/**
- * Forward provider-specific params the ChatRequest type doesn't model
- * explicitly. The openai-compatible adapter merges `extra` into the upstream
- * body via Object.assign, so top_k / frequency_penalty / presence_penalty /
- * seed reach the provider when supported.
- */
-function pickExtras(body: z.infer<typeof chatBody>): Record<string, unknown> {
+void formatOpenAIErrorBody;
+
+function pickExtras(body: PlaygroundChatBody): Record<string, unknown> {
   const extra: Record<string, unknown> = {};
   if (body.top_k !== undefined) extra.top_k = body.top_k;
   if (body.frequency_penalty !== undefined) extra.frequency_penalty = body.frequency_penalty;

@@ -30,14 +30,10 @@ export function isApiRuntimeConfigSet(): boolean {
 }
 
 /**
- * JWT secret for signing. Prefers runtime config; transitional process.env
- * fallback only when config not yet set (unit tests). Never logs the value.
+ * JWT secret for signing. Requires setApiRuntimeConfig at boot (task 14.1).
+ * Never logs the value. No process.env fallback.
  */
 export function requireJwtSecret(): string {
   if (current) return current.jwtSecret;
-  const secret = process.env.JWT_SECRET;
-  if (!secret) {
-    throw new Error("JWT_SECRET not configured");
-  }
-  return secret;
+  throw new Error("JWT_SECRET not configured");
 }

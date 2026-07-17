@@ -6,8 +6,10 @@
     "jsx": "preserve",
     "paths": {
       "@tokenpanel/contracts": ["../../packages/contracts/src/index.ts"],
+      "@tokenpanel/contracts/effect": ["../../packages/contracts/src/effect/index.ts"],
       "@tokenpanel/contracts/*": ["../../packages/contracts/src/*"],
       "@tokenpanel/db": ["../../packages/db/src/index.ts"],
+      "@tokenpanel/db/schemas/effect": ["../../packages/db/src/schemas/effect/index.ts"],
       "@tokenpanel/db/*": ["../../packages/db/src/*"]
     }
   },

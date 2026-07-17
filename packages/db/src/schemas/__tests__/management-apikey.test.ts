@@ -19,7 +19,7 @@ const base = {
 };
 
 test("managementScope enum covers all documented scope categories", () => {
-  expect(managementScope.options).toEqual([
+  expect([...MANAGEMENT_SCOPES]).toEqual([
     "models:read",
     "customers:read",
     "customers:write",
@@ -30,8 +30,9 @@ test("managementScope enum covers all documented scope categories", () => {
     "subscriptions:write",
     "chat:write",
   ]);
-  expect(MANAGEMENT_SCOPES).toEqual(managementScope.options);
-  expect(managementScope.safeParse("models:read").success).toBe(true);
+  for (const s of MANAGEMENT_SCOPES) {
+    expect(managementScope.safeParse(s).success).toBe(true);
+  }
   expect(managementScope.safeParse("providers:write").success).toBe(false);
   expect(managementScope.safeParse("admin:impersonate").success).toBe(false);
 });

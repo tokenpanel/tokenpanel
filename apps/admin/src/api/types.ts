@@ -182,8 +182,8 @@ export interface OrganizationListResponse {
 
 export interface OrganizationCreateRequest {
   name: string;
-  slug?: string;
-  defaultCurrency?: string;
+  slug?: string | undefined;
+  defaultCurrency?: string | undefined;
 }
 
 export interface OrganizationCreateResponse {
@@ -192,9 +192,9 @@ export interface OrganizationCreateResponse {
 }
 
 export interface OrganizationUpdateRequest {
-  name?: string;
-  slug?: string;
-  defaultCurrency?: string;
+  name?: string | undefined;
+  slug?: string | undefined;
+  defaultCurrency?: string | undefined;
 }
 
 export interface OrganizationSwitchRequest {

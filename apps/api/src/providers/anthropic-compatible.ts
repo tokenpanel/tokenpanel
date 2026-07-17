@@ -1,3 +1,4 @@
+import { Effect } from "effect";
 import type {
   AdapterContext,
   ChatMessage,
@@ -21,15 +22,24 @@ import {
 // Re-export for tests that historically imported merge from this module.
 export { mergeAnthropicStreamUsage, isAnthropicStreamUsageComplete } from "./provider-usage.ts";
 import {
+  makeProviderError,
   providerHttpError,
   publicProviderErrorMessage,
-  ProviderError,
 } from "./provider-errors.ts";
+import { providerHttpRequest } from "../infrastructure/provider-http/scoped-fetch.ts";
+import { httpFailureToProviderError } from "./map-http-error.ts";
 
-const ANTHROPIC_VERSION = "2023-06-01";
+import {
+  ANTHROPIC_API_VERSION,
+  ANTHROPIC_DEFAULT_CONTEXT_TOKENS,
+  ANTHROPIC_DEFAULT_MAX_TOKENS,
+  ANTHROPIC_MESSAGE_ID_PREFIX,
+} from "./anthropic-protocol.ts";
+
+/** @deprecated Prefer ANTHROPIC_API_VERSION from anthropic-protocol. */
+const ANTHROPIC_VERSION = ANTHROPIC_API_VERSION;
 /** Non-authoritative discovery fallback when upstream omits context (not billing). */
-const ANTHROPIC_DEFAULT_CONTEXT = 200_000;
-const ANTHROPIC_DEFAULT_MAX_TOKENS = 4096;
+const ANTHROPIC_DEFAULT_CONTEXT = ANTHROPIC_DEFAULT_CONTEXT_TOKENS;
 
 type AnthropicModel = {
   id: string;
@@ -202,70 +212,118 @@ export function createAnthropicCompatibleAdapter(): ProviderAdapter {
   return {
     sdkType: "anthropic-compatible",
 
-    async listModels(ctx) {
-      const res = await fetch(joinUrl(ctx.baseUrl, "/models"), {
-        method: "GET",
-        headers: headers(ctx),
-        signal: ctx.signal,
-      });
-      if (!res.ok) {
-        throw new Error(`anthropic listModels ${res.status}: ${await safeText(res)}`);
-      }
-      const json = (await res.json()) as { data?: AnthropicModel[] };
-      const data = Array.isArray(json.data) ? json.data : [];
-      const models: DiscoveredModel[] = [];
-      for (const m of data) {
-        if (!m || typeof m.id !== "string" || m.id.length === 0) continue;
-        const displayName = str(m.display_name) ?? m.id;
-        models.push({
-          upstreamModelId: m.id,
-          displayName,
-          limits: { context: ANTHROPIC_DEFAULT_CONTEXT },
-          modalities: { input: ["text"], output: ["text"] },
-          raw: m as Record<string, unknown>,
+    listModels(ctx) {
+      return Effect.gen(function* () {
+        const res = yield* providerHttpRequest({
+          url: joinUrl(ctx.baseUrl, "/models"),
+          method: "GET",
+          headers: headers(ctx),
+          ...(ctx.signal !== undefined ? { signal: ctx.signal } : {}),
+          label: "anthropic listModels",
+          operation: "listModels",
+        }).pipe(Effect.mapError(httpFailureToProviderError));
+
+        if (res.status < 200 || res.status >= 300) {
+          return yield* Effect.fail(
+            providerHttpError(
+              res.status,
+              res.diagnostic,
+              "request",
+              "anthropic listModels",
+            ),
+          );
+        }
+
+        const json = yield* Effect.try({
+          try: () => JSON.parse(res.bodyText) as { data?: AnthropicModel[] },
+          catch: () =>
+            makeProviderError({
+              message: publicProviderErrorMessage("anthropic listModels"),
+              category: "malformed_response",
+              phase: "parse",
+              diagnostic: res.diagnostic,
+            }),
         });
-      }
-      return models;
+
+        const data = Array.isArray(json.data) ? json.data : [];
+        const models: DiscoveredModel[] = [];
+        for (const m of data) {
+          if (!m || typeof m.id !== "string" || m.id.length === 0) continue;
+          const displayName = str(m.display_name) ?? m.id;
+          models.push({
+            upstreamModelId: m.id,
+            displayName,
+            limits: { context: ANTHROPIC_DEFAULT_CONTEXT },
+            modalities: { input: ["text"], output: ["text"] },
+            raw: m as Record<string, unknown>,
+          });
+        }
+        return models;
+      });
     },
 
-    async chatComplete(ctx, req) {
-      const res = await fetch(joinUrl(ctx.baseUrl, "/messages"), {
-        method: "POST",
-        headers: headers(ctx),
-        body: JSON.stringify(buildBody(req, false)),
-        signal: req.signal ?? ctx.signal,
+    chatComplete(ctx, req) {
+      return Effect.gen(function* () {
+        const res = yield* providerHttpRequest({
+          url: joinUrl(ctx.baseUrl, "/messages"),
+          method: "POST",
+          headers: headers(ctx),
+          body: JSON.stringify(buildBody(req, false)),
+          ...(req.signal !== undefined
+            ? { signal: req.signal }
+            : ctx.signal !== undefined
+              ? { signal: ctx.signal }
+              : {}),
+          label: "anthropic chatComplete",
+          operation: "chatComplete",
+          ...(req.model !== undefined ? { model: req.model } : {}),
+        }).pipe(Effect.mapError(httpFailureToProviderError));
+
+        if (res.status < 200 || res.status >= 300) {
+          return yield* Effect.fail(
+            providerHttpError(
+              res.status,
+              res.diagnostic,
+              "request",
+              "anthropic chatComplete",
+            ),
+          );
+        }
+
+        const json = yield* Effect.try({
+          try: () => JSON.parse(res.bodyText) as Record<string, unknown>,
+          catch: () =>
+            makeProviderError({
+              message: publicProviderErrorMessage("anthropic chatComplete"),
+              category: "malformed_response",
+              phase: "parse",
+              diagnostic: res.diagnostic,
+            }),
+        });
+
+        const id = str(json.id) ?? cryptoRandomId();
+        const message = assembleMessage(json);
+        const usageResult = parseAnthropicUsageResult(json.usage);
+        return {
+          id,
+          model: str(json.model) ?? req.model,
+          choices: [
+            {
+              index: 0,
+              message,
+              finishReason: stopReasonToFinishReason(json.stop_reason),
+            },
+          ],
+          usage:
+            usageResult.status === "reported"
+              ? usageResult.usage
+              : { ...ZERO_USAGE },
+          usageStatus: usageResult.status,
+          usageMissingReason:
+            usageResult.status === "missing" ? usageResult.reason : undefined,
+          providerRequestId: res.headers.get("request-id") ?? id,
+        };
       });
-      if (!res.ok) {
-        throw providerHttpError(
-          res.status,
-          await safeText(res),
-          "request",
-          "anthropic chatComplete",
-        );
-      }
-      const json = (await res.json()) as Record<string, unknown>;
-      const id = str(json.id) ?? cryptoRandomId();
-      const message = assembleMessage(json);
-      const usageResult = parseAnthropicUsageResult(json.usage);
-      return {
-        id,
-        model: str(json.model) ?? req.model,
-        choices: [
-          {
-            index: 0,
-            message,
-            finishReason: stopReasonToFinishReason(json.stop_reason),
-          },
-        ],
-        usage:
-          usageResult.status === "reported"
-            ? usageResult.usage
-            : { ...ZERO_USAGE },
-        usageStatus: usageResult.status,
-        usageMissingReason:
-          usageResult.status === "missing" ? usageResult.reason : undefined,
-        providerRequestId: res.headers.get("request-id") ?? id,
-      };
     },
 
     async *streamChat(ctx, req): AsyncGenerator<StreamChunk, void, void> {
@@ -273,7 +331,7 @@ export function createAnthropicCompatibleAdapter(): ProviderAdapter {
         method: "POST",
         headers: headers(ctx),
         body: JSON.stringify(buildBody(req, true)),
-        signal: req.signal ?? ctx.signal,
+        signal: req.signal ?? ctx.signal ?? null,
       });
       if (!res.ok) {
         throw providerHttpError(
@@ -327,7 +385,7 @@ export function createAnthropicCompatibleAdapter(): ProviderAdapter {
             ({ value, done } = await reader.read());
           } catch (err) {
             // Body read after headers: upstream may have accepted. Never failover.
-            throw new ProviderError({
+            throw makeProviderError({
               message: publicProviderErrorMessage("anthropic streamChat"),
               category: "connection",
               phase: "body",
@@ -455,5 +513,9 @@ async function safeText(res: Response): Promise<string> {
 }
 
 function cryptoRandomId(): string {
-  return "msg_" + Math.random().toString(36).slice(2) + Date.now().toString(36);
+  return (
+    ANTHROPIC_MESSAGE_ID_PREFIX +
+    Math.random().toString(36).slice(2) +
+    Date.now().toString(36)
+  );
 }

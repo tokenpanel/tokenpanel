@@ -1,32 +1,48 @@
 import { Hono } from "hono";
-import { z } from "zod";
-import { getDb, type ModelDoc } from "@tokenpanel/db";
+import { Cause, Effect, Exit } from "effect";
+import type { ModelDoc, ModelEntryDoc, ProviderDoc, RateLimitRule } from "@tokenpanel/db";
 import type { PublicAuthVariables } from "../../middleware/public-auth.ts";
+import { estimatePromptTokens } from "../../domains/billing/estimate.ts";
 import {
-  preFlight,
-  callWithFallback,
-  streamWithFallback,
-  cacheAccountingForProtocol,
-  computeCharges,
-  settleUsageOrOutbox,
-  estimatePromptTokens,
-  resolveModel,
-  releasePreFlightReservation,
-  BillingError,
+  preFlightWorkflow,
+  resolveModelOp,
   type BalanceReservation,
-} from "../../lib/billing.ts";
-import { normalizeProcessedTotalTokens } from "../../providers/provider-usage.ts";
+} from "../../domains/billing/workflow.ts";
 import {
-  resolveChatContext,
+  resolveChatContextEffect,
   actorForChatContext,
   billableCustomerId,
   modelWhitelistForContext,
   V1ChatError,
   type ChatContext,
 } from "../../lib/v1-chat-context.ts";
-import { getEffectiveRules } from "../../lib/rate-limits.ts";
 import type { ChatRequest, ChatMessage, ContentPart } from "../../providers/index.ts";
-import { newGatewayRequestId } from "../../services/settlement-outbox.ts";
+import {
+  applyDoneUsage,
+  classifyGenerationFailure,
+  completeGeneration,
+  emptyStreamUsage,
+  openStreamGeneration,
+  type GenerationCompleteResult,
+} from "../../domains/providers/generation.ts";
+import { listActiveModels } from "../../domains/models/operations.ts";
+import {
+  mapExitToHttpResponse,
+  runOpenAIEffect,
+} from "../../http/adapters/boundary.ts";
+import { getAppRuntime } from "../../runtime/app-runtime.ts";
+import {
+  formatOpenAIErrorBody,
+  openAISseTerminalFromAppError,
+} from "../../http/renderers/openai.ts";
+import { isAppError } from "../../errors/families.ts";
+import { publicMessageForCode, SAFE_MESSAGES } from "../../errors/safe-messages.ts";
+import type { RenderedHttpError } from "../../http/renderers/types.ts";
+import {
+  OpenAIChatCompletionBody,
+  type OpenAIMessage,
+  safeParseSchema,
+} from "../../http/validation/index.ts";
 
 const publicOpenAI = new Hono<{ Variables: PublicAuthVariables }>();
 // Auth is mounted once on the parent app for /v1/* (index.ts) so openai +
@@ -43,14 +59,8 @@ export function toOpenAIModel(m: ModelDoc) {
 }
 
 publicOpenAI.get("/v1/models", async (c) => {
-  const db = await getDb();
   const orgId = c.get("orgId");
   const principal = c.get("principal");
-  // Management principals need an explicit scope to list models. We accept
-  // either models:read (the canonical "list models" scope) or chat:write (so
-  // a chat-only integration can discover model aliases to call /v1/chat with).
-  // Customer keys are unchanged — no scope system, model whitelist still
-  // applies.
   if (principal && principal.kind === "management") {
     const scopes = principal.managementKey.scopes;
     const allowed = scopes.includes("models:read") || scopes.includes("chat:write");
@@ -58,60 +68,29 @@ publicOpenAI.get("/v1/models", async (c) => {
       return c.json(formatOpenAIError("missing_scope", "Management key lacks models:read or chat:write"), 403 as 403);
     }
   }
-  const models = await db.models
-    .find({ organizationId: orgId, active: true })
-    .toArray();
-  // Model whitelist applies only to customer keys. Management keys have no
-  // per-key whitelist — scope (chat:write / models:read) is the gate.
   const whitelist =
     principal && principal.kind === "customer" ? principal.apiKey.modelWhitelist : [];
-  const filtered = whitelist.length > 0
-    ? models.filter((m) => whitelist.includes(m.aliasId))
-    : models;
-  return c.json({ object: "list", data: filtered.map(toOpenAIModel) });
-});
-
-const openAIMessage = z.object({
-  role: z.enum(["system", "user", "assistant", "tool"]),
-  content: z.union([
-    z.string(),
-    z.array(
-      z.object({
-        type: z.enum(["text", "image_url", "input_audio"]),
-        text: z.string().optional(),
-        image_url: z.object({ url: z.string() }).optional(),
-        input_audio: z.object({ data: z.string() }).optional(),
-      }).passthrough(),
+  return runOpenAIEffect(
+    c,
+    listActiveModels(orgId.toHexString()).pipe(
+      Effect.map((models) => {
+        const filtered =
+          whitelist.length > 0
+            ? models.filter((m) => whitelist.includes(m.aliasId))
+            : models;
+        return { object: "list" as const, data: filtered.map(toOpenAIModel) };
+      }),
     ),
-  ]),
-  tool_call_id: z.string().optional(),
-  tool_calls: z.array(z.any()).optional(),
+    { operation: "openai.listModels" },
+  );
 });
 
-const chatCompletionBody = z.object({
-  model: z.string().min(1),
-  messages: z.array(openAIMessage).min(1),
-  stream: z.boolean().optional(),
-  temperature: z.number().optional(),
-  max_tokens: z.number().int().positive().optional(),
-  max_completion_tokens: z.number().int().positive().optional(),
-  top_p: z.number().optional(),
-  tools: z.array(z.any()).optional(),
-  tool_choice: z.any().optional(),
-  stop: z.union([z.string(), z.array(z.string())]).optional(),
-  response_format: z.any().optional(),
-  reasoning_effort: z.enum(["low", "medium", "high"]).optional(),
-  n: z.number().int().positive().optional(),
-  /**
-   * Management-key-only attribute. When present, the call bills + meters the
-   * resolved customer inside the key's org. Ignored for customer keys (those
-   * already attribute to the key's owner). Stripped before forwarding upstream
-   * — providers reject unknown fields.
-   */
-  customerEmail: z.string().email().max(254).optional(),
-}).passthrough();
-
-export function translateMessage(m: z.infer<typeof openAIMessage>): ChatMessage {
+/**
+ * Management-key-only attribute lives on OpenAIChatCompletionBody.customerEmail
+ * (Effect Schema). When present, the call bills + meters the resolved customer
+ * inside the key's org. Ignored for customer keys. Stripped before upstream.
+ */
+export function translateMessage(m: OpenAIMessage): ChatMessage {
   let content: string | ContentPart[];
   if (typeof m.content === "string") {
     content = m.content;
@@ -130,7 +109,7 @@ export function translateMessage(m: z.infer<typeof openAIMessage>): ChatMessage 
     role: m.role,
     content,
     toolCallId: m.tool_call_id,
-    toolCalls: m.tool_calls,
+    toolCalls: m.tool_calls ? [...m.tool_calls] : undefined,
   };
 }
 
@@ -145,50 +124,140 @@ export function formatOpenAIError(code: string, message: string, extra?: Record<
   };
 }
 
+/** Preserve historical V1ChatError wire shape (status + formatOpenAIError). */
+function mapOpenAIRouteError(err: unknown): RenderedHttpError | null {
+  if (err instanceof V1ChatError) {
+    return {
+      status: err.status,
+      body: formatOpenAIError(err.code, err.message),
+      headers: {},
+    };
+  }
+  return null;
+}
+
 /**
  * Resolve the model + (optional) preflight rules for a chat request.
  *
- * Customer / management_attributed paths run full preFlight — model access,
- * rate limits, and balance check — against the billable customer. Org-internal
- * management calls skip balance + rate-limit checks (no customer to bill or
- * meter) but still validate model existence + activeness via resolveModel.
+ * Customer / management_attributed paths run full preFlightWorkflow — model
+ * access, rate limits, and balance check — against the billable customer.
+ * Org-internal management calls skip balance + rate-limit checks (no customer
+ * to bill or meter) but still validate model existence + activeness.
  */
-async function resolveModelAndRules(params: {
+function resolveModelAndRules(params: {
   orgId: import("mongodb").ObjectId;
   ctx: ChatContext;
   aliasId: string;
   estimatedPromptTokens: number;
   maxCompletionTokens?: number;
-}): Promise<{
-  model: ModelDoc;
-  rules: Awaited<ReturnType<typeof getEffectiveRules>>;
-  reservation: BalanceReservation | null;
-}> {
+}) {
   const customerId = billableCustomerId(params.ctx);
   if (customerId === null) {
-    // Internal management call — no customer to bill or meter. Still validate
-    // the model exists + is active so 404s surface early.
-    const model = await resolveModel(params.orgId, params.aliasId);
-    return { model, rules: [], reservation: null };
+    return resolveModelOp(params.orgId, params.aliasId).pipe(
+      Effect.map((model) => ({
+        model,
+        rules: [] as readonly RateLimitRule[],
+        reservation: null as BalanceReservation | null,
+      })),
+    );
   }
-  return preFlight({
+  return preFlightWorkflow({
     orgId: params.orgId,
     customerId,
     apiKeyModelWhitelist: modelWhitelistForContext(params.ctx),
     aliasId: params.aliasId,
     estimatedPromptTokens: params.estimatedPromptTokens,
-    maxCompletionTokens: params.maxCompletionTokens,
-  });
+    ...(params.maxCompletionTokens !== undefined
+      ? { maxCompletionTokens: params.maxCompletionTokens }
+      : {}),
+  }).pipe(
+    Effect.map((r) => ({
+      model: r.model,
+      rules: r.rules,
+      reservation: r.reservation,
+    })),
+  );
 }
 
+function buildOpenAIChatRequest(
+  body: typeof OpenAIChatCompletionBody.Type,
+  stream: boolean,
+): ChatRequest {
+  return {
+    model: body.model,
+    messages: body.messages.map(translateMessage),
+    stream,
+    temperature: body.temperature,
+    maxTokens: body.max_tokens ?? body.max_completion_tokens,
+    topP: body.top_p,
+    tools: body.tools ? [...body.tools] : undefined,
+    toolChoice: body.tool_choice,
+    stop: Array.isArray(body.stop)
+      ? [...body.stop]
+      : body.stop
+        ? [body.stop]
+        : undefined,
+    responseFormat: body.response_format,
+    reasoning: body.reasoning_effort ? { effort: body.reasoning_effort } : undefined,
+  };
+}
+
+function openAICompletionJson(
+  result: GenerationCompleteResult,
+  modelAlias: string,
+) {
+  const r = result.response;
+  return {
+    id: r.id,
+    object: "chat.completion" as const,
+    created: Math.floor(Date.now() / 1000),
+    model: modelAlias,
+    choices: r.choices.map((ch) => ({
+      index: ch.index,
+      message: {
+        role: ch.message.role,
+        content: ch.message.content,
+        tool_calls: ch.message.toolCalls,
+      },
+      finish_reason: ch.finishReason,
+    })),
+    usage: {
+      prompt_tokens: r.usage.promptTokens,
+      completion_tokens: r.usage.completionTokens,
+      total_tokens: r.usage.totalTokens,
+      ...(r.usage.reasoningTokens !== undefined
+        ? { reasoning_tokens: r.usage.reasoningTokens }
+        : {}),
+      ...(r.usage.cacheReadTokens !== undefined
+        ? { prompt_tokens_details: { cached_tokens: r.usage.cacheReadTokens } }
+        : {}),
+    },
+  };
+}
+
+type ChatPrep = {
+  readonly ctx: ChatContext;
+  readonly request: ChatRequest;
+  readonly model: ModelDoc;
+  readonly rules: readonly RateLimitRule[];
+  readonly reservation: BalanceReservation | null;
+};
+
 publicOpenAI.post("/v1/chat/completions", async (c) => {
-  let body: z.infer<typeof chatCompletionBody>;
+  let raw: unknown;
   try {
-    body = chatCompletionBody.parse(await c.req.json());
-  } catch (err) {
-    const msg = err instanceof z.ZodError ? err.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ") : "invalid body";
-    return c.json(formatOpenAIError("invalid_request", msg), 400 as 400);
+    raw = await c.req.json();
+  } catch {
+    return c.json(formatOpenAIError("invalid_request", "invalid body"), 400 as 400);
   }
+  const parsed = safeParseSchema(OpenAIChatCompletionBody, raw);
+  if (!parsed.success) {
+    const msg = parsed.error.issues
+      .map((i) => `${i.path.join(".")}: ${i.message}`)
+      .join("; ");
+    return c.json(formatOpenAIError("invalid_request", msg || "invalid body"), 400 as 400);
+  }
+  const body = parsed.data;
 
   const orgId = c.get("orgId");
   const principal = c.get("principal");
@@ -196,124 +265,86 @@ publicOpenAI.post("/v1/chat/completions", async (c) => {
     return c.json(formatOpenAIError("unauthorized", "missing principal"), 401 as 401);
   }
   const stream = body.stream ?? false;
+  const abortSignal = c.req.raw.signal;
 
-  let ctx: ChatContext;
-  try {
-    ctx = await resolveChatContext({
+  const prep = Effect.gen(function* () {
+    const ctx = yield* resolveChatContextEffect({
       principal,
       customerEmail: body.customerEmail,
     });
-  } catch (err) {
-    if (err instanceof V1ChatError) {
-      return c.json(formatOpenAIError(err.code, err.message), err.status as 401 | 403 | 404);
-    }
-    throw err;
-  }
-
-  const request: ChatRequest = {
-    model: body.model,
-    messages: body.messages.map(translateMessage),
-    stream,
-    temperature: body.temperature,
-    maxTokens: body.max_tokens ?? body.max_completion_tokens,
-    topP: body.top_p,
-    tools: body.tools,
-    toolChoice: body.tool_choice,
-    stop: Array.isArray(body.stop) ? body.stop : body.stop ? [body.stop] : undefined,
-    responseFormat: body.response_format,
-    reasoning: body.reasoning_effort ? { effort: body.reasoning_effort } : undefined,
-  };
-
-  let preflightResult: {
-    model: ModelDoc;
-    rules: Awaited<ReturnType<typeof getEffectiveRules>>;
-    reservation: BalanceReservation | null;
-  };
-  try {
-    preflightResult = await resolveModelAndRules({
+    const request = buildOpenAIChatRequest(body, stream);
+    const maxCompletion = body.max_tokens ?? body.max_completion_tokens;
+    const preflight = yield* resolveModelAndRules({
       orgId,
       ctx,
       aliasId: body.model,
       estimatedPromptTokens: estimatePromptTokens(request.messages),
-      maxCompletionTokens: body.max_tokens ?? body.max_completion_tokens,
+      ...(maxCompletion !== undefined
+        ? { maxCompletionTokens: maxCompletion }
+        : {}),
     });
-  } catch (err) {
-    if (err instanceof BillingError) {
-      const headers: Record<string, string> = {};
-      if (err.extra && typeof err.extra["retryAfterSeconds"] === "number") {
-        headers["Retry-After"] = String(err.extra["retryAfterSeconds"]);
-      }
-      return c.json(formatOpenAIError(err.code, err.message, err.extra), err.status as 400 | 402 | 403 | 404 | 429 | 502, headers);
-    }
-    throw err;
+    return {
+      ctx,
+      request,
+      model: preflight.model,
+      rules: preflight.rules,
+      reservation: preflight.reservation,
+    } satisfies ChatPrep;
+  });
+
+  // --- Non-streaming: single Effect (context → preflight → complete) ---
+  if (!stream) {
+    return runOpenAIEffect(
+      c,
+      Effect.gen(function* () {
+        const p = yield* prep;
+        const result = yield* completeGeneration({
+          orgId,
+          model: p.model,
+          request: p.request,
+          actor: actorForChatContext(p.ctx),
+          rules: p.rules,
+          protocol: "openai",
+          reservation: p.reservation,
+          reservedMinor: p.reservation?.reservedMinor ?? 0,
+          startedAtMs: Date.now(),
+          priceMinorOverride:
+            p.ctx.kind === "management_internal" ? 0 : undefined,
+          signal: abortSignal,
+        });
+        return openAICompletionJson(result, body.model);
+      }),
+      {
+        operation: "openai.chatCompletions",
+        mapError: (err) => mapOpenAIRouteError(err),
+      },
+    );
   }
 
-  const { model, rules, reservation } = preflightResult;
+  // --- Streaming: Effect prep only; SSE stays at HTTP boundary ---
+  const prepExit = await getAppRuntime().runPromiseExit(prep, {
+    signal: abortSignal,
+  });
+  if (Exit.isFailure(prepExit)) {
+    const failures = [...Cause.failures(prepExit.cause)];
+    return mapExitToHttpResponse(
+      prepExit,
+      c,
+      {
+        surface: "openai",
+        operation: "openai.chatCompletions.streamPrep",
+        mapError: (err) => mapOpenAIRouteError(err),
+      },
+      failures,
+    );
+  }
+
+  const { ctx, request, model, rules, reservation } = prepExit.value;
   const reservedMinor = reservation?.reservedMinor ?? 0;
   const actor = actorForChatContext(ctx);
   const start = Date.now();
-  const gatewayRequestId = newGatewayRequestId();
-
-  if (!stream) {
-    try {
-      const outcome = await callWithFallback({ orgId, model, request });
-      const durationMs = Date.now() - start;
-      const charges = computeCharges({ entry: outcome.entry, model, usage: outcome.response.usage });
-      // Internal management calls are not billed — they record usage for
-      // analytics only (priceMinor 0). Attributed + customer paths bill
-      // normally via the resolved customer.
-      const priceMinor = ctx.kind === "management_internal" ? 0 : charges.priceMinor;
-      // Business settle failures enqueue outbox (return settled:false).
-      // Enqueue failures throw and become 502 — never log-only free settle.
-      await settleUsageOrOutbox({
-        orgId,
-        actor,
-        model,
-        entry: outcome.entry,
-        provider: outcome.provider,
-        protocol: "openai",
-        response: outcome.response,
-        providerRequestId: outcome.response.providerRequestId,
-        gatewayRequestId,
-        status: 200,
-        durationMs,
-        rules,
-        priceMinorOverride: priceMinor,
-        occurredAt: new Date(start),
-        reservedMinor,
-      });
-
-      const r = outcome.response;
-      return c.json({
-        id: r.id,
-        object: "chat.completion",
-        created: Math.floor(Date.now() / 1000),
-        model: body.model,
-        choices: r.choices.map((ch) => ({
-          index: ch.index,
-          message: {
-            role: ch.message.role,
-            content: ch.message.content,
-            tool_calls: ch.message.toolCalls,
-          },
-          finish_reason: ch.finishReason,
-        })),
-        usage: {
-          prompt_tokens: r.usage.promptTokens,
-          completion_tokens: r.usage.completionTokens,
-          total_tokens: r.usage.totalTokens,
-          ...(r.usage.reasoningTokens !== undefined ? { reasoning_tokens: r.usage.reasoningTokens } : {}),
-          ...(r.usage.cacheReadTokens !== undefined ? { prompt_tokens_details: { cached_tokens: r.usage.cacheReadTokens } } : {}),
-        },
-      });
-    } catch (err) {
-      await releasePreFlightReservation(reservation);
-      if (err instanceof BillingError) {
-        return c.json(formatOpenAIError(err.code, err.message, err.extra), err.status as 400 | 402 | 403 | 404 | 429 | 502);
-      }
-      return c.json(formatOpenAIError("upstream_error", err instanceof Error ? err.message : "upstream failed"), 502 as 502);
-    }
-  }
+  const priceMinorOverride =
+    ctx.kind === "management_internal" ? 0 : undefined;
 
   c.header("Content-Type", "text/event-stream");
   c.header("Cache-Control", "no-cache");
@@ -323,46 +354,99 @@ publicOpenAI.post("/v1/chat/completions", async (c) => {
   const id = `chatcmpl-${Date.now().toString(36)}`;
   const created = Math.floor(Date.now() / 1000);
 
-  let promptTokens = 0;
-  let completionTokens = 0;
-  let reasoningTokens = 0;
-  let cacheReadTokens = 0;
-  let cacheWriteTokens = 0;
-  /** Provider-reported total from chunk.usage (may exceed prompt+completion). */
-  let reportedTotalTokens: number | undefined;
-  let cacheAccounting = cacheAccountingForProtocol("openai");
-  let finishReason = "stop";
-  let activeEntry: import("@tokenpanel/db").ModelEntryDoc | null = null;
-  // Retain the yielded ProviderDoc (do not re-fetch — concurrent delete would
-  // silently skip settlement/outbox).
-  let activeProvider: import("@tokenpanel/db").ProviderDoc | null = null;
-  /** Only true when adapter observed OpenAI `[DONE]` (not truncated EOF). */
-  let streamComplete = false;
-  /** Exactly one terminal error event per stream (yielded, truncation, or catch). */
-  let terminalErrorEmitted = false;
+  const session = openStreamGeneration({
+    orgId,
+    model,
+    request,
+    actor,
+    rules,
+    protocol: "openai",
+    reservation,
+    reservedMinor,
+    startedAtMs: start,
+    priceMinorOverride,
+    signal: abortSignal,
+  });
 
-  const streamGen = streamWithFallback({ orgId, model, request });
+  let activeEntry: ModelEntryDoc | null = null;
+  let activeProvider: ProviderDoc | null = null;
+  const usage = emptyStreamUsage("openai");
+  let terminalErrorEmitted = false;
+  let clientDisconnected = false;
+
+  const onAbort = () => {
+    clientDisconnected = true;
+    session.noteInterrupt();
+  };
+  abortSignal.addEventListener("abort", onAbort, { once: true });
+
   const encoder = new TextEncoder();
 
   const body$ = new ReadableStream({
     async start(controller) {
       const enqueue = (obj: unknown) => {
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify(obj)}\n\n`));
+        if (clientDisconnected) return;
+        try {
+          controller.enqueue(
+            encoder.encode(`data: ${JSON.stringify(obj)}\n\n`),
+          );
+        } catch {
+          clientDisconnected = true;
+        }
       };
       const enqueueTerminalError = (code: string, message: string) => {
-        if (terminalErrorEmitted) return;
+        if (terminalErrorEmitted || clientDisconnected) return;
         terminalErrorEmitted = true;
-        enqueue(formatOpenAIError(code, message));
+        enqueue(formatOpenAIError(code, publicMessageForCode(code, message)));
+      };
+      const enqueueAppError = (err: unknown) => {
+        const classified = isAppError(err)
+          ? err
+          : classifyGenerationFailure(err);
+        if (isAppError(classified) && !terminalErrorEmitted) {
+          terminalErrorEmitted = true;
+          try {
+            controller.enqueue(
+              encoder.encode(openAISseTerminalFromAppError(classified)),
+            );
+          } catch {
+            clientDisconnected = true;
+          }
+        } else if (!terminalErrorEmitted) {
+          enqueueTerminalError(
+            "upstream_error",
+            SAFE_MESSAGES.upstream_error,
+          );
+        }
       };
       try {
-        for await (const { entry, provider, chunk } of streamGen) {
+        for await (const event of session.iterate()) {
+          if (clientDisconnected || abortSignal.aborted) {
+            session.noteInterrupt();
+            break;
+          }
+          if (event.kind !== "chunk") {
+            if (event.kind === "terminal_fail" && !clientDisconnected) {
+              enqueueAppError(
+                classifyGenerationFailure(event.err, {
+                  streamCommitted: event.streamCommitted,
+                }),
+              );
+            }
+            continue;
+          }
+          const { entry, provider, chunk } = event;
           activeEntry = entry;
           activeProvider = provider;
+          session.noteChunk(entry.id, chunk);
           if (chunk.type === "delta") {
             const delta: Record<string, unknown> = {};
-            if (chunk.delta?.content !== undefined) delta.content = chunk.delta.content;
-            if (chunk.delta?.reasoning !== undefined) delta.reasoning_content = chunk.delta.reasoning;
-            if (chunk.delta?.toolCalls !== undefined) delta.tool_calls = chunk.delta.toolCalls;
+            if (chunk.delta?.content !== undefined)
+              delta.content = chunk.delta.content;
+            if (chunk.delta?.reasoning !== undefined)
+              delta.reasoning_content = chunk.delta.reasoning;
+            if (chunk.delta?.toolCalls !== undefined)
+              delta.tool_calls = chunk.delta.toolCalls;
             enqueue({
               id,
               object: "chat.completion.chunk",
@@ -371,145 +455,96 @@ publicOpenAI.post("/v1/chat/completions", async (c) => {
               choices: [{ index: 0, delta, finish_reason: null }],
             });
           } else if (chunk.type === "done") {
-            if (chunk.streamComplete) streamComplete = true;
-            if (chunk.finishReason) finishReason = chunk.finishReason;
-            if (chunk.streamComplete && chunk.usage) {
-              promptTokens = chunk.usage.promptTokens;
-              completionTokens = chunk.usage.completionTokens;
-              reasoningTokens = chunk.usage.reasoningTokens ?? 0;
-              cacheReadTokens = chunk.usage.cacheReadTokens ?? 0;
-              cacheWriteTokens = chunk.usage.cacheWriteTokens ?? 0;
-              // Retain provider total (e.g. 10+5 with total 20) for the normalizer.
-              reportedTotalTokens =
-                typeof chunk.usage.totalTokens === "number"
-                  ? chunk.usage.totalTokens
-                  : undefined;
-              if (
-                chunk.usage.cacheAccounting === "subset" ||
-                chunk.usage.cacheAccounting === "additive"
-              ) {
-                cacheAccounting = chunk.usage.cacheAccounting;
-              }
-            }
+            applyDoneUsage(usage, chunk);
           } else if (chunk.type === "error") {
             enqueueTerminalError(
               "upstream_error",
-              chunk.error?.message ?? "stream error",
+              chunk.error?.message ?? SAFE_MESSAGES.upstream_error,
             );
           }
         }
-        // Mode-correct total: prefer provider total, never undercount additive cache.
-        // null = overflow / unsafe — fail-closed for settlement below.
-        const normalizedTotal = normalizeProcessedTotalTokens({
-          promptTokens,
-          completionTokens,
-          cacheReadTokens,
-          cacheWriteTokens,
-          totalTokens: reportedTotalTokens,
-          cacheAccounting,
-        });
-        if (!streamComplete) {
-          // Truncated / failed stream: emit error only — never finish_reason
-          // "error" + [DONE]. Skip if an upstream error chunk already terminalled.
+        if (clientDisconnected || abortSignal.aborted) {
+          // No fabricated interruption SSE body (13.6).
+        } else if (!usage.streamComplete) {
           enqueueTerminalError(
             "stream_truncated",
             "Upstream stream ended without a terminal event; response may be incomplete",
           );
         } else {
           enqueue({
-            id, object: "chat.completion.chunk", created, model: body.model,
-            choices: [{ index: 0, delta: {}, finish_reason: finishReason }],
+            id,
+            object: "chat.completion.chunk",
+            created,
+            model: body.model,
+            choices: [
+              { index: 0, delta: {}, finish_reason: usage.finishReason },
+            ],
           });
-          if (promptTokens > 0 || completionTokens > 0) {
+          if (usage.promptTokens > 0 || usage.completionTokens > 0) {
+            const total =
+              usage.reportedTotalTokens !== undefined
+                ? usage.reportedTotalTokens
+                : usage.promptTokens + usage.completionTokens;
             enqueue({
-              id, object: "chat.completion.chunk", created, model: body.model,
+              id,
+              object: "chat.completion.chunk",
+              created,
+              model: body.model,
               choices: [],
               usage: {
-                prompt_tokens: promptTokens,
-                completion_tokens: completionTokens,
-                total_tokens: normalizedTotal ?? 0,
-                ...(reasoningTokens > 0 ? { reasoning_tokens: reasoningTokens } : {}),
-                ...(cacheReadTokens > 0 ? { prompt_tokens_details: { cached_tokens: cacheReadTokens } } : {}),
+                prompt_tokens: usage.promptTokens,
+                completion_tokens: usage.completionTokens,
+                total_tokens: total,
+                ...(usage.reasoningTokens > 0
+                  ? { reasoning_tokens: usage.reasoningTokens }
+                  : {}),
+                ...(usage.cacheReadTokens > 0
+                  ? {
+                      prompt_tokens_details: {
+                        cached_tokens: usage.cacheReadTokens,
+                      },
+                    }
+                  : {}),
               },
             });
           }
-          controller.enqueue(encoder.encode("data: [DONE]\n\n"));
-        }
-      } catch (err) {
-        // Error path: no success-style finish_reason / [DONE]. One terminal only.
-        enqueueTerminalError(
-          "upstream_error",
-          err instanceof Error ? err.message : "stream failed",
-        );
-      } finally {
-        controller.close();
-        const durationMs = Date.now() - start;
-        const normalizedTotal = normalizeProcessedTotalTokens({
-          promptTokens,
-          completionTokens,
-          cacheReadTokens,
-          cacheWriteTokens,
-          totalTokens: reportedTotalTokens,
-          cacheAccounting,
-        });
-        const usage = {
-          promptTokens,
-          completionTokens,
-          reasoningTokens,
-          cacheReadTokens,
-          cacheWriteTokens,
-          totalTokens: normalizedTotal ?? 0,
-          cacheAccounting,
-        };
-        // Always settle or outbox when a provider attempt yielded context.
-        if (activeEntry && activeProvider) {
           try {
-            const charges = computeCharges({
-              entry: activeEntry,
-              model,
-              usage,
-              cacheAccounting,
-            });
-            const priceMinor =
-              ctx.kind === "management_internal" ? 0 : charges.priceMinor;
-            const hasAuthoritativeUsage =
-              streamComplete &&
-              normalizedTotal !== null &&
-              (promptTokens > 0 || completionTokens > 0);
-            await settleUsageOrOutbox({
-              orgId,
-              actor,
-              model,
-              entry: activeEntry,
-              provider: activeProvider,
-              protocol: "openai",
-              gatewayRequestId,
-              providerUsage: hasAuthoritativeUsage
-                ? { status: "reported", usage }
-                : {
-                    status: "missing",
-                    reason: !streamComplete
-                      ? "stream_truncated"
-                      : normalizedTotal === null
-                        ? "usage_overflow"
-                        : "stream_usage_absent",
-                  },
-              status: 200,
-              durationMs,
-              rules,
-              priceMinorOverride: priceMinor,
-              occurredAt: new Date(start),
-              reservedMinor,
-            });
-          } catch (settleErr) {
-            console.error("[chat/completions] stream settlement/outbox failed:", settleErr);
+            controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+          } catch {
+            clientDisconnected = true;
           }
         }
+      } catch (err) {
+        if (err instanceof Error && err.name === "AbortError") {
+          session.noteInterrupt();
+        } else if (!clientDisconnected) {
+          enqueueAppError(err);
+        }
+      } finally {
+        abortSignal.removeEventListener("abort", onAbort);
+        try {
+          controller.close();
+        } catch {
+          /* already closed */
+        }
+        // Pre-commit: release reservation. Post-commit: settle/outbox.
+        await session.finalize({
+          activeEntry,
+          activeProvider,
+          usage,
+          swallowSettleErrors: true,
+        });
       }
+    },
+    cancel() {
+      clientDisconnected = true;
+      session.noteInterrupt();
     },
   });
 
   return new Response(body$, { headers: c.res.headers, status: 200 });
 });
+
+void formatOpenAIErrorBody;
 
 export default publicOpenAI;

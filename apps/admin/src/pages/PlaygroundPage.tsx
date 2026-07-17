@@ -70,7 +70,12 @@ interface StreamState {
     provider: { providerId: string; upstreamModelId: string; sdkType: string } | null;
     cost: { costMinor: number; priceMinor: number; currency: string } | null;
     billed: boolean;
-    usage: { promptTokens: number; completionTokens: number; totalTokens: number; reasoningTokens?: number } | null;
+    usage: {
+      promptTokens: number;
+      completionTokens: number;
+      totalTokens: number;
+      reasoningTokens?: number | undefined;
+    } | null;
   };
 }
 

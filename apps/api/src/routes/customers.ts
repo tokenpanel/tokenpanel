@@ -1,529 +1,300 @@
 import { Hono } from "hono";
-import { z } from "zod";
-import { zValidator } from "@hono/zod-validator";
+import { Effect } from "effect";
 import { ObjectId } from "mongodb";
 import {
-  getDb,
-  getClient,
   customerCreateInput,
   customerUpdateInput,
-  type CustomerDoc,
-  type BalanceAdjustmentDoc,
-  type SubscriptionDoc,
-  type SubscriptionPlanDoc,
 } from "@tokenpanel/db";
-import type { Document, Filter } from "mongodb";
-import { requireAuth, requireRole, type AuthVariables } from "../middleware/auth.ts";
-import { isDuplicateKeyError } from "../lib/crypto.ts";
-import { parseObjectIdParam, escapeRegExp } from "./route-utils.ts";
-import { addInterval } from "../services/subscription-interval.ts";
+import type { AuthVariables } from "../middleware/auth.ts";
+import { requireAuth, requireRole } from "../middleware/auth.ts";
+import {
+  listCustomers,
+  getCustomer,
+  createCustomer,
+  updateCustomer,
+  closeCustomer,
+  adjustCustomerBalance,
+  listBalanceHistory,
+} from "../domains/customers/operations.ts";
+import {
+  subscribeCustomer,
+  getActiveSubscription,
+  listCustomerLimits,
+  listCustomerBudgets,
+} from "../domains/plans/operations.ts";
+import { customerUsage } from "../domains/analytics/operations.ts";
+import { runAdminEffect } from "../http/adapters/boundary.ts";
+import { sValidator } from "../http/validation/validator.ts";
+import {
+  CustomerListQuery,
+  HistoryQuery,
+  UsageDateRangeQuery,
+} from "../http/validation/query.ts";
+import { withParseApi } from "../http/validation/with-parse-api.ts";
+import { isAppError } from "../errors/families.ts";
+import { Schema } from "effect";
+import { SafeInt, CurrencyCode, exactOptional, maxString } from "@tokenpanel/contracts/effect";
 
-export { parseObjectIdParam };
-export { addInterval };
+export const customerListQuery = withParseApi(CustomerListQuery);
+export const historyQuery = withParseApi(HistoryQuery);
+export const usageDateRangeQuery = withParseApi(UsageDateRangeQuery);
+
+const BalanceAdjustBody = Schema.Struct({
+  amountMinor: SafeInt,
+  currency: CurrencyCode,
+  reason: exactOptional(
+    Schema.Literal("topup", "adjustment", "refund"),
+  ),
+  note: exactOptional(maxString(280)),
+});
+export const balanceAdjustBody = withParseApi(BalanceAdjustBody);
+
+const SubscribeBody = Schema.Struct({
+  planId: Schema.String.pipe(Schema.minLength(1)),
+});
+export const subscribeBody = withParseApi(SubscribeBody);
+
+export { parseObjectIdParam } from "./route-utils.ts";
+export { addInterval } from "../domains/plans/interval.ts";
 
 const app = new Hono<{ Variables: AuthVariables }>();
 
 app.use("*", requireAuth);
 
-/**
- * Sentinel thrown inside the balance-write transaction when the
- * findOneAndUpdate matches no row (customer deleted between the existence
- * check and the txn). Aborts the txn so the ledger insert rolls back; the
- * caller maps it to a 404.
- */
-class BalanceCustomerGone extends Error {}
-
-const listQuerySchema = z.object({
-  limit: z.coerce.number().int().positive().max(500).default(50),
-  skip: z.coerce.number().int().min(0).default(0),
-  status: z.enum(["active", "suspended", "closed"]).optional(),
-  q: z.string().max(160).optional(),
-});
-
-app.get("/", zValidator("query", listQuerySchema), async (c) => {
+app.get("/", sValidator("query", customerListQuery), async (c) => {
   const orgId = c.get("orgId");
   const q = c.req.valid("query");
-  const db = await getDb();
-
-  const filter: Filter<CustomerDoc> = { organizationId: orgId };
-  if (q.status !== undefined) filter["status"] = q.status;
-  if (q.q !== undefined && q.q.length > 0) {
-    const esc = escapeRegExp(q.q);
-    filter["$or"] = [
-      { name: { $regex: esc, $options: "i" } },
-      { email: { $regex: esc, $options: "i" } },
-    ];
-  }
-
-  const [items, total] = await Promise.all([
-    db.customers
-      .find(filter)
-      .sort({ createdAt: -1 })
-      .skip(q.skip)
-      .limit(q.limit)
-      .toArray(),
-    db.customers.countDocuments(filter),
-  ]);
-
-  return c.json({ items: items as CustomerDoc[], total });
+  return runAdminEffect(
+    c,
+    listCustomers({
+      organizationId: orgId.toHexString(),
+      ...(q.status !== undefined ? { status: q.status } : {}),
+      ...(q.q !== undefined ? { q: q.q } : {}),
+      limit: q.limit,
+      skip: q.skip,
+    }),
+    { operation: "listCustomers" },
+  );
 });
 
-app.post("/", requireRole("admin"), zValidator("json", customerCreateInput), async (c) => {
-  const orgId = c.get("orgId");
-  const body = c.req.valid("json");
-  const db = await getDb();
-
-  const now = new Date();
-  const starting = body.startingBalance ?? { amountMinor: 0, currency: "USD" };
-  const startingBalance = {
-    amountMinor: starting.amountMinor,
-    currency: starting.currency,
-    reservedMinor: 0,
-  };
-
-  const or: Filter<CustomerDoc>[] = [];
-  if (body.externalId !== undefined) or.push({ externalId: body.externalId });
-  if (body.email !== undefined) or.push({ email: body.email });
-  if (or.length > 0) {
-    const conflict = await db.customers.findOne({
-      organizationId: orgId,
-      $or: or,
-    } as Filter<CustomerDoc>);
-    if (conflict) {
-      return c.json({ error: "duplicate_external_id_or_email" }, 409);
-    }
-  }
-
-  const customerId = new ObjectId();
-  const doc: CustomerDoc = {
-    _id: customerId,
-    organizationId: orgId,
-    externalId: body.externalId ?? null,
-    name: body.name,
-    email: body.email ?? null,
-    balance: startingBalance,
-    status: "active",
-    metadata: body.metadata ?? {},
-    createdAt: now,
-    updatedAt: now,
-  };
-
-  // Non-zero opening balance must land in the ledger in the same transaction
-  // so balance never diverges from balance_adjustments.
-  const session = getClient().startSession();
-  let created: CustomerDoc | null = null;
-  try {
-    await session.withTransaction(async () => {
-      await db.customers.insertOne(doc, { session });
-      if (startingBalance.amountMinor !== 0) {
-        const adjustment: BalanceAdjustmentDoc = {
-          _id: new ObjectId(),
-          organizationId: orgId,
-          customerId,
-          amountMinor: startingBalance.amountMinor,
-          currency: startingBalance.currency,
-          reason: "topup",
-          usageRecordId: null,
-          note: "opening balance",
-          occurredAt: now,
-          createdAt: now,
-          updatedAt: now,
-        };
-        await db.balanceAdjustments.insertOne(adjustment, { session });
-      }
-      created = doc;
-    });
-  } catch (err) {
-    if (isDuplicateKeyError(err)) {
-      return c.json({ error: "duplicate_external_id_or_email" }, 409);
-    }
-    throw err;
-  } finally {
-    await session.endSession();
-  }
-  if (!created) {
-    return c.json({ error: "insert_failed" }, 500);
-  }
-  return c.json(created as CustomerDoc, 201);
-});
+app.post(
+  "/",
+  requireRole("admin"),
+  sValidator("json", customerCreateInput),
+  async (c) => {
+    const orgId = c.get("orgId");
+    const body = c.req.valid("json");
+    return runAdminEffect(
+      c,
+      createCustomer({
+        organizationId: orgId.toHexString(),
+        name: body.name,
+        externalId: body.externalId,
+        email: body.email,
+        startingBalance: body.startingBalance,
+        metadata: body.metadata,
+      }),
+      { operation: "createCustomer", successStatus: 201 },
+    );
+  },
+);
 
 app.get("/:id", async (c) => {
   const orgId = c.get("orgId");
-  const oid = parseObjectIdParam(c.req.param("id"));
-  if (!oid) return c.json({ error: "not_found" }, 404);
-  const db = await getDb();
-  const doc = await db.customers.findOne({ _id: oid, organizationId: orgId });
-  if (!doc) return c.json({ error: "not_found" }, 404);
-  return c.json(doc as CustomerDoc);
-});
-
-app.patch("/:id", requireRole("admin"), zValidator("json", customerUpdateInput), async (c) => {
-  const orgId = c.get("orgId");
-  const oid = parseObjectIdParam(c.req.param("id"));
-  if (!oid) return c.json({ error: "not_found" }, 404);
-  const body = c.req.valid("json");
-  const db = await getDb();
-
-  const update: Record<string, unknown> = { updatedAt: new Date() };
-  for (const [k, v] of Object.entries(body)) {
-    if (v === undefined) continue;
-    update[k] = v;
-  }
-
-  if (body.externalId !== undefined || body.email !== undefined) {
-    const or: Filter<CustomerDoc>[] = [];
-    if (body.externalId !== undefined) or.push({ externalId: body.externalId });
-    if (body.email !== undefined) or.push({ email: body.email });
-    const dup = await db.customers.findOne({
-      organizationId: orgId,
-      _id: { $ne: oid },
-      $or: or,
-    } as Filter<CustomerDoc>);
-    if (dup) return c.json({ error: "duplicate_external_id_or_email" }, 409);
-  }
-
-  const updated = await db.customers.findOneAndUpdate(
-    { _id: oid, organizationId: orgId },
-    { $set: update },
-    { returnDocument: "after" },
+  const id = c.req.param("id");
+  if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
+  return runAdminEffect(
+    c,
+    getCustomer({ organizationId: orgId.toHexString(), customerId: id }),
+    { operation: "getCustomer" },
   );
-  if (!updated) return c.json({ error: "not_found" }, 404);
-  return c.json(updated as CustomerDoc);
 });
+
+app.patch(
+  "/:id",
+  requireRole("admin"),
+  sValidator("json", customerUpdateInput),
+  async (c) => {
+    const orgId = c.get("orgId");
+    const id = c.req.param("id");
+    if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
+    const body = c.req.valid("json");
+    return runAdminEffect(
+      c,
+      updateCustomer({
+        organizationId: orgId.toHexString(),
+        customerId: id,
+        patch: body,
+      }),
+      { operation: "updateCustomer" },
+    );
+  },
+);
 
 app.delete("/:id", requireRole("admin"), async (c) => {
   const orgId = c.get("orgId");
-  const oid = parseObjectIdParam(c.req.param("id"));
-  if (!oid) return c.json({ error: "not_found" }, 404);
-  const db = await getDb();
-  const updated = await db.customers.findOneAndUpdate(
-    { _id: oid, organizationId: orgId },
-    { $set: { status: "closed", updatedAt: new Date() } },
-    { returnDocument: "after" },
+  const id = c.req.param("id");
+  if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
+  return runAdminEffect(
+    c,
+    closeCustomer({
+      organizationId: orgId.toHexString(),
+      customerId: id,
+    }),
+    { operation: "closeCustomer" },
   );
-  if (!updated) return c.json({ error: "not_found" }, 404);
-  return c.json({ ok: true, status: updated.status });
-});
-
-const balanceBodySchema = z.object({
-  amountMinor: z.number().int(),
-  currency: z.string().length(3).regex(/^[A-Z]{3}$/),
-  reason: z.enum(["topup", "adjustment", "refund"]).default("topup"),
-  note: z.string().max(280).optional(),
 });
 
 app.post(
   "/:id/balance",
   requireRole("admin"),
-  zValidator("json", balanceBodySchema),
+  sValidator("json", balanceAdjustBody),
   async (c) => {
     const orgId = c.get("orgId");
-    const oid = parseObjectIdParam(c.req.param("id"));
-    if (!oid) return c.json({ error: "not_found" }, 404);
+    const id = c.req.param("id");
+    if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
     const body = c.req.valid("json");
-    const db = await getDb();
-
-    const customer = await db.customers.findOne({
-      _id: oid,
-      organizationId: orgId,
-    });
-    if (!customer) return c.json({ error: "not_found" }, 404);
-
-    // Never relabel an existing nonzero balance by overwriting currency.
-    // amountMinor: 0 + different currency would otherwise turn USD into EUR
-    // without conversion.
-    if (customer.balance.currency !== body.currency) {
-      if (customer.balance.amountMinor !== 0) {
-        return c.json(
-          {
-            error: "currency_mismatch",
-            balanceCurrency: customer.balance.currency,
-            requestCurrency: body.currency,
-          },
-          409,
-        );
-      }
-    }
-
-    const now = new Date();
-    const adjustment: BalanceAdjustmentDoc = {
-      _id: new ObjectId(),
-      organizationId: orgId,
-      customerId: oid,
-      amountMinor: body.amountMinor,
-      currency: body.currency,
-      reason: body.reason,
-      usageRecordId: null,
-      note: body.note ?? null,
-      occurredAt: now,
-      createdAt: now,
-      updatedAt: now,
-    };
-
-    // Insert the ledger entry and mutate the balance inside ONE transaction
-    // so a transient failure (or a customer deleted mid-call) cannot leave a
-    // ledger row without the matching balance mutation, or vice versa.
-    const session = getClient().startSession();
-    let updated: CustomerDoc | null = null;
-    try {
-      await session.withTransaction(async () => {
-        await db.balanceAdjustments.insertOne(adjustment, { session });
-        const setFields: Record<string, unknown> = { updatedAt: now };
-        if (
-          customer.balance.currency !== body.currency &&
-          customer.balance.amountMinor === 0
-        ) {
-          setFields["balance.currency"] = body.currency;
-        }
-        const res = await db.customers.findOneAndUpdate(
-          {
-            _id: oid,
-            organizationId: orgId,
-            "balance.currency": customer.balance.currency,
-          },
-          {
-            $inc: { "balance.amountMinor": body.amountMinor },
-            $set: setFields,
-          },
-          { returnDocument: "after", session },
-        );
-        if (!res) throw new BalanceCustomerGone();
-        updated = res as CustomerDoc;
-      });
-    } catch (err) {
-      if (!(err instanceof BalanceCustomerGone)) throw err;
-    } finally {
-      await session.endSession();
-    }
-    if (!updated) return c.json({ error: "not_found" }, 404);
-
-    return c.json({ customer: updated, adjustment }, 201);
+    return runAdminEffect(
+      c,
+      adjustCustomerBalance({
+        organizationId: orgId.toHexString(),
+        customerId: id,
+        amountMinor: body.amountMinor,
+        currency: body.currency,
+        reason: body.reason,
+        note: body.note,
+      }),
+      {
+        operation: "adjustCustomerBalance",
+        mapError: (err) => {
+          if (
+            isAppError(err) &&
+            err._tag === "InsufficientBalanceError" &&
+            err.code === "currency_mismatch"
+          ) {
+            return {
+              status: 409,
+              body: {
+                error: "currency_mismatch",
+                balanceCurrency: err.balanceCurrency,
+                requestCurrency: err.currency,
+              },
+              headers: {},
+            };
+          }
+          return null;
+        },
+      },
+    );
   },
 );
-
-const historyQuerySchema = z.object({
-  limit: z.coerce.number().int().positive().max(500).default(50),
-  skip: z.coerce.number().int().min(0).default(0),
-});
 
 app.get(
-  "/:id/balance-history",
-  zValidator("query", historyQuerySchema),
+  "/:id/balance/history",
+  sValidator("query", historyQuery),
   async (c) => {
     const orgId = c.get("orgId");
-    const oid = parseObjectIdParam(c.req.param("id"));
-    if (!oid) return c.json({ error: "not_found" }, 404);
+    const id = c.req.param("id");
+    if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
     const q = c.req.valid("query");
-    const db = await getDb();
-
-    const filter = { organizationId: orgId, customerId: oid };
-    const [items, total] = await Promise.all([
-      db.balanceAdjustments
-        .find(filter)
-        .sort({ occurredAt: -1, _id: -1 })
-        .skip(q.skip)
-        .limit(q.limit)
-        .toArray(),
-      db.balanceAdjustments.countDocuments(filter),
-    ]);
-
-    return c.json({
-      items: items as BalanceAdjustmentDoc[],
-      total,
-    });
+    return runAdminEffect(
+      c,
+      listBalanceHistory({
+        organizationId: orgId.toHexString(),
+        customerId: id,
+        limit: q.limit,
+        skip: q.skip,
+      }),
+      { operation: "listBalanceHistory" },
+    );
   },
 );
 
-const subscribeBodySchema = z.object({
-  planId: z.string().min(1).max(64),
-});
-
 app.post(
-  "/:id/subscribe",
+  "/:id/subscription",
   requireRole("admin"),
-  zValidator("json", subscribeBodySchema),
+  sValidator("json", subscribeBody),
   async (c) => {
     const orgId = c.get("orgId");
-    const oid = parseObjectIdParam(c.req.param("id"));
-    if (!oid) return c.json({ error: "not_found" }, 404);
+    const id = c.req.param("id");
+    if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
     const body = c.req.valid("json");
-    const db = await getDb();
-
     if (!ObjectId.isValid(body.planId)) {
       return c.json({ error: "plan_not_found" }, 404);
     }
-    const planId = new ObjectId(body.planId);
-
-    const customer = await db.customers.findOne({
-      _id: oid,
-      organizationId: orgId,
-    });
-    if (!customer) return c.json({ error: "not_found" }, 404);
-
-    const plan = await db.subscriptionPlans.findOne({
-      _id: planId,
-      organizationId: orgId,
-    });
-    if (!plan) return c.json({ error: "plan_not_found" }, 404);
-    if (!plan.active) return c.json({ error: "plan_not_active" }, 409);
-
-    const existing = await db.subscriptions.findOne({
-      organizationId: orgId,
-      customerId: oid,
-      status: "active",
-    });
-    if (existing) {
-      return c.json(
-        { error: "subscription_already_active", subscriptionId: existing._id },
-        409,
-      );
-    }
-
-    const now = new Date();
-    const periodEnd = addInterval(
-      now,
-      plan.interval,
-      plan.intervalCount,
+    return runAdminEffect(
+      c,
+      subscribeCustomer({
+        organizationId: orgId.toHexString(),
+        customerId: id,
+        planId: body.planId,
+      }),
+      { operation: "subscribeCustomer", successStatus: 201 },
     );
-
-    const subscription: SubscriptionDoc = {
-      _id: new ObjectId(),
-      organizationId: orgId,
-      customerId: oid,
-      planId,
-      status: "active",
-      periodStart: now,
-      periodEnd,
-      canceledAt: null,
-      createdAt: now,
-      updatedAt: now,
-    };
-
-    try {
-      const insertResult = await db.subscriptions.insertOne(subscription);
-      const created = await db.subscriptions.findOne({
-        _id: insertResult.insertedId,
-      });
-      if (!created) return c.json({ error: "insert_failed" }, 500);
-      return c.json(created as SubscriptionDoc, 201);
-    } catch (err) {
-      // Unique partial index on active status is the race safety net.
-      if (isDuplicateKeyError(err)) {
-        return c.json({ error: "subscription_already_active" }, 409);
-      }
-      throw err;
-    }
   },
 );
 
 app.get("/:id/subscription", async (c) => {
   const orgId = c.get("orgId");
-  const oid = parseObjectIdParam(c.req.param("id"));
-  if (!oid) return c.json({ error: "not_found" }, 404);
-  const db = await getDb();
-
-  const subscription = await db.subscriptions.findOne(
-    {
-      organizationId: orgId,
-      customerId: oid,
-      status: "active",
-    },
-    { sort: { createdAt: -1 } },
+  const id = c.req.param("id");
+  if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
+  return runAdminEffect(
+    c,
+    getActiveSubscription({
+      organizationId: orgId.toHexString(),
+      customerId: id,
+    }),
+    { operation: "getActiveSubscription" },
   );
-  if (!subscription) return c.json({ error: "not_found" }, 404);
-
-  const plan = await db.subscriptionPlans.findOne({
-    _id: subscription.planId,
-    organizationId: orgId,
-  });
-
-  return c.json({
-    subscription: subscription as SubscriptionDoc,
-    plan: plan as SubscriptionPlanDoc | null,
-  });
 });
 
-const usageQuerySchema = z.object({
-  from: z.string().datetime().optional(),
-  to: z.string().datetime().optional(),
-});
-
-app.get("/:id/usage", zValidator("query", usageQuerySchema), async (c) => {
+app.get("/:id/limits", async (c) => {
   const orgId = c.get("orgId");
-  const oid = parseObjectIdParam(c.req.param("id"));
-  if (!oid) return c.json({ error: "not_found" }, 404);
-  const q = c.req.valid("query");
-  const db = await getDb();
-
-  const match: Record<string, unknown> = {
-    organizationId: orgId,
-    customerId: oid,
-  };
-  const occurredAt: Record<string, unknown> = {};
-  if (q.from) occurredAt["$gte"] = new Date(q.from);
-  if (q.to) occurredAt["$lte"] = new Date(q.to);
-  if (Object.keys(occurredAt).length > 0) match["occurredAt"] = occurredAt;
-
-  const pipeline: Document[] = [
-    { $match: match },
-    {
-      $group: {
-        _id: "$modelAliasId",
-        requests: { $sum: 1 },
-        tokens: { $sum: "$totalTokens" },
-        costMinor: { $sum: "$costMinor" },
-        priceMinor: { $sum: "$priceMinor" },
-        currency: { $first: "$currency" },
-      },
-    },
-    { $sort: { costMinor: -1 } },
-  ];
-
-  const rows = await db.usageRecords
-    .aggregate(pipeline)
-    .toArray();
-
-  type AggRow = {
-    _id: string;
-    requests: number;
-    tokens: number;
-    costMinor: number;
-    priceMinor: number;
-    currency: string;
-  };
-  const typedRows = (rows as unknown as AggRow[]).filter(
-    (r): r is AggRow => r !== null && typeof r === "object",
+  const id = c.req.param("id");
+  if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
+  return runAdminEffect(
+    c,
+    listCustomerLimits({
+      organizationId: orgId.toHexString(),
+      customerId: id,
+    }).pipe(Effect.map((items) => ({ items }))),
+    { operation: "listCustomerLimits" },
   );
-
-  let totalRequests = 0;
-  let totalTokens = 0;
-  let totalCostMinor = 0;
-  let totalPriceMinor = 0;
-  const currency =
-    typedRows.length > 0 ? (typedRows[0]?.currency ?? "USD") : "USD";
-
-  const byModel = typedRows.map((r) => {
-    totalRequests += r.requests;
-    totalTokens += r.tokens;
-    totalCostMinor += r.costMinor;
-    totalPriceMinor += r.priceMinor;
-    return {
-      modelAliasId: r._id,
-      requests: r.requests,
-      tokens: r.tokens,
-      costMinor: r.costMinor,
-      priceMinor: r.priceMinor,
-    };
-  });
-
-  return c.json({
-    totalRequests,
-    totalTokens,
-    totalCostMinor,
-    totalPriceMinor,
-    currency,
-    byModel,
-  });
 });
+
+app.get("/:id/budgets", async (c) => {
+  const orgId = c.get("orgId");
+  const id = c.req.param("id");
+  if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
+  return runAdminEffect(
+    c,
+    listCustomerBudgets({
+      organizationId: orgId.toHexString(),
+      customerId: id,
+    }).pipe(Effect.map((items) => ({ items }))),
+    { operation: "listCustomerBudgets" },
+  );
+});
+
+app.get(
+  "/:id/usage",
+  sValidator("query", usageDateRangeQuery),
+  async (c) => {
+    const orgId = c.get("orgId");
+    const id = c.req.param("id");
+    if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
+    const q = c.req.valid("query");
+    return runAdminEffect(
+      c,
+      customerUsage({
+        organizationId: orgId.toHexString(),
+        customerId: id,
+        from: q.from,
+        to: q.to,
+      }),
+      { operation: "customerUsage" },
+    );
+  },
+);
 
 export default app;

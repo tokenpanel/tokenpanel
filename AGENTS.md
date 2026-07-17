@@ -11,10 +11,10 @@ usage, customer balances, subscriptions, budgets, and rolling limits
 - **Runtime / package manager:** Bun only (`bun install`, `bun run`, `bun test`). No npm/node/yarn/pnpm.
 - **Monorepo:** Bun workspaces + Turborepo (`turbo.json`, `bun run build/dev/lint/typecheck`).
 - **Language:** TypeScript everywhere. `tsconfig.base.json` is the shared root; each package extends it. Strict mode, no `any`, no unchecked index access, no unused locals/params.
-- **Backend:** `apps/api` — Hono on `Bun.serve`, request validation via `@hono/zod-validator`.
+- **Backend:** `apps/api` — Hono on `Bun.serve`, request validation via Effect Schema + `sValidator` (Effect Schema Hono validator).
 - **Admin panel:** `apps/admin` — Vite + React 19 + TypeScript.
-- **Database:** `packages/db` — raw `mongodb` Node driver (no Mongoose). Every collection has a zod schema (Doc + CreateInput). Types flow: `z.infer` → `Collection<T>` → consumers. No `any` at the db boundary.
-- **Validation:** zod is the single source of truth for shapes, used both in `packages/db` (storage schemas) and `apps/api` (route validation).
+- **Database:** `packages/db` — raw `mongodb` Node driver (no Mongoose). Every collection has an Effect Schema (Doc + CreateInput). Types flow: `Schema.Schema.Type` → `Collection<T>` → consumers. No `any` at the db boundary.
+- **Validation:** Effect Schema is the single source of truth for shapes, used both in `packages/db` (storage schemas) and `apps/api` (route validation via `sValidator`).
 
 ### Layout
 
@@ -23,8 +23,8 @@ apps/
   api/        @tokenpanel/api     Hono backend (Bun.serve)
   admin/      @tokenpanel/admin   Vite + React admin panel
 packages/
-  contracts/  @tokenpanel/contracts  Browser-safe shared product contracts (Zod)
-  db/         @tokenpanel/db      MongoDB driver + zod schemas
+  contracts/  @tokenpanel/contracts  Browser-safe shared product contracts (Effect Schema)
+  db/         @tokenpanel/db      MongoDB driver + Effect Schema schemas
 tsconfig.base.json                shared TS config
 turbo.json                       task pipeline (build/dev/lint/typecheck/clean)
 ```
@@ -33,10 +33,10 @@ turbo.json                       task pipeline (build/dev/lint/typecheck/clean)
 
 - Workspace package names are scoped: `@tokenpanel/{api,admin,db,contracts}`.
 - Cross-package imports use `workspace:*` in `package.json` and path aliases in `tsconfig.json` (`@tokenpanel/db`, `@tokenpanel/contracts`).
-- **`@tokenpanel/contracts`**: pure TypeScript/Zod product contracts (model modality/status/metadata policy, management scopes). No env, I/O, Node, Mongo, or UI. Admin may import it; never import `@tokenpanel/db` into admin. Migrations must not import live contracts (keep frozen snapshots).
+- **`@tokenpanel/contracts`**: pure TypeScript/Effect Schema product contracts (model modality/status/metadata policy, management scopes). No env, I/O, Node, Mongo, or UI. Admin may import it; never import `@tokenpanel/db` into admin. Migrations must not import live contracts (keep frozen snapshots).
 - DB schemas live in `packages/db/src/schemas/*.ts`. Each domain exports `…Doc` (stored shape, with `_id`, `createdAt`, `updatedAt`) and `…CreateInput` (input shape, ObjectId as string → coerced). Use `getDb()` to get a `TypedDb` whose collections are already typed; never call `db.collection("string")` directly outside `packages/db`. Call `configureDb({ uri, databaseName })` before `getDb()` from executables (API boot, migrator CLI).
 - Money is stored as integer minor units (`amountMinor`) + ISO currency code, never floats.
-- Env: Bun auto-loads `.env`; no dotenv import. API parses once via `parseApiRuntimeConfig` (`apps/api/src/config/runtime.ts`). Required: `JWT_SECRET`, `MONGODB_URI`; optional `MONGODB_DB` (default `tokenpanel`), `PORT`, `CORS_ORIGINS`, `NODE_ENV`. See `docs/configuration.md`.
+- Env: Bun auto-loads `.env`; no dotenv import. API parses once via `parseApiRuntimeConfig` (`apps/api/src/config/runtime.ts`). Required: `JWT_SECRET`, `MONGODB_URI`; optional `MONGODB_DB` (default `tokenpanel`), `PORT`, `CORS_ORIGINS`, `NODE_ENV`. See `.env.example`.
 - API fail-fast: server exits if config invalid or MongoDB is unreachable on boot.
 - **Migrations**: ordered, timestamped migration files in `packages/db/migrations/{pre,post}/`.
   Discourse-style deploy flow (manager `tokenpanel update`):

@@ -27,8 +27,8 @@ export function listAdapters(): string[] {
 export function buildAdapterContext(opts: {
   baseUrl: string;
   apiKey: string;
-  providerOrg?: string | null;
-  headers?: Record<string, string>;
+  providerOrg?: string | null | undefined;
+  headers?: Record<string, string> | undefined;
 }): AdapterContext {
   return {
     baseUrl: opts.baseUrl,

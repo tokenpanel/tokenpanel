@@ -8,6 +8,65 @@
 
 export type ApiEnvironment = "development" | "test" | "production";
 
+/**
+ * Operational intervals, timeouts, concurrency, and cache TTLs.
+ * All timing fields use millisecond units (`*Ms`); counts use `*Count`.
+ * Env vars are optional — defaults match historical hard-coded behavior.
+ */
+export type ApiOperationalConfig = Readonly<{
+  /**
+   * Settlement outbox reconcile poll interval.
+   * Env: SETTLEMENT_RECONCILE_INTERVAL_MS. Default: 15000.
+   * Matches historical startSettlementReconcileWorker default.
+   */
+  settlementReconcileIntervalMs: number;
+  /**
+   * Max outbox rows claimed per reconcile tick.
+   * Env: SETTLEMENT_RECONCILE_BATCH_SIZE. Default: 20.
+   */
+  settlementReconcileBatchSizeCount: number;
+  /**
+   * Delay before first reconcile tick after worker start.
+   * Env: SETTLEMENT_RECONCILE_INITIAL_DELAY_MS. Default: 3000.
+   */
+  settlementReconcileInitialDelayMs: number;
+  /**
+   * Application-level provider HTTP timeout.
+   * Env: PROVIDER_HTTP_TIMEOUT_MS. Default: 0.
+   * 0 = no app-level timeout (current implicit behavior: only request
+   * AbortSignal / client disconnect cancels fetch). Non-zero will be applied
+   * by provider adapters when they migrate to Effect (section 9).
+   */
+  providerHttpTimeoutMs: number;
+  /**
+   * In-memory catalog-source response cache TTL.
+   * Env: CATALOG_CACHE_TTL_MS. Default: 600000 (10 minutes).
+   * Matches catalog-sources/registry.ts historical TTL_MS.
+   */
+  catalogCacheTtlMs: number;
+  /**
+   * Max concurrent reconcile row handlers within a batch (reserved).
+   * Env: WORKER_CONCURRENCY. Default: 1 (serial, current behavior).
+   */
+  workerConcurrencyCount: number;
+  /**
+   * Bounded graceful-shutdown budget (interrupt workers, dispose runtime, close Mongo).
+   * Env: SHUTDOWN_TIMEOUT_MS. Default: 10000.
+   */
+  shutdownTimeoutMs: number;
+}>;
+
+/** Documented operational defaults (single source for parse + tests). */
+export const DEFAULT_OPERATIONAL_CONFIG: ApiOperationalConfig = Object.freeze({
+  settlementReconcileIntervalMs: 15_000,
+  settlementReconcileBatchSizeCount: 20,
+  settlementReconcileInitialDelayMs: 3_000,
+  providerHttpTimeoutMs: 0,
+  catalogCacheTtlMs: 10 * 60 * 1000,
+  workerConcurrencyCount: 1,
+  shutdownTimeoutMs: 10_000,
+});
+
 export type ApiRuntimeConfig = Readonly<{
   environment: ApiEnvironment;
   port: number;
@@ -29,6 +88,8 @@ export type ApiRuntimeConfig = Readonly<{
    * See RESERVATION_CANARY_ORG_IDS and ADR 001.
    */
   reservationCanaryOrgIds: ReadonlySet<string>;
+  /** Intervals, timeouts, concurrency, cache TTLs (see ApiOperationalConfig). */
+  operational: ApiOperationalConfig;
 }>;
 
 export class ConfigValidationError extends Error {
@@ -286,8 +347,114 @@ function parseReservationCanaryOrgIds(
 }
 
 /**
+ * Parse a non-negative integer env var (milliseconds or counts).
+ * Unset/empty → default. Invalid → issue + default (aggregation continues).
+ */
+function parseNonNegativeInt(
+  raw: string | undefined,
+  variable: string,
+  defaultValue: number,
+  issues: { variable: string; reason: string }[],
+  opts?: { max?: number },
+): number {
+  if (raw === undefined || raw === "") return defaultValue;
+  if (raw.trim() !== raw || raw.includes(" ")) {
+    issues.push({
+      variable,
+      reason: "must be a non-negative decimal integer without whitespace",
+    });
+    return defaultValue;
+  }
+  if (!/^\d+$/.test(raw)) {
+    issues.push({
+      variable,
+      reason: "must be a non-negative decimal integer",
+    });
+    return defaultValue;
+  }
+  const n = Number(raw);
+  if (!Number.isSafeInteger(n) || n < 0) {
+    issues.push({
+      variable,
+      reason: "must be a non-negative safe integer",
+    });
+    return defaultValue;
+  }
+  if (opts?.max !== undefined && n > opts.max) {
+    issues.push({
+      variable,
+      reason: `must be <= ${opts.max}`,
+    });
+    return defaultValue;
+  }
+  return n;
+}
+
+function parseOperationalConfig(
+  source: Readonly<Record<string, string | undefined>>,
+  issues: { variable: string; reason: string }[],
+): ApiOperationalConfig {
+  const d = DEFAULT_OPERATIONAL_CONFIG;
+  return Object.freeze({
+    settlementReconcileIntervalMs: parseNonNegativeInt(
+      source.SETTLEMENT_RECONCILE_INTERVAL_MS,
+      "SETTLEMENT_RECONCILE_INTERVAL_MS",
+      d.settlementReconcileIntervalMs,
+      issues,
+      { max: 24 * 60 * 60 * 1000 },
+    ),
+    settlementReconcileBatchSizeCount: parseNonNegativeInt(
+      source.SETTLEMENT_RECONCILE_BATCH_SIZE,
+      "SETTLEMENT_RECONCILE_BATCH_SIZE",
+      d.settlementReconcileBatchSizeCount,
+      issues,
+      { max: 10_000 },
+    ),
+    settlementReconcileInitialDelayMs: parseNonNegativeInt(
+      source.SETTLEMENT_RECONCILE_INITIAL_DELAY_MS,
+      "SETTLEMENT_RECONCILE_INITIAL_DELAY_MS",
+      d.settlementReconcileInitialDelayMs,
+      issues,
+      { max: 24 * 60 * 60 * 1000 },
+    ),
+    providerHttpTimeoutMs: parseNonNegativeInt(
+      source.PROVIDER_HTTP_TIMEOUT_MS,
+      "PROVIDER_HTTP_TIMEOUT_MS",
+      d.providerHttpTimeoutMs,
+      issues,
+      { max: 60 * 60 * 1000 },
+    ),
+    catalogCacheTtlMs: parseNonNegativeInt(
+      source.CATALOG_CACHE_TTL_MS,
+      "CATALOG_CACHE_TTL_MS",
+      d.catalogCacheTtlMs,
+      issues,
+      { max: 24 * 60 * 60 * 1000 },
+    ),
+    workerConcurrencyCount: parseNonNegativeInt(
+      source.WORKER_CONCURRENCY,
+      "WORKER_CONCURRENCY",
+      d.workerConcurrencyCount,
+      issues,
+      { max: 256 },
+    ),
+    shutdownTimeoutMs: parseNonNegativeInt(
+      source.SHUTDOWN_TIMEOUT_MS,
+      "SHUTDOWN_TIMEOUT_MS",
+      d.shutdownTimeoutMs,
+      issues,
+      { max: 10 * 60 * 1000 },
+    ),
+  });
+}
+
+/**
  * Parse and validate API runtime config from an env-like map.
  * Aggregates all issues before throwing ConfigValidationError.
+ *
+ * This is the single source of truth for validation semantics (JWT exact
+ * bytes, production secret policy, Mongo URI, CORS, canary org IDs,
+ * operational defaults). Effect decode path wraps this function.
  */
 export function parseApiRuntimeConfig(
   source: Readonly<Record<string, string | undefined>>,
@@ -303,10 +470,25 @@ export function parseApiRuntimeConfig(
   const reservationCanaryOrgIds = parseReservationCanaryOrgIds(
     source.RESERVATION_CANARY_ORG_IDS,
   );
+  const operational = parseOperationalConfig(source, issues);
 
   if (environment === "production" && corsOrigins === null) {
     // Production without explicit CORS: no broad reflection (same-origin only).
     // Represent as empty allowlist so the CORS handler does not reflect arbitrary origins.
+  }
+
+  // Batch size 0 is invalid for worker progress (would spin forever no-op).
+  if (operational.settlementReconcileBatchSizeCount < 1) {
+    issues.push({
+      variable: "SETTLEMENT_RECONCILE_BATCH_SIZE",
+      reason: "must be >= 1",
+    });
+  }
+  if (operational.workerConcurrencyCount < 1) {
+    issues.push({
+      variable: "WORKER_CONCURRENCY",
+      reason: "must be >= 1",
+    });
   }
 
   if (issues.length > 0) {
@@ -323,5 +505,6 @@ export function parseApiRuntimeConfig(
     corsOrigins: resolvedCors === null ? null : Object.freeze([...resolvedCors]),
     database: Object.freeze({ uri, name }),
     reservationCanaryOrgIds,
+    operational,
   });
 }

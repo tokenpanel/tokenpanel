@@ -49,7 +49,10 @@ import { EmptyState } from "@/components/EmptyState";
 import { FadeIn } from "@/components/anim";
 import { cn } from "@/lib/utils";
 
-type CustomerStatus = "active" | "suspended" | "closed";
+import {
+  CUSTOMER_STATUSES,
+  type CustomerStatus,
+} from "@tokenpanel/contracts";
 
 interface Money {
   amountMinor: number;
@@ -162,7 +165,7 @@ interface OkResponse {
 }
 
 const PAGE_SIZE = 20;
-const STATUS_OPTIONS: readonly CustomerStatus[] = ["active", "suspended", "closed"];
+const STATUS_OPTIONS: readonly CustomerStatus[] = CUSTOMER_STATUSES;
 
 // Domain-split labels (customers/labels.ts). Re-exported for unit tests.
 export {

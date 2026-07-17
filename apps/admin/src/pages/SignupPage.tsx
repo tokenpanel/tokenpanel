@@ -107,7 +107,7 @@ function Field({
 }: {
   id: string;
   label: string;
-  error?: string;
+  error?: string | undefined;
   children: React.ReactNode;
 }): React.ReactElement {
   return (
@@ -175,8 +175,9 @@ export default function SignupPage(): React.ReactElement {
             const mapped: FieldErrors = {};
             for (const key of Object.keys(details) as (keyof FieldErrors)[]) {
               const msgs = details[key];
-              if (Array.isArray(msgs) && msgs.length > 0) {
-                mapped[key] = msgs[0];
+              const first = Array.isArray(msgs) ? msgs[0] : undefined;
+              if (first !== undefined) {
+                mapped[key] = first;
               }
             }
             setFieldErrors(mapped);

@@ -15,7 +15,7 @@ import {
   parseAnthropicProviderUsage,
 } from "../../providers/provider-usage.ts";
 import {
-  ProviderError,
+  makeProviderError,
   isFallbackAllowed,
 } from "../../providers/provider-errors.ts";
 
@@ -117,7 +117,7 @@ describe("reconcile entry resolution never falls back to unrelated entry", () =>
 
 describe("body-phase ProviderError is never fallback-eligible", () => {
   test("phase=body after headers → no failover", () => {
-    const err = new ProviderError({
+    const err = makeProviderError({
       message: "stream body failed",
       category: "connection",
       phase: "body",
@@ -129,7 +129,7 @@ describe("body-phase ProviderError is never fallback-eligible", () => {
   });
 
   test("pre-stream 503 still eligible", () => {
-    const err = new ProviderError({
+    const err = makeProviderError({
       message: "up",
       category: "http_5xx",
       phase: "headers",

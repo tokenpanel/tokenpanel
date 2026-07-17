@@ -1,385 +1,306 @@
 import { Hono } from "hono";
-import { z } from "zod";
-import { zValidator } from "@hono/zod-validator";
-import type { Document, Filter } from "mongodb";
-import {
-  getDb,
-  type ModelDoc,
-  type CustomerDoc,
-  type BalanceAdjustmentDoc,
-  type SubscriptionDoc,
-  type SubscriptionPlanDoc,
-} from "@tokenpanel/db";
+import { Effect } from "effect";
+import { ObjectId } from "mongodb";
 import type { PublicAuthVariables } from "../../middleware/public-auth.ts";
+import { requireManagementScope } from "../../middleware/management-auth.ts";
 import {
-  requireManagementScope,
-} from "../../middleware/management-auth.ts";
-import { parseObjectIdParam, escapeRegExp } from "../route-utils.ts";
+  listCustomers,
+  getCustomer,
+  listBalanceHistory,
+  maybeRedactCustomerBalance,
+} from "../../domains/customers/operations.ts";
+import {
+  getActiveSubscription,
+  listCustomerLimits,
+  listCustomerBudgets,
+  listPlans,
+  getPlan,
+} from "../../domains/plans/operations.ts";
+import {
+  listModels,
+  getModel,
+  listActiveModels,
+  toModelCapability,
+} from "../../domains/models/operations.ts";
+import { customerUsage } from "../../domains/analytics/operations.ts";
+import { runManagementEffect } from "../../http/adapters/boundary.ts";
+import { sValidator } from "../../http/validation/validator.ts";
+import {
+  CustomerListQuery,
+  HistoryQuery,
+  UsageDateRangeQuery,
+} from "../../http/validation/query.ts";
+import { withParseApi } from "../../http/validation/with-parse-api.ts";
+import type { CustomerDoc, ManagementScope } from "@tokenpanel/db";
+import type { PublicPrincipal } from "../../middleware/public-auth.ts";
 
 type ManagementAuthVariables = PublicAuthVariables;
 
-/**
- * Customer DTO without balance. The customers:read scope grants access to
- * customer identity + status only — balance is gated separately by
- * balances:read so a customers:read-only key cannot observe financial state.
- * Callers that also hold balances:read receive the full CustomerDoc.
- */
-export type CustomerRedacted = Omit<CustomerDoc, "balance">;
-
-/** @internal Exported for unit tests. */
+/** Test helper: redact customer balance for management responses. */
 export function maybeRedactCustomer(
   customer: CustomerDoc,
   hasBalancesRead: boolean,
-): CustomerDoc | CustomerRedacted {
-  if (hasBalancesRead) return customer;
-  const { balance: _drop, ...rest } = customer;
-  void _drop;
-  return rest;
+): CustomerDoc | Omit<CustomerDoc, "balance"> {
+  return maybeRedactCustomerBalance(customer, hasBalancesRead);
 }
 
-/** Does the authenticated management principal hold the given scope? @internal */
+/**
+ * Scope check helper for tests / thin adapters.
+ * Accepts either a PublicPrincipal or a Hono-like `{ get("principal") }`.
+ */
 export function principalHasScope(
-  c: { get: (k: "principal") => import("../../middleware/public-auth.ts").PublicPrincipal | undefined },
-  scope: import("@tokenpanel/db").ManagementScope,
+  principalOrCtx:
+    | PublicPrincipal
+    | { get: (k: "principal") => PublicPrincipal | undefined },
+  scope: ManagementScope,
 ): boolean {
+  const principal =
+    "kind" in principalOrCtx
+      ? principalOrCtx
+      : principalOrCtx.get("principal");
+  if (!principal || principal.kind !== "management") return false;
+  return principal.managementKey.scopes.includes(scope);
+}
+
+export { toModelCapability };
+
+const customerListQuery = withParseApi(CustomerListQuery);
+const historyQuery = withParseApi(HistoryQuery);
+const usageDateRangeQuery = withParseApi(UsageDateRangeQuery);
+
+const app = new Hono<{ Variables: ManagementAuthVariables }>();
+
+function hasBalancesRead(c: {
+  get: (k: "principal") => ManagementAuthVariables["principal"];
+}): boolean {
   const p = c.get("principal");
-  return p?.kind === "management" && p.managementKey.scopes.includes(scope);
+  if (p.kind !== "management") return false;
+  return p.managementKey.scopes.includes("balances:read");
 }
 
-/**
- * Management server-to-server read endpoints. Mounted at "/" in index.ts and
- * self-scoped to /api/management/*. Auth (prefix dispatch + management
- * narrowing) is mounted once on the parent app for /api/management/* — this
- * router only adds per-route scope gates.
- *
- * Every query filters by `organizationId` from the authenticated management
- * key — there is no path that takes an orgId from the request body, so
- * cross-org data leakage is structurally impossible.
- */
-const managementRead = new Hono<{ Variables: ManagementAuthVariables }>();
+app.get(
+  "/customers",
+  requireManagementScope("customers:read"),
+  sValidator("query", customerListQuery),
+  async (c) => {
+    const orgId = c.get("orgId");
+    const q = c.req.valid("query");
+    const redact = !hasBalancesRead(c);
+    return runManagementEffect(
+      c,
+      listCustomers({
+        organizationId: orgId.toHexString(),
+        ...(q.status !== undefined ? { status: q.status } : {}),
+        ...(q.q !== undefined ? { q: q.q } : {}),
+        limit: q.limit,
+        skip: q.skip,
+      }).pipe(
+        Effect.map((page) => ({
+          ...page,
+          items: page.items.map((item) =>
+            redact ? maybeRedactCustomerBalance(item, false) : item,
+          ),
+        })),
+      ),
+      { operation: "mgmt.listCustomers" },
+    );
+  },
+);
 
-// ---------------------------------------------------------------------------
-// Models
-// ---------------------------------------------------------------------------
+app.get(
+  "/customers/:id",
+  requireManagementScope("customers:read"),
+  async (c) => {
+    const orgId = c.get("orgId");
+    const id = c.req.param("id");
+    if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
+    const redact = !hasBalancesRead(c);
+    return runManagementEffect(
+      c,
+      getCustomer({
+        organizationId: orgId.toHexString(),
+        customerId: id,
+      }).pipe(
+        Effect.map((doc) =>
+          redact ? maybeRedactCustomerBalance(doc, false) : doc,
+        ),
+      ),
+      { operation: "mgmt.getCustomer" },
+    );
+  },
+);
 
-/** Public management model DTO — deliberately omits metadata (not a public API extension). */
-export function toModelCapability(m: ModelDoc) {
-  return {
-    aliasId: m.aliasId,
-    displayName: m.displayName,
-    description: m.description,
-    reasoning: m.reasoning,
-    toolCall: m.toolCall,
-    structuredOutput: m.structuredOutput,
-    temperature: m.temperature,
-    attachment: m.attachment,
-    limits: m.limits,
-    modalities: m.modalities,
-    status: m.status,
-    price: m.price,
-    currency: m.currency,
-    active: m.active,
-  };
-}
+app.get(
+  "/customers/:id/balance/history",
+  requireManagementScope("balances:read"),
+  sValidator("query", historyQuery),
+  async (c) => {
+    const orgId = c.get("orgId");
+    const id = c.req.param("id");
+    if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
+    const q = c.req.valid("query");
+    return runManagementEffect(
+      c,
+      listBalanceHistory({
+        organizationId: orgId.toHexString(),
+        customerId: id,
+        limit: q.limit,
+        skip: q.skip,
+      }),
+      { operation: "mgmt.listBalanceHistory" },
+    );
+  },
+);
 
-/** GET /api/management/models — list active models (models:read). */
-managementRead.get(
-  "/api/management/models",
+app.get(
+  "/customers/:id/subscription",
+  requireManagementScope("customers:read"),
+  async (c) => {
+    const orgId = c.get("orgId");
+    const id = c.req.param("id");
+    if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
+    return runManagementEffect(
+      c,
+      getActiveSubscription({
+        organizationId: orgId.toHexString(),
+        customerId: id,
+      }),
+      { operation: "mgmt.getActiveSubscription" },
+    );
+  },
+);
+
+app.get(
+  "/customers/:id/limits",
+  requireManagementScope("customers:read"),
+  async (c) => {
+    const orgId = c.get("orgId");
+    const id = c.req.param("id");
+    if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
+    return runManagementEffect(
+      c,
+      listCustomerLimits({
+        organizationId: orgId.toHexString(),
+        customerId: id,
+      }).pipe(Effect.map((items) => ({ items }))),
+      { operation: "mgmt.listCustomerLimits" },
+    );
+  },
+);
+
+app.get(
+  "/customers/:id/budgets",
+  requireManagementScope("customers:read"),
+  async (c) => {
+    const orgId = c.get("orgId");
+    const id = c.req.param("id");
+    if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
+    return runManagementEffect(
+      c,
+      listCustomerBudgets({
+        organizationId: orgId.toHexString(),
+        customerId: id,
+      }).pipe(Effect.map((items) => ({ items }))),
+      { operation: "mgmt.listCustomerBudgets" },
+    );
+  },
+);
+
+app.get(
+  "/customers/:id/usage",
+  requireManagementScope("usage:read"),
+  sValidator("query", usageDateRangeQuery),
+  async (c) => {
+    const orgId = c.get("orgId");
+    const id = c.req.param("id");
+    if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
+    const q = c.req.valid("query");
+    return runManagementEffect(
+      c,
+      customerUsage({
+        organizationId: orgId.toHexString(),
+        customerId: id,
+        from: q.from,
+        to: q.to,
+      }),
+      { operation: "mgmt.customerUsage" },
+    );
+  },
+);
+
+app.get(
+  "/models",
   requireManagementScope("models:read"),
   async (c) => {
     const orgId = c.get("orgId");
-    const db = await getDb();
-    const docs = await db.models
-      .find({ organizationId: orgId, active: true })
-      .sort({ aliasId: 1 })
-      .toArray();
-    return c.json({ items: docs.map(toModelCapability) });
+    return runManagementEffect(
+      c,
+      listModels(orgId.toHexString()).pipe(
+        Effect.map((items) => ({ items })),
+      ),
+      { operation: "mgmt.listModels" },
+    );
   },
 );
 
-/** GET /api/management/models/:aliasId — single model by alias (models:read). */
-managementRead.get(
-  "/api/management/models/:aliasId",
+app.get(
+  "/models/active",
   requireManagementScope("models:read"),
   async (c) => {
     const orgId = c.get("orgId");
-    const aliasId = c.req.param("aliasId");
-    const db = await getDb();
-    const doc = await db.models.findOne({ organizationId: orgId, aliasId });
-    if (!doc) return c.json({ error: "not_found" }, 404);
-    return c.json(toModelCapability(doc));
-  },
-);
-
-// ---------------------------------------------------------------------------
-// Customers
-// ---------------------------------------------------------------------------
-
-const customerListQuery = z.object({
-  limit: z.coerce.number().int().positive().max(500).default(50),
-  skip: z.coerce.number().int().min(0).default(0),
-  status: z.enum(["active", "suspended", "closed"]).optional(),
-  q: z.string().max(160).optional(),
-});
-
-/** GET /api/management/customers — paginated list (customers:read). */
-managementRead.get(
-  "/api/management/customers",
-  requireManagementScope("customers:read"),
-  zValidator("query", customerListQuery),
-  async (c) => {
-    const orgId = c.get("orgId");
-    const q = c.req.valid("query");
-    const db = await getDb();
-
-    const filter: Filter<CustomerDoc> = { organizationId: orgId };
-    if (q.status !== undefined) filter.status = q.status;
-    if (q.q !== undefined && q.q.length > 0) {
-      const esc = escapeRegExp(q.q);
-      filter.$or = [
-        { name: { $regex: esc, $options: "i" } },
-        { email: { $regex: esc, $options: "i" } },
-      ];
-    }
-
-    const [items, total] = await Promise.all([
-      db.customers.find(filter).sort({ createdAt: -1 }).skip(q.skip).limit(q.limit).toArray(),
-      db.customers.countDocuments(filter),
-    ]);
-
-    const hasBalancesRead = principalHasScope(c, "balances:read");
-    return c.json({ items: items.map((d) => maybeRedactCustomer(d, hasBalancesRead)), total });
-  },
-);
-
-const emailQuery = z.object({
-  email: z.string().email().max(254),
-});
-
-/**
- * GET /api/management/customers/lookup?email= — first-class email lookup
- * (customers:read). Email matching is case-insensitive and ALWAYS scoped to
- * the key's org, so a same-email customer in another org returns 404.
- */
-managementRead.get(
-  "/api/management/customers/lookup",
-  requireManagementScope("customers:read"),
-  zValidator("query", emailQuery),
-  async (c) => {
-    const orgId = c.get("orgId");
-    const q = c.req.valid("query");
-    const db = await getDb();
-    const customer = await db.customers.findOne({
-      organizationId: orgId,
-      email: q.email.toLowerCase(),
-    });
-    if (!customer) return c.json({ error: "not_found" }, 404);
-    return c.json(maybeRedactCustomer(customer, principalHasScope(c, "balances:read")));
-  },
-);
-
-/** GET /api/management/customers/:id — customer detail (customers:read). */
-managementRead.get(
-  "/api/management/customers/:id",
-  requireManagementScope("customers:read"),
-  async (c) => {
-    const orgId = c.get("orgId");
-    const oid = parseObjectIdParam(c.req.param("id"));
-    if (!oid) return c.json({ error: "not_found" }, 404);
-    const db = await getDb();
-    const doc = await db.customers.findOne({ _id: oid, organizationId: orgId });
-    if (!doc) return c.json({ error: "not_found" }, 404);
-    return c.json(maybeRedactCustomer(doc, principalHasScope(c, "balances:read")));
-  },
-);
-
-// ---------------------------------------------------------------------------
-// Balances + history
-// ---------------------------------------------------------------------------
-
-/** GET /api/management/customers/:id/balance — current balance (balances:read). */
-managementRead.get(
-  "/api/management/customers/:id/balance",
-  requireManagementScope("balances:read"),
-  async (c) => {
-    const orgId = c.get("orgId");
-    const oid = parseObjectIdParam(c.req.param("id"));
-    if (!oid) return c.json({ error: "not_found" }, 404);
-    const db = await getDb();
-    const customer = await db.customers.findOne(
-      { _id: oid, organizationId: orgId },
-      { projection: { balance: 1, status: 1, name: 1, email: 1 } },
+    return runManagementEffect(
+      c,
+      listActiveModels(orgId.toHexString()).pipe(
+        Effect.map((items) => ({ items })),
+      ),
+      { operation: "mgmt.listActiveModels" },
     );
-    if (!customer) return c.json({ error: "not_found" }, 404);
-    return c.json({
-      customer: {
-        _id: customer._id,
-        name: customer.name,
-        email: customer.email,
-        status: customer.status,
-      },
-      balance: customer.balance,
-    });
   },
 );
 
-const historyQuery = z.object({
-  limit: z.coerce.number().int().positive().max(500).default(50),
-  skip: z.coerce.number().int().min(0).default(0),
-});
-
-/** GET /api/management/customers/:id/balance-history (balances:read). */
-managementRead.get(
-  "/api/management/customers/:id/balance-history",
-  requireManagementScope("balances:read"),
-  zValidator("query", historyQuery),
+app.get(
+  "/models/:id",
+  requireManagementScope("models:read"),
   async (c) => {
     const orgId = c.get("orgId");
-    const oid = parseObjectIdParam(c.req.param("id"));
-    if (!oid) return c.json({ error: "not_found" }, 404);
-    const q = c.req.valid("query");
-    const db = await getDb();
-
-    const filter = { organizationId: orgId, customerId: oid };
-    const [items, total] = await Promise.all([
-      db.balanceAdjustments.find(filter).sort({ occurredAt: -1, _id: -1 }).skip(q.skip).limit(q.limit).toArray(),
-      db.balanceAdjustments.countDocuments(filter),
-    ]);
-
-    return c.json({ items: items as BalanceAdjustmentDoc[], total });
-  },
-);
-
-// ---------------------------------------------------------------------------
-// Subscriptions
-// ---------------------------------------------------------------------------
-
-/** GET /api/management/customers/:id/subscription (customers:read). */
-managementRead.get(
-  "/api/management/customers/:id/subscription",
-  requireManagementScope("customers:read"),
-  async (c) => {
-    const orgId = c.get("orgId");
-    const oid = parseObjectIdParam(c.req.param("id"));
-    if (!oid) return c.json({ error: "not_found" }, 404);
-    const db = await getDb();
-
-    const subscription = await db.subscriptions.findOne(
-      { organizationId: orgId, customerId: oid, status: "active" },
-      { sort: { createdAt: -1 } },
+    const id = c.req.param("id");
+    if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
+    return runManagementEffect(
+      c,
+      getModel({ organizationId: orgId.toHexString(), modelId: id }),
+      { operation: "mgmt.getModel" },
     );
-    if (!subscription) return c.json({ error: "not_found" }, 404);
-
-    const plan = await db.subscriptionPlans.findOne({
-      _id: subscription.planId,
-      organizationId: orgId,
-    });
-
-    return c.json({
-      subscription: subscription as SubscriptionDoc,
-      plan: plan as SubscriptionPlanDoc | null,
-    });
   },
 );
 
-// ---------------------------------------------------------------------------
-// Plans
-// ---------------------------------------------------------------------------
-
-/** GET /api/management/plans — list active plans (plans:read). */
-managementRead.get(
-  "/api/management/plans",
+app.get(
+  "/plans",
   requireManagementScope("plans:read"),
   async (c) => {
     const orgId = c.get("orgId");
-    const db = await getDb();
-    const docs = await db.subscriptionPlans
-      .find({ organizationId: orgId, active: true })
-      .sort({ name: 1 })
-      .toArray();
-    return c.json({ items: docs });
+    return runManagementEffect(
+      c,
+      listPlans(orgId.toHexString()).pipe(
+        Effect.map((items) => ({ items })),
+      ),
+      { operation: "mgmt.listPlans" },
+    );
   },
 );
 
-// ---------------------------------------------------------------------------
-// Usage
-// ---------------------------------------------------------------------------
-
-const usageQuery = z.object({
-  from: z.string().datetime().optional(),
-  to: z.string().datetime().optional(),
-});
-
-/** GET /api/management/customers/:id/usage — per-customer usage summary (usage:read). */
-managementRead.get(
-  "/api/management/customers/:id/usage",
-  requireManagementScope("usage:read"),
-  zValidator("query", usageQuery),
+app.get(
+  "/plans/:id",
+  requireManagementScope("plans:read"),
   async (c) => {
     const orgId = c.get("orgId");
-    const oid = parseObjectIdParam(c.req.param("id"));
-    if (!oid) return c.json({ error: "not_found" }, 404);
-    const q = c.req.valid("query");
-    const db = await getDb();
-
-    const match: Record<string, unknown> = { organizationId: orgId, customerId: oid };
-    const occurredAt: Record<string, unknown> = {};
-    if (q.from) occurredAt.$gte = new Date(q.from);
-    if (q.to) occurredAt.$lte = new Date(q.to);
-    if (Object.keys(occurredAt).length > 0) match.occurredAt = occurredAt;
-
-    const pipeline: Document[] = [
-      { $match: match },
-      {
-        $group: {
-          _id: "$modelAliasId",
-          requests: { $sum: 1 },
-          tokens: { $sum: "$totalTokens" },
-          costMinor: { $sum: "$costMinor" },
-          priceMinor: { $sum: "$priceMinor" },
-          currency: { $first: "$currency" },
-        },
-      },
-      { $sort: { costMinor: -1 } },
-    ];
-
-    const rows = (await db.usageRecords.aggregate(pipeline).toArray()) as unknown as Array<{
-      _id: string;
-      requests: number;
-      tokens: number;
-      costMinor: number;
-      priceMinor: number;
-      currency: string;
-    }>;
-
-    let totalRequests = 0;
-    let totalTokens = 0;
-    let totalCostMinor = 0;
-    let totalPriceMinor = 0;
-    const currency = rows.length > 0 ? rows[0]?.currency ?? "USD" : "USD";
-    const byModel = rows.map((r) => {
-      totalRequests += r.requests;
-      totalTokens += r.tokens;
-      totalCostMinor += r.costMinor;
-      totalPriceMinor += r.priceMinor;
-      return {
-        modelAliasId: r._id,
-        requests: r.requests,
-        tokens: r.tokens,
-        costMinor: r.costMinor,
-        priceMinor: r.priceMinor,
-      };
-    });
-
-    return c.json({
-      totalRequests,
-      totalTokens,
-      totalCostMinor,
-      totalPriceMinor,
-      currency,
-      byModel,
-    });
+    const id = c.req.param("id");
+    if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
+    return runManagementEffect(
+      c,
+      getPlan({ organizationId: orgId.toHexString(), planId: id }),
+      { operation: "mgmt.getPlan" },
+    );
   },
 );
 
-export default managementRead;
+export default app;

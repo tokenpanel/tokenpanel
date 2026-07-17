@@ -1,25 +1,21 @@
 /**
  * Pure customer UI labels (domain split from CustomersPage).
+ * Enum authority: @tokenpanel/contracts.
  */
+import type {
+  BalanceAdjustmentReason,
+  CustomerStatus,
+  PlanInterval,
+  SubscriptionStatus,
+} from "@tokenpanel/contracts";
 import { ApiError } from "../../api/client.ts";
 
-export type CustomerStatus = "active" | "suspended" | "closed";
-
-export type BalanceReason =
-  | "topup"
-  | "usage_debit"
-  | "refund"
-  | "adjustment"
-  | "overage";
-
-export type PlanInterval = "day" | "week" | "month" | "year";
-
-export type SubscriptionStatus =
-  | "active"
-  | "canceled"
-  | "expired"
-  | "past_due"
-  | "ended";
+export type {
+  CustomerStatus,
+  BalanceAdjustmentReason as BalanceReason,
+  PlanInterval,
+  SubscriptionStatus,
+};
 
 export function statusVariant(
   status: CustomerStatus,
@@ -34,7 +30,7 @@ export function statusVariant(
   }
 }
 
-export function reasonLabel(reason: BalanceReason): string {
+export function reasonLabel(reason: BalanceAdjustmentReason): string {
   switch (reason) {
     case "topup":
       return "Top-up";
@@ -61,7 +57,7 @@ export function intervalLabel(interval: PlanInterval, count: number): string {
   return count === 1 ? `per ${unit}` : `per ${count} ${unit}s`;
 }
 
-export function subStatusLabel(status: SubscriptionStatus): string {
+export function subStatusLabel(status: SubscriptionStatus | string): string {
   return status.replace("_", " ");
 }
 

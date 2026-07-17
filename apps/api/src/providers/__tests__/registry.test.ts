@@ -1,4 +1,5 @@
 import { test, expect } from "bun:test";
+import { Effect } from "effect";
 import {
   registerAdapter,
   getAdapter,
@@ -10,8 +11,14 @@ import type { ProviderAdapter } from "../types.ts";
 function fakeAdapter(sdkType: string): ProviderAdapter {
   return {
     sdkType,
-    listModels: async () => [],
-    chatComplete: async () => ({ id: "x", model: "x", choices: [], usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 } }),
+    listModels: () => Effect.succeed([]),
+    chatComplete: () =>
+      Effect.succeed({
+        id: "x",
+        model: "x",
+        choices: [],
+        usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+      }),
     streamChat: async function* () {},
   };
 }

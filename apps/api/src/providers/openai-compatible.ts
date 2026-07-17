@@ -1,3 +1,4 @@
+import { Effect } from "effect";
 import type {
   AdapterContext,
   ChatRequest,
@@ -13,13 +14,20 @@ import {
   type ProviderUsage,
 } from "./provider-usage.ts";
 import {
+  makeProviderError,
   providerHttpError,
   publicProviderErrorMessage,
-  ProviderError,
 } from "./provider-errors.ts";
+import { providerHttpRequest } from "../infrastructure/provider-http/scoped-fetch.ts";
+import { httpFailureToProviderError } from "./map-http-error.ts";
+
+import {
+  OPENAI_DEFAULT_CONTEXT_TOKENS,
+  OPENAI_SSE_DONE_PAYLOAD,
+} from "./openai-protocol.ts";
 
 /** Unknown context is omitted (not a positive sentinel). Historical name kept for grep. */
-const OPENAI_DEFAULT_CONTEXT = 0;
+const OPENAI_DEFAULT_CONTEXT = OPENAI_DEFAULT_CONTEXT_TOKENS;
 
 type OpenAiModel = {
   id: string;
@@ -153,78 +161,130 @@ export function createOpenAICompatibleAdapter(): ProviderAdapter {
   return {
     sdkType: "openai-compatible",
 
-    async listModels(ctx) {
-      const res = await fetch(joinUrl(ctx.baseUrl, "/models"), {
-        method: "GET",
-        headers: authHeaders(ctx),
-        signal: ctx.signal,
-      });
-      if (!res.ok) {
-        throw new Error(`openai listModels ${res.status}: ${await safeText(res)}`);
-      }
-      const json = (await res.json()) as { data?: OpenAiModel[] };
-      const data = Array.isArray(json.data) ? json.data : [];
-      const models: DiscoveredModel[] = [];
-      for (const m of data) {
-        if (!m || typeof m.id !== "string" || m.id.length === 0) continue;
-        const contextWindow = num(m.context_window) ?? num(m.max_input_tokens);
-        const maxOut = num(m.max_completion_tokens ?? m.max_output_tokens ?? m.max_tokens);
-        models.push({
-          upstreamModelId: m.id,
-          displayName: m.id,
-          limits: {
-            context: contextWindow ?? OPENAI_DEFAULT_CONTEXT,
-            ...(maxOut !== undefined ? { output: maxOut } : {}),
-          },
-          modalities: { input: ["text"], output: ["text"] },
-          raw: m as Record<string, unknown>,
+    listModels(ctx) {
+      return Effect.gen(function* () {
+        const res = yield* providerHttpRequest({
+          url: joinUrl(ctx.baseUrl, "/models"),
+          method: "GET",
+          headers: authHeaders(ctx),
+          ...(ctx.signal !== undefined ? { signal: ctx.signal } : {}),
+          label: "openai listModels",
+          operation: "listModels",
+        }).pipe(Effect.mapError(httpFailureToProviderError));
+
+        if (res.status < 200 || res.status >= 300) {
+          return yield* Effect.fail(
+            providerHttpError(
+              res.status,
+              res.diagnostic,
+              "request",
+              "openai listModels",
+            ),
+          );
+        }
+
+        const json = yield* Effect.try({
+          try: () => JSON.parse(res.bodyText) as { data?: OpenAiModel[] },
+          catch: () =>
+            makeProviderError({
+              message: publicProviderErrorMessage("openai listModels"),
+              category: "malformed_response",
+              phase: "parse",
+              diagnostic: res.diagnostic,
+            }),
         });
-      }
-      return models;
+
+        const data = Array.isArray(json.data) ? json.data : [];
+        const models: DiscoveredModel[] = [];
+        for (const m of data) {
+          if (!m || typeof m.id !== "string" || m.id.length === 0) continue;
+          const contextWindow = num(m.context_window) ?? num(m.max_input_tokens);
+          const maxOut = num(
+            m.max_completion_tokens ?? m.max_output_tokens ?? m.max_tokens,
+          );
+          models.push({
+            upstreamModelId: m.id,
+            displayName: m.id,
+            limits: {
+              context: contextWindow ?? OPENAI_DEFAULT_CONTEXT,
+              ...(maxOut !== undefined ? { output: maxOut } : {}),
+            },
+            modalities: { input: ["text"], output: ["text"] },
+            raw: m as Record<string, unknown>,
+          });
+        }
+        return models;
+      });
     },
 
-    async chatComplete(ctx, req) {
-      let res: Response;
-      try {
-        res = await fetch(joinUrl(ctx.baseUrl, "/chat/completions"), {
+    chatComplete(ctx, req) {
+      return Effect.gen(function* () {
+        const res = yield* providerHttpRequest({
+          url: joinUrl(ctx.baseUrl, "/chat/completions"),
           method: "POST",
           headers: authHeaders(ctx),
           body: JSON.stringify(buildChatBody(req, false)),
-          signal: req.signal ?? ctx.signal,
-        });
-      } catch (err) {
-        if (err instanceof TypeError || (err instanceof Error && /fetch failed|ECONNREFUSED|ENOTFOUND/i.test(err.message))) {
-          throw err;
+          ...(req.signal !== undefined
+            ? { signal: req.signal }
+            : ctx.signal !== undefined
+              ? { signal: ctx.signal }
+              : {}),
+          label: "openai chatComplete",
+          operation: "chatComplete",
+          ...(req.model !== undefined ? { model: req.model } : {}),
+        }).pipe(Effect.mapError(httpFailureToProviderError));
+
+        if (res.status < 200 || res.status >= 300) {
+          return yield* Effect.fail(
+            providerHttpError(
+              res.status,
+              res.diagnostic,
+              "request",
+              "openai chatComplete",
+            ),
+          );
         }
-        throw err;
-      }
-      if (!res.ok) {
-        throw providerHttpError(
-          res.status,
-          await safeText(res),
-          "request",
-          "openai chatComplete",
-        );
-      }
-      const json = (await res.json()) as Record<string, unknown>;
-      const choicesRaw = Array.isArray(json.choices) ? json.choices : [];
-      const choices = choicesRaw
-        .map((c, i) => assembleChoice(c, i))
-        .filter((c): c is ChatResponse["choices"][number] => c !== null);
-      const id = str(json.id) ?? cryptoRandomId();
-      const usageResult = parseOpenAIUsageResult(json.usage);
-      return {
-        id,
-        model: str(json.model) ?? req.model,
-        choices: choices.length > 0 ? choices : [
-          { index: 0, message: { role: "assistant", content: "" }, finishReason: "stop" },
-        ],
-        usage: usageResult.status === "reported" ? usageResult.usage : { ...ZERO_USAGE },
-        usageStatus: usageResult.status,
-        usageMissingReason:
-          usageResult.status === "missing" ? usageResult.reason : undefined,
-        providerRequestId: res.headers.get("x-request-id") ?? id,
-      };
+
+        const json = yield* Effect.try({
+          try: () => JSON.parse(res.bodyText) as Record<string, unknown>,
+          catch: () =>
+            makeProviderError({
+              message: publicProviderErrorMessage("openai chatComplete"),
+              category: "malformed_response",
+              phase: "parse",
+              diagnostic: res.diagnostic,
+            }),
+        });
+
+        const choicesRaw = Array.isArray(json.choices) ? json.choices : [];
+        const choices = choicesRaw
+          .map((c, i) => assembleChoice(c, i))
+          .filter((c): c is ChatResponse["choices"][number] => c !== null);
+        const id = str(json.id) ?? cryptoRandomId();
+        const usageResult = parseOpenAIUsageResult(json.usage);
+        return {
+          id,
+          model: str(json.model) ?? req.model,
+          choices:
+            choices.length > 0
+              ? choices
+              : [
+                  {
+                    index: 0,
+                    message: { role: "assistant" as const, content: "" },
+                    finishReason: "stop",
+                  },
+                ],
+          usage:
+            usageResult.status === "reported"
+              ? usageResult.usage
+              : { ...ZERO_USAGE },
+          usageStatus: usageResult.status,
+          usageMissingReason:
+            usageResult.status === "missing" ? usageResult.reason : undefined,
+          providerRequestId: res.headers.get("x-request-id") ?? id,
+        };
+      });
     },
 
     async *streamChat(ctx, req): AsyncGenerator<StreamChunk, void, void> {
@@ -232,7 +292,7 @@ export function createOpenAICompatibleAdapter(): ProviderAdapter {
         method: "POST",
         headers: authHeaders(ctx),
         body: JSON.stringify(buildChatBody(req, true)),
-        signal: req.signal ?? ctx.signal,
+        signal: req.signal ?? ctx.signal ?? null,
       });
       // Throw typed pre-stream errors so fallback can classify 429/5xx.
       if (!res.ok) {
@@ -274,7 +334,7 @@ export function createOpenAICompatibleAdapter(): ProviderAdapter {
             ({ value, done } = await reader.read());
           } catch (err) {
             // Body read after headers: upstream may have accepted. Never failover.
-            throw new ProviderError({
+            throw makeProviderError({
               message: publicProviderErrorMessage("openai streamChat"),
               category: "connection",
               phase: "body",
@@ -295,7 +355,7 @@ export function createOpenAICompatibleAdapter(): ProviderAdapter {
             if (line.length === 0) continue;
             if (!line.startsWith("data:")) continue;
             const payload = line.slice(5).trim();
-            if (payload === "[DONE]") {
+            if (payload === OPENAI_SSE_DONE_PAYLOAD) {
               sawDone = true;
               if (sawMalformedSse) {
                 yield {

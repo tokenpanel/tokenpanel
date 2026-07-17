@@ -1,11 +1,19 @@
+/**
+ * /v1 chat principal → billing context resolution.
+ * Primary API is resolveChatContextEffect (routes). Promise resolveChatContext
+ * remains for unit/integration tests that inject TypedDb.
+ */
+
+import { Cause, Effect, Exit } from "effect";
 import { ObjectId } from "mongodb";
-import { getDb, type CustomerDoc } from "@tokenpanel/db";
+import type { CustomerDoc, TypedDb } from "@tokenpanel/db";
 import type { PublicPrincipal } from "../middleware/public-auth.ts";
+import { CustomersRepo } from "../infrastructure/mongo/repositories/customers.ts";
+import type { SettlementActor } from "../domains/settlement/settle.ts";
 
 /**
  * Error thrown by resolveChatContext when the request cannot proceed.
- * Mirrors the BillingError shape so /v1 handlers can map it to either the
- * OpenAI or Anthropic error envelope using their existing translators.
+ * Mirrors AppError-shaped status/code for /v1 OpenAI or Anthropic envelopes.
  */
 export class V1ChatError extends Error {
   readonly status: number;
@@ -18,15 +26,6 @@ export class V1ChatError extends Error {
   }
 }
 
-/**
- * Resolved chat context, discriminated by billing intent. All three variants
- * carry orgId (always owned by the authenticated principal).
- *
- *  - `customer`             — `tp_live_` key, bill + meter the customer.
- *  - `management_internal`  — `tp_mgmt_` key, no customerEmail. Audit only.
- *  - `management_attributed`— `tp_mgmt_` key with customerEmail resolved to a
- *                             customer inside the key's org. Bill that customer.
- */
 export type ChatContext =
   | {
       kind: "customer";
@@ -49,27 +48,95 @@ export type ChatContext =
     };
 
 /**
- * Build the chat context for a /v1 request.
- *
- *  - Customer principal → unchanged customer-key path (no email lookup).
- *  - Management principal → requires `chat:write` scope (403 if missing).
- *    When customerEmail is provided, resolves the customer inside the key's
- *    org (404 on miss; 403 if not active). Without customerEmail, returns an
- *    internal context — usage is recorded for analytics but no customer is
- *    billed and no rate-limit counters are written.
- *
- * Email matching is case-insensitive (emails are stored lowercased at create
- * time, but we lowercase defensively). Cross-org email collision is
- * structurally impossible: the lookup filter always includes the key's orgId.
+ * Build the chat context for a /v1 request (Effect).
+ */
+export const resolveChatContextEffect = (params: {
+  principal: PublicPrincipal;
+  customerEmail?: string | undefined;
+}): Effect.Effect<ChatContext, V1ChatError, CustomersRepo> =>
+  Effect.gen(function* () {
+    const { principal } = params;
+
+    if (principal.kind === "customer") {
+      return {
+        kind: "customer" as const,
+        orgId: principal.orgId,
+        customer: principal.customer,
+        apiKeyId: principal.apiKey._id,
+        modelWhitelist: principal.apiKey.modelWhitelist,
+      };
+    }
+
+    if (!principal.managementKey.scopes.includes("chat:write")) {
+      return yield* Effect.fail(
+        new V1ChatError(
+          403,
+          "missing_scope",
+          "Management key lacks chat:write scope",
+        ),
+      );
+    }
+
+    const email = params.customerEmail?.trim().toLowerCase();
+    if (!email) {
+      return {
+        kind: "management_internal" as const,
+        orgId: principal.orgId,
+        managementKeyId: principal.managementKey._id,
+      };
+    }
+
+    const customers = yield* CustomersRepo;
+    const customer = (yield* customers
+      .findByOrgEmail(principal.orgId, email)
+      .pipe(
+        Effect.mapError(
+          (e) =>
+            new V1ChatError(
+              500,
+              "system_error",
+              e instanceof Error ? e.message : String(e),
+            ),
+        ),
+      )) as CustomerDoc | null;
+
+    if (!customer) {
+      return yield* Effect.fail(
+        new V1ChatError(
+          404,
+          "customer_not_found",
+          `No customer with email '${email}' in this organization`,
+        ),
+      );
+    }
+    if (customer.status !== "active") {
+      return yield* Effect.fail(
+        new V1ChatError(
+          403,
+          "customer_inactive",
+          `Customer '${email}' is not active`,
+        ),
+      );
+    }
+
+    return {
+      kind: "management_attributed" as const,
+      orgId: principal.orgId,
+      managementKeyId: principal.managementKey._id,
+      customer,
+      customerEmail: email,
+    };
+  });
+
+/**
+ * Promise adapter for tests. Supports optional `db` injection.
+ * Production routes use resolveChatContextEffect.
  */
 export async function resolveChatContext(params: {
   principal: PublicPrincipal;
-  customerEmail?: string;
-  /**
-   * Optional DB accessor for tests (same pattern as createModelRoutes).
-   * Production callers omit this and use the process-local getDb().
-   */
-  getDb?: typeof getDb;
+  customerEmail?: string | undefined;
+  /** @deprecated Test harness only. */
+  db?: TypedDb | undefined;
 }): Promise<ChatContext> {
   const { principal } = params;
 
@@ -83,9 +150,12 @@ export async function resolveChatContext(params: {
     };
   }
 
-  // Management principal — chat:write scope is required for any /v1 chat call.
   if (!principal.managementKey.scopes.includes("chat:write")) {
-    throw new V1ChatError(403, "missing_scope", "Management key lacks chat:write scope");
+    throw new V1ChatError(
+      403,
+      "missing_scope",
+      "Management key lacks chat:write scope",
+    );
   }
 
   const email = params.customerEmail?.trim().toLowerCase();
@@ -97,32 +167,55 @@ export async function resolveChatContext(params: {
     };
   }
 
-  const db = await (params.getDb ?? getDb)();
-  // Org-scoped lookup — a same-email customer in another org can NEVER be
-  // resolved by this key. Sparse index on (organizationId, email) makes this
-  // O(1).
-  const customer = await db.customers.findOne({
-    organizationId: principal.orgId,
-    email,
-  });
-  if (!customer) {
-    throw new V1ChatError(404, "customer_not_found", `No customer with email '${email}' in this organization`);
-  }
-  if (customer.status !== "active") {
-    throw new V1ChatError(403, "customer_inactive", `Customer '${email}' is not active`);
+  // Test harness: direct TypedDb read.
+  if (params.db) {
+    const customer = await params.db.customers.findOne({
+      organizationId: principal.orgId,
+      email,
+    });
+    if (!customer) {
+      throw new V1ChatError(
+        404,
+        "customer_not_found",
+        `No customer with email '${email}' in this organization`,
+      );
+    }
+    if (customer.status !== "active") {
+      throw new V1ChatError(
+        403,
+        "customer_inactive",
+        `Customer '${email}' is not active`,
+      );
+    }
+    return {
+      kind: "management_attributed",
+      orgId: principal.orgId,
+      managementKeyId: principal.managementKey._id,
+      customer,
+      customerEmail: email,
+    };
   }
 
-  return {
-    kind: "management_attributed",
-    orgId: principal.orgId,
-    managementKeyId: principal.managementKey._id,
-    customer,
-    customerEmail: email,
-  };
+  const { getAppRuntime, isAppRuntimeInstalled } = await import(
+    "../runtime/app-runtime.ts"
+  );
+  if (!isAppRuntimeInstalled()) {
+    throw new V1ChatError(500, "system_error", "ManagedRuntime not installed");
+  }
+  const exit = await getAppRuntime().runPromiseExit(
+    resolveChatContextEffect({
+      principal,
+      customerEmail: params.customerEmail,
+    }) as Effect.Effect<ChatContext, V1ChatError, never>,
+  );
+  if (Exit.isSuccess(exit)) return exit.value;
+  const failures = [...Cause.failures(exit.cause)];
+  if (failures[0] !== undefined) throw failures[0];
+  throw Cause.squash(exit.cause);
 }
 
 /** Map a chat context to the SettlementActor shape used by settleUsage. */
-export function actorForChatContext(ctx: ChatContext) {
+export function actorForChatContext(ctx: ChatContext): SettlementActor {
   if (ctx.kind === "customer") {
     return {
       actorKind: "customer_key" as const,
@@ -150,7 +243,7 @@ export function billableCustomerId(ctx: ChatContext): ObjectId | null {
   return ctx.kind === "management_internal" ? null : ctx.customer._id;
 }
 
-/** Model whitelist from the principal (empty for management — no per-key whitelist). */
+/** Model whitelist from the principal (empty for management). */
 export function modelWhitelistForContext(ctx: ChatContext): string[] {
   return ctx.kind === "customer" ? ctx.modelWhitelist : [];
 }

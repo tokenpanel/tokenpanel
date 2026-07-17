@@ -2,35 +2,49 @@ import { test, expect, beforeEach } from "bun:test";
 import { Hono } from "hono";
 import { apiKeyThrottle } from "../../lib/throttle.ts";
 import {
-  CUSTOMER_KEY_PREFIX,
-  MANAGEMENT_KEY_PREFIX,
-  PREFIX_LENGTH,
-  requirePublicPrincipal,
-} from "../public-auth.ts";
+  API_KEY_LOOKUP_PREFIX_CHARS,
+  CUSTOMER_KEY_PREFIX_LITERAL,
+  MANAGEMENT_KEY_PREFIX_LITERAL,
+} from "../../config/security-policy.ts";
+import { requirePublicPrincipal } from "../public-auth.ts";
 
-test("CUSTOMER_KEY_PREFIX is 'tp_live_' and MANAGEMENT_KEY_PREFIX is 'tp_mgmt_'", () => {
-  expect(CUSTOMER_KEY_PREFIX).toBe("tp_live_");
-  expect(MANAGEMENT_KEY_PREFIX).toBe("tp_mgmt_");
+test("key prefixes match security-policy literals", () => {
+  expect(CUSTOMER_KEY_PREFIX_LITERAL).toBe("tp_live_");
+  expect(MANAGEMENT_KEY_PREFIX_LITERAL).toBe("tp_mgmt_");
 });
 
-test("PREFIX_LENGTH is 16 (8 literal + 8 random hex ≈ 4.3B combos)", () => {
-  expect(PREFIX_LENGTH).toBe(16);
-  expect(PREFIX_LENGTH).toBeGreaterThanOrEqual(CUSTOMER_KEY_PREFIX.length);
-  expect(PREFIX_LENGTH).toBeGreaterThanOrEqual(MANAGEMENT_KEY_PREFIX.length);
+test("API_KEY_LOOKUP_PREFIX_CHARS is 16 (8 literal + 8 random hex ≈ 4.3B combos)", () => {
+  expect(API_KEY_LOOKUP_PREFIX_CHARS).toBe(16);
+  expect(API_KEY_LOOKUP_PREFIX_CHARS).toBeGreaterThanOrEqual(
+    CUSTOMER_KEY_PREFIX_LITERAL.length,
+  );
+  expect(API_KEY_LOOKUP_PREFIX_CHARS).toBeGreaterThanOrEqual(
+    MANAGEMENT_KEY_PREFIX_LITERAL.length,
+  );
 });
 
 test("prefix literals are mutually exclusive — a real key cannot satisfy both startWith checks", () => {
-  const customerKey = `${CUSTOMER_KEY_PREFIX}abc123`;
-  const mgmtKey = `${MANAGEMENT_KEY_PREFIX}abc123`;
-  expect(customerKey.startsWith(CUSTOMER_KEY_PREFIX)).toBe(true);
-  expect(customerKey.startsWith(MANAGEMENT_KEY_PREFIX)).toBe(false);
-  expect(mgmtKey.startsWith(MANAGEMENT_KEY_PREFIX)).toBe(true);
-  expect(mgmtKey.startsWith(CUSTOMER_KEY_PREFIX)).toBe(false);
+  const customerKey = `${CUSTOMER_KEY_PREFIX_LITERAL}abc123`;
+  const mgmtKey = `${MANAGEMENT_KEY_PREFIX_LITERAL}abc123`;
+  expect(customerKey.startsWith(CUSTOMER_KEY_PREFIX_LITERAL)).toBe(true);
+  expect(customerKey.startsWith(MANAGEMENT_KEY_PREFIX_LITERAL)).toBe(false);
+  expect(mgmtKey.startsWith(MANAGEMENT_KEY_PREFIX_LITERAL)).toBe(true);
+  expect(mgmtKey.startsWith(CUSTOMER_KEY_PREFIX_LITERAL)).toBe(false);
 });
 
 test("prefix slice keeps the literal + 8 hex chars of entropy", () => {
-  expect(`${CUSTOMER_KEY_PREFIX}0123456789abcdef`.slice(0, PREFIX_LENGTH)).toBe("tp_live_01234567");
-  expect(`${MANAGEMENT_KEY_PREFIX}0123456789abcdef`.slice(0, PREFIX_LENGTH)).toBe("tp_mgmt_01234567");
+  expect(
+    `${CUSTOMER_KEY_PREFIX_LITERAL}0123456789abcdef`.slice(
+      0,
+      API_KEY_LOOKUP_PREFIX_CHARS,
+    ),
+  ).toBe("tp_live_01234567");
+  expect(
+    `${MANAGEMENT_KEY_PREFIX_LITERAL}0123456789abcdef`.slice(
+      0,
+      API_KEY_LOOKUP_PREFIX_CHARS,
+    ),
+  ).toBe("tp_mgmt_01234567");
 });
 
 // ---------------------------------------------------------------------------

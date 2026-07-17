@@ -185,7 +185,7 @@ TokenPanel has two API surfaces:
 - Admin API under `/admin/*` for users managing organizations, providers, models, customers, plans, API keys, invites, analytics, and playground requests
 - Public API under `/v1/*` for customer API keys calling OpenAI-compatible and Anthropic-compatible endpoints
 
-Core data lives in MongoDB with zod-backed TypeScript schemas. Billing settlement uses MongoDB transactions so usage records, customer balance debits, balance ledger entries, and rate-limit counters commit together.
+Core data lives in MongoDB with Effect Schema TypeScript schemas. Billing settlement uses MongoDB transactions so usage records, customer balance debits, balance ledger entries, and rate-limit counters commit together.
 
 ## Open Source Promise
 

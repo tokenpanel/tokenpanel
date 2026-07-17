@@ -46,8 +46,8 @@ export class ApiError extends Error {
 }
 
 type FetchOptions = Omit<RequestInit, "body"> & {
-  body?: unknown;
-  signal?: AbortSignal;
+  body?: unknown | undefined;
+  signal?: AbortSignal | undefined;
 };
 
 export const AUTH_INVALIDATED_EVENT = "tp:auth-invalidated";
@@ -75,7 +75,7 @@ async function apiFetch<T>(path: string, options: FetchOptions = {}): Promise<T>
     res = await fetch(`${API_BASE}${path}`, {
       ...rest,
       headers: finalHeaders,
-      body: isBodyPresent ? JSON.stringify(body) : undefined,
+      ...(isBodyPresent ? { body: JSON.stringify(body) } : {}),
     });
   } catch (err) {
     throw new ApiError(0, "network_error", { cause: String(err) });

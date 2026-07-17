@@ -23,7 +23,7 @@ Admin UI runs at `http://localhost:5173`; API runs at `http://localhost:3000`.
 
 - `apps/api` — Hono API on `Bun.serve`
 - `apps/admin` — React and Vite admin console
-- `packages/db` — MongoDB driver, zod schemas, and migrations
+- `packages/db` — MongoDB driver, Effect Schema schemas, and migrations
 - `manager` — production deployment and update tooling
 
 Read [AGENTS.md](AGENTS.md) for architecture, migration safety, and repository conventions.
@@ -43,7 +43,7 @@ Add tests for behavior changes and failure paths. Keep TypeScript strict: no `an
 
 ## Database Changes
 
-- Storage shapes originate from zod schemas in `packages/db/src/schemas`.
+- Storage shapes originate from Effect Schema schemas in `packages/db/src/schemas`.
 - Pre-deploy migrations must remain additive and safe while old code is serving.
 - Destructive changes belong in post-deploy migrations.
 - Never edit an applied migration; checksums intentionally reject this.

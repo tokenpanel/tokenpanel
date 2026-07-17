@@ -1,6 +1,6 @@
 import { test, expect } from "bun:test";
 import {
-  ProviderError,
+  makeProviderError,
   classifyHttpStatus,
   isFallbackAllowed,
   providerHttpError,
@@ -14,7 +14,7 @@ test("classifyHttpStatus: 429/5xx eligible; 4xx auth not", () => {
 });
 
 test("isFallbackAllowed: false after stream commit", () => {
-  const err = new ProviderError({
+  const err = makeProviderError({
     message: "x",
     category: "http_5xx",
     phase: "headers",
@@ -25,7 +25,7 @@ test("isFallbackAllowed: false after stream commit", () => {
 });
 
 test("isFallbackAllowed: body phase with fallbackEligible false never failovers", () => {
-  const err = new ProviderError({
+  const err = makeProviderError({
     message: "body read failed",
     category: "connection",
     phase: "body",

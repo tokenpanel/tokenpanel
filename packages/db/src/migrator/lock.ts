@@ -2,9 +2,12 @@ import type { Db } from "mongodb";
 import { MongoServerError } from "mongodb";
 import { hostname } from "node:os";
 
+/** DB-owned migration lock policy (not application domain constants). */
 const LOCK_COLLECTION = "_migration_lock";
 const LOCK_DOC_ID = "lock";
+/** Lock document TTL used when setting expiresAt. Unit: seconds. */
 const LOCK_TTL_SECONDS = 300;
+/** Heartbeat renew interval. Unit: milliseconds. */
 const HEARTBEAT_INTERVAL_MS = 60_000;
 
 interface LockDoc {

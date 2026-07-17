@@ -1,17 +1,26 @@
 import { Hono } from "hono";
-import { zValidator } from "@hono/zod-validator";
+import { Effect } from "effect";
 import { ObjectId } from "mongodb";
 import {
-  getDb,
   organizationApiCreateInput,
   organizationApiUpdateInput,
   type OrganizationDoc,
-  type UserDoc,
-  type UserRole,
 } from "@tokenpanel/db";
 import { requireAuth, type AuthVariables } from "../middleware/auth.ts";
-import { signJwt, randomToken } from "../lib/crypto.ts";
-import { requireJwtSecret } from "../config/state.ts";
+import {
+  listOrganizationsForUser,
+  createOrganization,
+  getOrganization,
+  updateOrganization,
+  deleteOrganization,
+  deriveSlug,
+  toOrganizationView,
+} from "../domains/organizations/operations.ts";
+import { switchActiveOrganization } from "../domains/auth/operations.ts";
+import { OrganizationRepository } from "../domains/ports/organization-repository.ts";
+import { runAdminEffect } from "../http/adapters/boundary.ts";
+import { sValidator } from "../http/validation/validator.ts";
+import { isAppError } from "../errors/families.ts";
 
 export const organizationRoutes = new Hono<{ Variables: AuthVariables }>();
 
@@ -19,125 +28,41 @@ organizationRoutes.use("*", requireAuth);
 
 /** Response shape for an organization doc (no ObjectId/Date leaking). */
 export function toResponse(doc: OrganizationDoc) {
-  return {
-    id: doc._id.toHexString(),
-    name: doc.name,
-    slug: doc.slug,
-    ownerId: doc.ownerId.toHexString(),
-    defaultCurrency: doc.defaultCurrency,
-    createdAt: doc.createdAt.toISOString(),
-    updatedAt: doc.updatedAt.toISOString(),
-  };
+  return toOrganizationView(doc);
 }
 
-/** Derive a lowercase-hyphenated slug from a name. */
-export function deriveSlug(name: string): string {
-  return (
-    name
-      .toLowerCase()
-      .trim()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-+|-+$/g, "") || "org"
-  );
-}
-
-/** Find a unique slug, appending a short random suffix on collision. */
-async function uniqueSlug(db: Awaited<ReturnType<typeof getDb>>, base: string): Promise<string> {
-  let slug = base;
-  for (let i = 0; i < 32; i++) {
-    const existing = await db.organizations.findOne({ slug });
-    if (!existing) return slug;
-    slug = `${base}-${randomToken(2)}`;
-  }
-  return `${base}-${randomToken(4)}`;
-}
-
-/** Membership lookup helper: the user's role for a given org, or null. */
-function roleForOrg(user: UserDoc, orgId: ObjectId): UserRole | null {
-  const m = user.memberships.find((mm) => mm.organizationId.equals(orgId));
-  return m ? m.role : null;
-}
-
-/** All org ids the user is a member of. */
-function memberOrgIds(user: UserDoc): ObjectId[] {
-  return user.memberships.map((m) => m.organizationId);
-}
+export { deriveSlug };
 
 // List orgs the authenticated user belongs to, with their per-org role.
 organizationRoutes.get("/", async (c) => {
   const user = c.get("user");
-  const db = await getDb();
-  const docs = await db.organizations
-    .find({ _id: { $in: memberOrgIds(user) } })
-    .sort({ createdAt: 1 })
-    .toArray();
-  return c.json({
-    items: docs.map((d) => ({ ...toResponse(d), role: roleForOrg(user, d._id) })),
-    activeOrganizationId: user.activeOrganizationId.toHexString(),
+  return runAdminEffect(c, listOrganizationsForUser(user), {
+    operation: "listOrganizations",
   });
 });
 
-// Create a new org. The creator becomes the owner + is added as an admin
-// member of the new org, and the new org becomes their active org. A fresh
-// JWT scoped to the new org is issued.
 organizationRoutes.post(
   "/",
-  zValidator("json", organizationApiCreateInput),
+  sValidator("json", organizationApiCreateInput),
   async (c) => {
     const user = c.get("user");
     const body = c.req.valid("json");
-    let secret: string;
-    try {
-      secret = requireJwtSecret();
-    } catch {
-      return c.json({ error: "server_misconfigured" }, 500);
-    }
-
-    const db = await getDb();
-    const now = new Date();
-    const orgId = new ObjectId();
-    const baseSlug = body.slug ?? deriveSlug(body.name);
-    const slug = await uniqueSlug(db, baseSlug);
-
-    const orgDoc: Omit<OrganizationDoc, "_id"> & { _id: ObjectId } = {
-      _id: orgId,
-      name: body.name,
-      slug,
-      ownerId: user._id,
-      defaultCurrency: body.defaultCurrency ?? "USD",
-      createdAt: now,
-      updatedAt: now,
-    };
-
-    try {
-      await db.organizations.insertOne(orgDoc);
-    } catch {
-      return c.json({ error: "organization_creation_failed" }, 409);
-    }
-
-    await db.users.updateOne(
-      { _id: user._id },
-      {
-        $push: { memberships: { organizationId: orgId, role: "admin" } },
-        $set: { activeOrganizationId: orgId, updatedAt: now },
-      },
-    );
-
-    const token = signJwt(
-      {
-        sub: user._id.toHexString(),
-        orgId: orgId.toHexString(),
-        role: "admin",
-      },
-      secret,
-    );
-
-    const created = await db.organizations.findOne({ _id: orgId });
-    if (!created) return c.json({ error: "insert_failed" }, 500);
-
-    return c.json(
-      { organization: { ...toResponse(created), role: "admin" }, token },
-      201,
+    return runAdminEffect(
+      c,
+      createOrganization({
+        userId: user._id.toHexString(),
+        name: body.name,
+        ...(body.slug !== undefined ? { slug: body.slug } : {}),
+        ...(body.defaultCurrency !== undefined
+          ? { defaultCurrency: body.defaultCurrency }
+          : {}),
+      }).pipe(
+        Effect.map((r) => ({
+          organization: r.organization,
+          token: r.token,
+        })),
+      ),
+      { operation: "createOrganization", successStatus: 201 },
     );
   },
 );
@@ -146,160 +71,149 @@ organizationRoutes.get("/:id", async (c) => {
   const user = c.get("user");
   const id = c.req.param("id");
   if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
-  const oid = new ObjectId(id);
-  const role = roleForOrg(user, oid);
-  if (!role) return c.json({ error: "not_found" }, 404);
-  const db = await getDb();
-  const doc = await db.organizations.findOne({ _id: oid });
-  if (!doc) return c.json({ error: "not_found" }, 404);
-  return c.json({ ...toResponse(doc), role });
+  return runAdminEffect(
+    c,
+    getOrganization({ user, organizationId: id }),
+    { operation: "getOrganization" },
+  );
 });
 
 organizationRoutes.patch(
   "/:id",
-  zValidator("json", organizationApiUpdateInput),
+  sValidator("json", organizationApiUpdateInput),
   async (c) => {
     const user = c.get("user");
     const id = c.req.param("id");
     if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
-    const oid = new ObjectId(id);
-    const role = roleForOrg(user, oid);
-    if (!role) return c.json({ error: "not_found" }, 404);
-    if (role !== "admin") return c.json({ error: "forbidden" }, 403);
     const body = c.req.valid("json");
-    const db = await getDb();
-
-    const $set: Record<string, unknown> = { updatedAt: new Date() };
-    for (const [k, v] of Object.entries(body)) {
-      if (v === undefined) continue;
-      if (k === "slug") {
-        const existing = await db.organizations.findOne({
-          slug: v,
-          _id: { $ne: oid },
-        });
-        if (existing) return c.json({ error: "slug_taken" }, 409);
-      }
-      $set[k] = v;
-    }
-
-    const updated = await db.organizations.findOneAndUpdate(
-      { _id: oid },
-      { $set },
-      { returnDocument: "after" },
+    return runAdminEffect(
+      c,
+      updateOrganization({
+        user,
+        organizationId: id,
+        patch: {
+          ...(body.name !== undefined ? { name: body.name } : {}),
+          ...(body.slug !== undefined ? { slug: body.slug } : {}),
+          ...(body.defaultCurrency !== undefined
+            ? { defaultCurrency: body.defaultCurrency }
+            : {}),
+        },
+      }),
+      { operation: "updateOrganization" },
     );
-    if (!updated) return c.json({ error: "not_found" }, 404);
-    return c.json({ ...toResponse(updated), role: roleForOrg(user, oid) });
   },
 );
 
-// Delete an org. Owner only. Refused if the org still has any business data
-// (providers/customers/models/plans/apiKeys) — user must clean up first.
-// Also refused if it's the user's only org (a user must always belong to one).
 organizationRoutes.delete("/:id", async (c) => {
   const user = c.get("user");
   const id = c.req.param("id");
   if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
-  const oid = new ObjectId(id);
-  if (!roleForOrg(user, oid)) return c.json({ error: "not_found" }, 404);
-  const db = await getDb();
-  const org = await db.organizations.findOne({ _id: oid });
-  if (!org) return c.json({ error: "not_found" }, 404);
-  if (!org.ownerId.equals(user._id)) {
-    return c.json({ error: "forbidden", reason: "not_owner" }, 403);
-  }
-  if (user.memberships.length <= 1) {
-    return c.json({ error: "last_org", message: "cannot delete your only organization" }, 409);
-  }
-
-  const [providers, customers, models, plans, apiKeys] = await Promise.all([
-    db.providers.countDocuments({ organizationId: oid }),
-    db.customers.countDocuments({ organizationId: oid }),
-    db.models.countDocuments({ organizationId: oid }),
-    db.subscriptionPlans.countDocuments({ organizationId: oid }),
-    db.apiKeys.countDocuments({ organizationId: oid }),
-  ]);
-  const counts = { providers, customers, models, plans, apiKeys };
-  const total = providers + customers + models + plans + apiKeys;
-  if (total > 0) {
-    return c.json({ error: "org_not_empty", counts }, 409);
-  }
-
-  // Remove the org from every member's memberships. For any user whose
-  // activeOrganizationId was this org, repoint to another remaining org.
-  const members = await db.users
-    .find({ "memberships.organizationId": oid })
-    .toArray();
-  for (const m of members) {
-    const remaining = m.memberships.filter(
-      (mm) => !mm.organizationId.equals(oid),
-    );
-    if (remaining.length === 0) continue; // shouldn't happen, but guard
-    const stillActive = remaining.some((mm) =>
-      mm.organizationId.equals(m.activeOrganizationId),
-    );
-    const nextActive = stillActive
-      ? m.activeOrganizationId
-      : remaining[0]!.organizationId;
-    await db.users.updateOne(
-      { _id: m._id },
-      {
-        $pull: { memberships: { organizationId: oid } },
-        $set: { activeOrganizationId: nextActive, updatedAt: new Date() },
+  return runAdminEffect(
+    c,
+    Effect.gen(function* () {
+      const orgs = yield* OrganizationRepository;
+      // Capture counts before delete for org_not_empty contract.
+      const counts = yield* orgs.countBusinessData(id);
+      return yield* deleteOrganization({ user, organizationId: id }).pipe(
+        Effect.mapError((e) => {
+          if (
+            isAppError(e) &&
+            e._tag === "ConflictError" &&
+            e.code === "org_not_empty"
+          ) {
+            return Object.assign(e, { _counts: counts });
+          }
+          return e;
+        }),
+      );
+    }),
+    {
+      operation: "deleteOrganization",
+      mapError: (err) => {
+        if (!isAppError(err)) return null;
+        if (err._tag === "ConflictError" && err.code === "org_not_empty") {
+          const counts = (err as { _counts?: unknown })._counts;
+          return {
+            status: 409,
+            body: {
+              error: "org_not_empty",
+              ...(counts !== undefined ? { counts } : {}),
+            },
+            headers: {},
+          };
+        }
+        if (err._tag === "ConflictError" && err.code === "last_org") {
+          return {
+            status: 409,
+            body: {
+              error: "last_org",
+              message: "cannot delete your only organization",
+            },
+            headers: {},
+          };
+        }
+        if (
+          err._tag === "AuthorizationError" &&
+          err.reason === "not_owner"
+        ) {
+          return {
+            status: 403,
+            body: { error: "forbidden", reason: "not_owner" },
+            headers: {},
+          };
+        }
+        return null;
       },
-    );
-  }
-
-  // Clean up invites for this org (no business data left to worry about).
-  await db.invites.deleteMany({ organizationId: oid });
-  await db.organizations.deleteOne({ _id: oid });
-  return c.json({ ok: true });
+    },
+  );
 });
 
-// Switch the active organization for the current session. Issues a new JWT
-// scoped to the chosen org with that membership's role. The org must be one
-// of the user's memberships.
 organizationRoutes.post("/switch", async (c) => {
   const user = c.get("user");
-  const body = await c.req.json().catch(() => null) as
-    | { organizationId?: string }
-    | null;
+  const body = (await c.req.json().catch(() => null)) as {
+    organizationId?: string;
+  } | null;
   const targetId = body?.organizationId;
   if (!targetId || !ObjectId.isValid(targetId)) {
     return c.json({ error: "invalid_organization_id" }, 400);
   }
-  const oid = new ObjectId(targetId);
-  const role = roleForOrg(user, oid);
-  if (!role) return c.json({ error: "forbidden", reason: "not_a_member" }, 403);
-
-  const db = await getDb();
-  const org = await db.organizations.findOne({ _id: oid });
-  if (!org) return c.json({ error: "not_found" }, 404);
-
-  await db.users.updateOne(
-    { _id: user._id },
-    { $set: { activeOrganizationId: oid, updatedAt: new Date() } },
-  );
-
-  let secret: string;
-  try {
-    secret = requireJwtSecret();
-  } catch {
-    return c.json({ error: "server_misconfigured" }, 500);
-  }
-  const token = signJwt(
+  return runAdminEffect(
+    c,
+    Effect.gen(function* () {
+      const switched = yield* switchActiveOrganization({
+        userId: user._id.toHexString(),
+        targetOrganizationId: targetId,
+        memberships: user.memberships,
+      });
+      const orgs = yield* OrganizationRepository;
+      const org = yield* orgs.findById(targetId);
+      return {
+        token: switched.token,
+        role: switched.role,
+        activeOrganizationId: switched.activeOrganizationId,
+        organization: org
+          ? { ...toOrganizationView(org, switched.role) }
+          : null,
+      };
+    }),
     {
-      sub: user._id.toHexString(),
-      orgId: oid.toHexString(),
-      role,
+      operation: "switchOrganization",
+      mapError: (err) => {
+        if (!isAppError(err)) return null;
+        if (
+          err._tag === "AuthorizationError" &&
+          err.reason === "not_a_member"
+        ) {
+          return {
+            status: 403,
+            body: { error: "forbidden", reason: "not_a_member" },
+            headers: {},
+          };
+        }
+        return null;
+      },
     },
-    secret,
   );
-  return c.json({
-    token,
-    role,
-    activeOrganizationId: oid.toHexString(),
-    organization: { ...toResponse(org), role },
-  });
 });
 
 export default organizationRoutes;

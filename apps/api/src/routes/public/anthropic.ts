@@ -1,73 +1,58 @@
 import { Hono } from "hono";
-import { z } from "zod";
+import { Cause, Effect, Exit } from "effect";
 import type { ObjectId } from "mongodb";
-import type { ModelDoc, ModelEntryDoc, ProviderDoc } from "@tokenpanel/db";
+import type { ModelDoc, ModelEntryDoc, ProviderDoc, RateLimitRule } from "@tokenpanel/db";
 import type { PublicAuthVariables } from "../../middleware/public-auth.ts";
+import { estimatePromptTokens } from "../../domains/billing/estimate.ts";
 import {
-  preFlight,
-  callWithFallback,
-  streamWithFallback,
-  cacheAccountingForProtocol,
-  computeCharges,
-  settleUsageOrOutbox,
-  estimatePromptTokens,
-  resolveModel,
-  releasePreFlightReservation,
-  BillingError,
+  preFlightWorkflow,
+  resolveModelOp,
   type BalanceReservation,
-} from "../../lib/billing.ts";
-import { normalizeProcessedTotalTokens } from "../../providers/provider-usage.ts";
+} from "../../domains/billing/workflow.ts";
 import {
-  resolveChatContext,
+  resolveChatContextEffect,
   actorForChatContext,
   billableCustomerId,
   modelWhitelistForContext,
   V1ChatError,
   type ChatContext,
 } from "../../lib/v1-chat-context.ts";
-import { getEffectiveRules } from "../../lib/rate-limits.ts";
 import type { ChatRequest, ChatMessage } from "../../providers/index.ts";
-import { newGatewayRequestId } from "../../services/settlement-outbox.ts";
+import {
+  applyDoneUsage,
+  classifyGenerationFailure,
+  completeGeneration,
+  emptyStreamUsage,
+  openStreamGeneration,
+  type GenerationCompleteResult,
+} from "../../domains/providers/generation.ts";
+import {
+  formatAnthropicErrorBody,
+  anthropicSseTerminalFromAppError,
+} from "../../http/renderers/anthropic.ts";
+import { isAppError } from "../../errors/families.ts";
+import { publicMessageForCode, SAFE_MESSAGES } from "../../errors/safe-messages.ts";
+import {
+  mapExitToHttpResponse,
+  runAnthropicEffect,
+} from "../../http/adapters/boundary.ts";
+import { getAppRuntime } from "../../runtime/app-runtime.ts";
+import type { RenderedHttpError } from "../../http/renderers/types.ts";
+import {
+  AnthropicMessagesBody,
+  type AnthropicMessage,
+  safeParseSchema,
+} from "../../http/validation/index.ts";
 
 const publicAnthropic = new Hono<{ Variables: PublicAuthVariables }>();
 // Auth is mounted once on the parent app for /v1/* (index.ts) so openai +
 // anthropic handlers do not double-authenticate.
 
-const anthropicContentBlock = z.object({
-  type: z.enum(["text", "image", "tool_use", "tool_result"]),
-  text: z.string().optional(),
-  source: z.object({ type: z.string(), media_type: z.string(), data: z.string() }).optional(),
-  id: z.string().optional(),
-  name: z.string().optional(),
-  input: z.any().optional(),
-  tool_use_id: z.string().optional(),
-  content: z.any().optional(),
-}).passthrough();
-
-const anthropicMessage = z.object({
-  role: z.enum(["user", "assistant"]),
-  content: z.union([z.string(), z.array(anthropicContentBlock)]),
-});
-
-const messagesBody = z.object({
-  model: z.string().min(1),
-  messages: z.array(anthropicMessage).min(1),
-  system: z.union([z.string(), z.array(z.any())]).optional(),
-  stream: z.boolean().optional(),
-  max_tokens: z.number().int().positive(),
-  temperature: z.number().optional(),
-  top_p: z.number().optional(),
-  stop_sequences: z.array(z.string()).optional(),
-  tools: z.array(z.any()).optional(),
-  tool_choice: z.any().optional(),
-  /**
-   * Management-key-only attribute (see openai.ts). Ignored for customer keys.
-   * Stripped before forwarding upstream.
-   */
-  customerEmail: z.string().email().max(254).optional(),
-}).passthrough();
-
-export function translateAnthropicMessage(m: z.infer<typeof anthropicMessage>): ChatMessage {
+/**
+ * Management-key-only attribute on AnthropicMessagesBody.customerEmail.
+ * Ignored for customer keys; stripped before upstream.
+ */
+export function translateAnthropicMessage(m: AnthropicMessage): ChatMessage {
   let content: string | import("../../providers/index.ts").ContentPart[];
   if (typeof m.content === "string") {
     content = m.content;
@@ -90,45 +75,164 @@ export function anthropicError(type: string, message: string, extra?: Record<str
   };
 }
 
+/** Preserve historical V1ChatError → Anthropic envelope mapping. */
+function mapAnthropicRouteError(err: unknown): RenderedHttpError | null {
+  if (err instanceof V1ChatError) {
+    const type =
+      err.code === "missing_scope"
+        ? "permission_error"
+        : err.code === "customer_not_found"
+          ? "not_found_error"
+          : "invalid_request_error";
+    return {
+      status: err.status,
+      body: anthropicError(type, err.message),
+      headers: {},
+    };
+  }
+  return null;
+}
+
 /**
- * Resolve model + rules. Customer / management_attributed paths run full
- * preFlight (model access + limits + balance). Internal management calls skip
- * balance/limit checks (no customer) but still validate model existence.
+ * Resolve model + rules via domain Effect preFlightWorkflow.
+ * Internal management calls skip balance/limit checks but still validate model.
  */
-async function resolveModelAndRules(params: {
+function resolveModelAndRules(params: {
   orgId: ObjectId;
   ctx: ChatContext;
   aliasId: string;
   estimatedPromptTokens: number;
   maxCompletionTokens?: number;
-}): Promise<{
-  model: ModelDoc;
-  rules: Awaited<ReturnType<typeof getEffectiveRules>>;
-  reservation: BalanceReservation | null;
-}> {
+}) {
   const customerId = billableCustomerId(params.ctx);
   if (customerId === null) {
-    const model = await resolveModel(params.orgId, params.aliasId);
-    return { model, rules: [], reservation: null };
+    return resolveModelOp(params.orgId, params.aliasId).pipe(
+      Effect.map((model) => ({
+        model,
+        rules: [] as readonly RateLimitRule[],
+        reservation: null as BalanceReservation | null,
+      })),
+    );
   }
-  return preFlight({
+  return preFlightWorkflow({
     orgId: params.orgId,
     customerId,
     apiKeyModelWhitelist: modelWhitelistForContext(params.ctx),
     aliasId: params.aliasId,
     estimatedPromptTokens: params.estimatedPromptTokens,
-    maxCompletionTokens: params.maxCompletionTokens,
-  });
+    ...(params.maxCompletionTokens !== undefined
+      ? { maxCompletionTokens: params.maxCompletionTokens }
+      : {}),
+  }).pipe(
+    Effect.map((r) => ({
+      model: r.model,
+      rules: r.rules,
+      reservation: r.reservation,
+    })),
+  );
 }
 
-publicAnthropic.post("/v1/messages", async (c) => {
-  let body: z.infer<typeof messagesBody>;
-  try {
-    body = messagesBody.parse(await c.req.json());
-  } catch (err) {
-    const msg = err instanceof z.ZodError ? err.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ") : "invalid body";
-    return c.json(anthropicError("invalid_request_error", msg), 400 as 400);
+function buildAnthropicChatRequest(
+  body: typeof AnthropicMessagesBody.Type,
+  stream: boolean,
+): ChatRequest {
+  const messages: ChatMessage[] = body.messages.map(translateAnthropicMessage);
+  if (body.system) {
+    const sysText =
+      typeof body.system === "string" ? body.system : JSON.stringify(body.system);
+    messages.unshift({ role: "system", content: sysText });
   }
+  return {
+    model: body.model,
+    messages,
+    stream,
+    maxTokens: body.max_tokens,
+    temperature: body.temperature,
+    topP: body.top_p,
+    tools: body.tools ? [...body.tools] : undefined,
+    toolChoice: body.tool_choice,
+    stop: body.stop_sequences ? [...body.stop_sequences] : undefined,
+  };
+}
+
+function anthropicMessageJson(
+  result: GenerationCompleteResult,
+  modelAlias: string,
+) {
+  const r = result.response;
+  const choice = r.choices[0];
+  const textContent =
+    typeof choice?.message.content === "string" ? choice.message.content : "";
+  const contentBlocks: unknown[] = [{ type: "text", text: textContent }];
+  const toolCalls = choice?.message.toolCalls;
+  if (Array.isArray(toolCalls)) {
+    for (const tc of toolCalls) {
+      const t = tc as {
+        id?: string;
+        function?: { name?: string; arguments?: string };
+      };
+      contentBlocks.push({
+        type: "tool_use",
+        id: t.id ?? "",
+        name: t.function?.name ?? "",
+        input: (() => {
+          try {
+            return JSON.parse(t.function?.arguments ?? "{}");
+          } catch {
+            return {};
+          }
+        })(),
+      });
+    }
+  }
+
+  return {
+    id: r.id,
+    type: "message" as const,
+    role: "assistant" as const,
+    model: modelAlias,
+    content: contentBlocks,
+    stop_reason: choice?.finishReason ?? "end_turn",
+    stop_sequence: null,
+    usage: {
+      input_tokens: r.usage.promptTokens,
+      output_tokens: r.usage.completionTokens,
+      ...(r.usage.cacheReadTokens !== undefined
+        ? { cache_read_input_tokens: r.usage.cacheReadTokens }
+        : {}),
+      ...(r.usage.cacheWriteTokens !== undefined
+        ? { cache_creation_input_tokens: r.usage.cacheWriteTokens }
+        : {}),
+    },
+  };
+}
+
+type ChatPrep = {
+  readonly ctx: ChatContext;
+  readonly request: ChatRequest;
+  readonly model: ModelDoc;
+  readonly rules: readonly RateLimitRule[];
+  readonly reservation: BalanceReservation | null;
+};
+
+publicAnthropic.post("/v1/messages", async (c) => {
+  let raw: unknown;
+  try {
+    raw = await c.req.json();
+  } catch {
+    return c.json(anthropicError("invalid_request_error", "invalid body"), 400 as 400);
+  }
+  const parsed = safeParseSchema(AnthropicMessagesBody, raw);
+  if (!parsed.success) {
+    const msg = parsed.error.issues
+      .map((i) => `${i.path.join(".")}: ${i.message}`)
+      .join("; ");
+    return c.json(
+      anthropicError("invalid_request_error", msg || "invalid body"),
+      400 as 400,
+    );
+  }
+  const body = parsed.data;
 
   const orgId = c.get("orgId");
   const principal = c.get("principal");
@@ -136,141 +240,83 @@ publicAnthropic.post("/v1/messages", async (c) => {
     return c.json(anthropicError("authentication_error", "missing principal"), 401 as 401);
   }
   const stream = body.stream ?? false;
+  const abortSignal = c.req.raw.signal;
 
-  let ctx: ChatContext;
-  try {
-    ctx = await resolveChatContext({
+  const prep = Effect.gen(function* () {
+    const ctx = yield* resolveChatContextEffect({
       principal,
       customerEmail: body.customerEmail,
     });
-  } catch (err) {
-    if (err instanceof V1ChatError) {
-      const type =
-        err.code === "missing_scope"
-          ? "permission_error"
-          : err.code === "customer_not_found"
-            ? "not_found_error"
-            : "invalid_request_error";
-      return c.json(anthropicError(type, err.message), err.status as 401 | 403 | 404);
-    }
-    throw err;
-  }
-
-  const messages: ChatMessage[] = body.messages.map(translateAnthropicMessage);
-  if (body.system) {
-    const sysText = typeof body.system === "string" ? body.system : JSON.stringify(body.system);
-    messages.unshift({ role: "system", content: sysText });
-  }
-
-  const request: ChatRequest = {
-    model: body.model,
-    messages,
-    stream,
-    maxTokens: body.max_tokens,
-    temperature: body.temperature,
-    topP: body.top_p,
-    tools: body.tools,
-    toolChoice: body.tool_choice,
-    stop: body.stop_sequences,
-  };
-
-  let preflightResult: {
-    model: ModelDoc;
-    rules: Awaited<ReturnType<typeof getEffectiveRules>>;
-    reservation: BalanceReservation | null;
-  };
-  try {
-    preflightResult = await resolveModelAndRules({
+    const request = buildAnthropicChatRequest(body, stream);
+    const preflight = yield* resolveModelAndRules({
       orgId,
       ctx,
       aliasId: body.model,
       estimatedPromptTokens: estimatePromptTokens(request.messages),
       maxCompletionTokens: body.max_tokens,
     });
-  } catch (err) {
-    if (err instanceof BillingError) {
-      const headers: Record<string, string> = {};
-      if (err.extra && typeof err.extra["retryAfterSeconds"] === "number") {
-        headers["Retry-After"] = String(err.extra["retryAfterSeconds"]);
-      }
-      return c.json(anthropicError(err.code === "rate_limited" ? "rate_limit_error" : err.code === "insufficient_balance" ? "billing_error" : "invalid_request_error", err.message, err.extra), err.status as 400 | 402 | 403 | 404 | 429 | 502, headers);
-    }
-    throw err;
+    return {
+      ctx,
+      request,
+      model: preflight.model,
+      rules: preflight.rules,
+      reservation: preflight.reservation,
+    } satisfies ChatPrep;
+  });
+
+  // --- Non-streaming: single Effect (context → preflight → complete) ---
+  if (!stream) {
+    return runAnthropicEffect(
+      c,
+      Effect.gen(function* () {
+        const p = yield* prep;
+        const result = yield* completeGeneration({
+          orgId,
+          model: p.model,
+          request: p.request,
+          actor: actorForChatContext(p.ctx),
+          rules: p.rules,
+          protocol: "anthropic",
+          reservation: p.reservation,
+          reservedMinor: p.reservation?.reservedMinor ?? 0,
+          startedAtMs: Date.now(),
+          priceMinorOverride:
+            p.ctx.kind === "management_internal" ? 0 : undefined,
+          signal: abortSignal,
+        });
+        return anthropicMessageJson(result, body.model);
+      }),
+      {
+        operation: "anthropic.messages",
+        mapError: (err) => mapAnthropicRouteError(err),
+      },
+    );
   }
 
-  const { model, rules, reservation } = preflightResult;
+  // --- Streaming: Effect prep only; SSE stays at HTTP boundary ---
+  const prepExit = await getAppRuntime().runPromiseExit(prep, {
+    signal: abortSignal,
+  });
+  if (Exit.isFailure(prepExit)) {
+    const failures = [...Cause.failures(prepExit.cause)];
+    return mapExitToHttpResponse(
+      prepExit,
+      c,
+      {
+        surface: "anthropic",
+        operation: "anthropic.messages.streamPrep",
+        mapError: (err) => mapAnthropicRouteError(err),
+      },
+      failures,
+    );
+  }
+
+  const { ctx, request, model, rules, reservation } = prepExit.value;
   const reservedMinor = reservation?.reservedMinor ?? 0;
   const actor = actorForChatContext(ctx);
   const start = Date.now();
-  // One stable id for this gateway request — shared by settle + outbox retries.
-  const gatewayRequestId = newGatewayRequestId();
-
-  if (!stream) {
-    try {
-      const outcome = await callWithFallback({ orgId, model, request });
-      const durationMs = Date.now() - start;
-      const charges = computeCharges({ entry: outcome.entry, model, usage: outcome.response.usage });
-      const priceMinor = ctx.kind === "management_internal" ? 0 : charges.priceMinor;
-      // Enqueue failures must not be swallowed — they surface as 502 so the
-      // request is not treated as free completed work.
-      await settleUsageOrOutbox({
-        orgId,
-        actor,
-        model,
-        entry: outcome.entry,
-        provider: outcome.provider,
-        protocol: "anthropic",
-        response: outcome.response,
-        providerRequestId: outcome.response.providerRequestId,
-        gatewayRequestId,
-        status: 200,
-        durationMs,
-        rules,
-        priceMinorOverride: priceMinor,
-        occurredAt: new Date(start),
-        reservedMinor,
-      });
-
-      const r = outcome.response;
-      const choice = r.choices[0];
-      const textContent = typeof choice?.message.content === "string" ? choice.message.content : "";
-      const contentBlocks: unknown[] = [{ type: "text", text: textContent }];
-      const toolCalls = choice?.message.toolCalls;
-      if (Array.isArray(toolCalls)) {
-        for (const tc of toolCalls) {
-          const t = tc as { id?: string; function?: { name?: string; arguments?: string } };
-          contentBlocks.push({
-            type: "tool_use",
-            id: t.id ?? "",
-            name: t.function?.name ?? "",
-            input: (() => { try { return JSON.parse(t.function?.arguments ?? "{}"); } catch { return {}; } })(),
-          });
-        }
-      }
-
-      return c.json({
-        id: r.id,
-        type: "message",
-        role: "assistant",
-        model: body.model,
-        content: contentBlocks,
-        stop_reason: choice?.finishReason ?? "end_turn",
-        stop_sequence: null,
-        usage: {
-          input_tokens: r.usage.promptTokens,
-          output_tokens: r.usage.completionTokens,
-          ...(r.usage.cacheReadTokens !== undefined ? { cache_read_input_tokens: r.usage.cacheReadTokens } : {}),
-          ...(r.usage.cacheWriteTokens !== undefined ? { cache_creation_input_tokens: r.usage.cacheWriteTokens } : {}),
-        },
-      });
-    } catch (err) {
-      await releasePreFlightReservation(reservation);
-      if (err instanceof BillingError) {
-        return c.json(anthropicError(err.code === "rate_limited" ? "rate_limit_error" : err.code === "insufficient_balance" ? "billing_error" : "invalid_request_error", err.message, err.extra), err.status as 400 | 402 | 403 | 404 | 429 | 502);
-      }
-      return c.json(anthropicError("upstream_error", err instanceof Error ? err.message : "upstream failed"), 502 as 502);
-    }
-  }
+  const priceMinorOverride =
+    ctx.kind === "management_internal" ? 0 : undefined;
 
   c.header("Content-Type", "text/event-stream");
   c.header("Cache-Control", "no-cache");
@@ -278,32 +324,44 @@ publicAnthropic.post("/v1/messages", async (c) => {
   c.header("X-Accel-Buffering", "no");
 
   const messageId = `msg_${Date.now().toString(36)}`;
-  let promptTokens = 0;
-  let completionTokens = 0;
-  let reasoningTokens = 0;
-  let cacheReadTokens = 0;
-  let cacheWriteTokens = 0;
-  /** Provider-reported total from chunk.usage (may exceed prompt+completion). */
-  let reportedTotalTokens: number | undefined;
-  let cacheAccounting = cacheAccountingForProtocol("anthropic");
-  let stopReason = "end_turn";
+  const session = openStreamGeneration({
+    orgId,
+    model,
+    request,
+    actor,
+    rules,
+    protocol: "anthropic",
+    reservation,
+    reservedMinor,
+    startedAtMs: start,
+    priceMinorOverride,
+    signal: abortSignal,
+  });
+
   let activeEntry: ModelEntryDoc | null = null;
-  // Retain the yielded ProviderDoc (do not re-fetch — concurrent delete would
-  // silently skip settlement/outbox).
   let activeProvider: ProviderDoc | null = null;
+  const usage = emptyStreamUsage("anthropic");
   let blockStarted = false;
-  /** Only true when adapter observed message_stop (not truncated EOF). */
-  let streamComplete = false;
-  /** Exactly one terminal error event per stream (yielded, truncation, or catch). */
   let terminalErrorEmitted = false;
+  let clientDisconnected = false;
+
+  const onAbort = () => {
+    clientDisconnected = true;
+    session.noteInterrupt();
+  };
+  abortSignal.addEventListener("abort", onAbort, { once: true });
 
   const encoder = new TextEncoder();
-  const streamGen = streamWithFallback({ orgId, model, request });
 
   const body$ = new ReadableStream({
     async start(controller) {
       const enqueue = (event: string, obj: unknown) => {
-        controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(obj)}\n\n`));
+        if (clientDisconnected) return;
+        try {
+          controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(obj)}\n\n`));
+        } catch {
+          clientDisconnected = true;
+        }
       };
       const closeOpenBlock = () => {
         if (!blockStarted) return;
@@ -311,10 +369,31 @@ publicAnthropic.post("/v1/messages", async (c) => {
         blockStarted = false;
       };
       const enqueueTerminalError = (type: string, message: string) => {
-        if (terminalErrorEmitted) return;
+        if (terminalErrorEmitted || clientDisconnected) return;
         terminalErrorEmitted = true;
         closeOpenBlock();
-        enqueue("error", { type: "error", error: { type, message } });
+        enqueue("error", {
+          type: "error",
+          error: { type, message: publicMessageForCode(type, message) },
+        });
+      };
+      const enqueueAppError = (err: unknown) => {
+        const classified = isAppError(err)
+          ? err
+          : classifyGenerationFailure(err);
+        if (isAppError(classified) && !terminalErrorEmitted) {
+          terminalErrorEmitted = true;
+          closeOpenBlock();
+          try {
+            controller.enqueue(
+              encoder.encode(anthropicSseTerminalFromAppError(classified)),
+            );
+          } catch {
+            clientDisconnected = true;
+          }
+        } else if (!terminalErrorEmitted) {
+          enqueueTerminalError("upstream_error", SAFE_MESSAGES.upstream_error);
+        }
       };
       try {
         enqueue("message_start", {
@@ -337,9 +416,25 @@ publicAnthropic.post("/v1/messages", async (c) => {
         });
         blockStarted = true;
 
-        for await (const { entry, provider, chunk } of streamGen) {
+        for await (const event of session.iterate()) {
+          if (clientDisconnected || abortSignal.aborted) {
+            session.noteInterrupt();
+            break;
+          }
+          if (event.kind !== "chunk") {
+            if (event.kind === "terminal_fail" && !clientDisconnected) {
+              enqueueAppError(
+                classifyGenerationFailure(event.err, {
+                  streamCommitted: event.streamCommitted,
+                }),
+              );
+            }
+            continue;
+          }
+          const { entry, provider, chunk } = event;
           activeEntry = entry;
           activeProvider = provider;
+          session.noteChunk(entry.id, chunk);
           if (chunk.type === "delta") {
             if (chunk.delta?.content !== undefined) {
               enqueue("content_block_delta", {
@@ -356,37 +451,18 @@ publicAnthropic.post("/v1/messages", async (c) => {
               });
             }
           } else if (chunk.type === "done") {
-            if (chunk.streamComplete) streamComplete = true;
-            if (chunk.finishReason) stopReason = chunk.finishReason;
-            if (chunk.streamComplete && chunk.usage) {
-              promptTokens = chunk.usage.promptTokens;
-              completionTokens = chunk.usage.completionTokens;
-              reasoningTokens = chunk.usage.reasoningTokens ?? 0;
-              cacheReadTokens = chunk.usage.cacheReadTokens ?? 0;
-              cacheWriteTokens = chunk.usage.cacheWriteTokens ?? 0;
-              // Retain provider total for the normalizer (do not drop totalTokens).
-              reportedTotalTokens =
-                typeof chunk.usage.totalTokens === "number"
-                  ? chunk.usage.totalTokens
-                  : undefined;
-              if (
-                chunk.usage.cacheAccounting === "subset" ||
-                chunk.usage.cacheAccounting === "additive"
-              ) {
-                cacheAccounting = chunk.usage.cacheAccounting;
-              }
-            }
+            applyDoneUsage(usage, chunk);
           } else if (chunk.type === "error") {
             enqueueTerminalError(
               "upstream_error",
-              chunk.error?.message ?? "stream error",
+              chunk.error?.message ?? SAFE_MESSAGES.upstream_error,
             );
           }
         }
 
-        if (!streamComplete) {
-          // Truncated / failed stream: one error only (skip if already emitted).
-          // Never stop_reason "error" + message_stop.
+        if (clientDisconnected || abortSignal.aborted) {
+          // No fabricated interruption body (13.6).
+        } else if (!usage.streamComplete) {
           enqueueTerminalError(
             "stream_truncated",
             "Upstream stream ended without message_stop; response may be incomplete",
@@ -395,88 +471,41 @@ publicAnthropic.post("/v1/messages", async (c) => {
           closeOpenBlock();
           enqueue("message_delta", {
             type: "message_delta",
-            delta: { stop_reason: stopReason, stop_sequence: null },
-            usage: { output_tokens: completionTokens },
+            delta: { stop_reason: usage.finishReason, stop_sequence: null },
+            usage: { output_tokens: usage.completionTokens },
           });
           enqueue("message_stop", { type: "message_stop" });
         }
       } catch (err) {
-        // Error path: no message_stop / success-style terminal. One error only.
-        enqueueTerminalError(
-          "upstream_error",
-          err instanceof Error ? err.message : "stream failed",
-        );
-      } finally {
-        controller.close();
-        const durationMs = Date.now() - start;
-        const normalizedTotal = normalizeProcessedTotalTokens({
-          promptTokens,
-          completionTokens,
-          cacheReadTokens,
-          cacheWriteTokens,
-          totalTokens: reportedTotalTokens,
-          cacheAccounting,
-        });
-        const usage = {
-          promptTokens,
-          completionTokens,
-          reasoningTokens,
-          cacheReadTokens,
-          cacheWriteTokens,
-          totalTokens: normalizedTotal ?? 0,
-          cacheAccounting,
-        };
-        if (activeEntry && activeProvider) {
-          try {
-            const charges = computeCharges({
-              entry: activeEntry,
-              model,
-              usage,
-              cacheAccounting,
-            });
-            const priceMinor =
-              ctx.kind === "management_internal" ? 0 : charges.priceMinor;
-            // Truncated streams / overflow must not settle partial usage as reported.
-            const hasAuthoritativeUsage =
-              streamComplete &&
-              normalizedTotal !== null &&
-              (promptTokens > 0 || completionTokens > 0);
-            await settleUsageOrOutbox({
-              orgId,
-              actor,
-              model,
-              entry: activeEntry,
-              provider: activeProvider,
-              protocol: "anthropic",
-              gatewayRequestId,
-              providerUsage: hasAuthoritativeUsage
-                ? { status: "reported", usage }
-                : {
-                    status: "missing",
-                    reason: !streamComplete
-                      ? "stream_truncated"
-                      : normalizedTotal === null
-                        ? "usage_overflow"
-                        : "stream_usage_absent",
-                  },
-              status: 200,
-              durationMs,
-              rules,
-              priceMinorOverride: priceMinor,
-              occurredAt: new Date(start),
-              reservedMinor,
-            });
-          } catch (settleErr) {
-            // Stream already committed to client; outbox enqueue must still
-            // surface in logs (settleUsageOrOutbox does not swallow enqueue fails).
-            console.error("[messages] stream settlement/outbox failed:", settleErr);
-          }
+        if (err instanceof Error && err.name === "AbortError") {
+          session.noteInterrupt();
+        } else if (!clientDisconnected) {
+          enqueueAppError(err);
         }
+      } finally {
+        abortSignal.removeEventListener("abort", onAbort);
+        try {
+          controller.close();
+        } catch {
+          /* already closed */
+        }
+        await session.finalize({
+          activeEntry,
+          activeProvider,
+          usage,
+          swallowSettleErrors: true,
+        });
       }
+    },
+    cancel() {
+      clientDisconnected = true;
+      session.noteInterrupt();
     },
   });
 
   return new Response(body$, { headers: c.res.headers, status: 200 });
 });
+
+void formatAnthropicErrorBody;
 
 export default publicAnthropic;

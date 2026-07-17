@@ -1,21 +1,17 @@
+/**
+ * API executable entry (section 10.9).
+ *
+ * Order: bootApi (config → mongo → pre migrations → ManagedRuntime) →
+ * compose Hono → Bun.serve → WorkerControl.start → register shutdown.
+ */
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { serveStatic } from "hono/bun";
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
-import {
-  configureDb,
-  getDb,
-  getRawDb,
-  getClient,
-  runMigrations,
-} from "@tokenpanel/db";
-import {
-  parseApiRuntimeConfig,
-  ConfigValidationError,
-} from "./config/runtime.ts";
-import { setApiRuntimeConfig } from "./config/state.ts";
-import { setJwtSecretForCrypto } from "./lib/crypto.ts";
+import { Effect } from "effect";
+import { ConfigValidationError } from "./config/runtime.ts";
+import { resolveMongo } from "./infrastructure/mongo/resolve-db.ts";
 import type { AuthVariables } from "./middleware/auth.ts";
 import authRoutes from "./routes/auth.ts";
 import signupRoutes from "./routes/signup.ts";
@@ -36,47 +32,51 @@ import analyticsSummaryRoutes from "./routes/analytics-summary.ts";
 import publicOpenAI from "./routes/public/openai.ts";
 import publicAnthropic from "./routes/public/anthropic.ts";
 import { requirePublicPrincipal } from "./middleware/public-auth.ts";
-import {
-  requireManagementPrincipal,
-} from "./middleware/management-auth.ts";
+import { requireManagementPrincipal } from "./middleware/management-auth.ts";
 import "./providers/index.ts";
-import { startSettlementReconcileWorker } from "./services/settlement-reconcile.ts";
+import {
+  bootApi,
+  registerShutdownSignals,
+  shutdownApi,
+  BootError,
+} from "./runtime/boot.ts";
+import { WorkerControl } from "./runtime/services/worker-control.ts";
 
-// Parse once at the executable boundary before app/DB init.
-let runtimeConfig: ReturnType<typeof parseApiRuntimeConfig>;
-try {
-  runtimeConfig = parseApiRuntimeConfig(process.env);
-} catch (err) {
-  if (err instanceof ConfigValidationError) {
-    for (const issue of err.issues) {
-      console.error(`config: ${issue.variable}: ${issue.reason}`);
+const boot = await (async () => {
+  try {
+    return await bootApi({
+      registerSignals: true,
+      installRuntime: true,
+      applyProcessGlobals: true,
+      runPreMigrations: true,
+    });
+  } catch (err) {
+    if (err instanceof ConfigValidationError) {
+      for (const issue of err.issues) {
+        console.error(`config: ${issue.variable}: ${issue.reason}`);
+      }
+    } else if (err instanceof BootError) {
+      console.error(`boot[${err.phase}]: ${err.message}`);
+    } else {
+      console.error(err instanceof Error ? err.message : err);
     }
-  } else {
-    console.error(err instanceof Error ? err.message : err);
+    process.exit(1);
   }
-  process.exit(1);
-}
-setApiRuntimeConfig(runtimeConfig);
-setJwtSecretForCrypto(runtimeConfig.jwtSecret);
-configureDb({
-  uri: runtimeConfig.database.uri,
-  databaseName: runtimeConfig.database.name,
-});
+})();
+
+const { config: runtimeConfig, runtime, mongo } = boot;
 
 const app = new Hono<{ Variables: AuthVariables }>();
 
-// Admin panel (apps/admin) and API (apps/api) run on separate origins in dev
-// (e.g. localhost:5173 -> localhost:3000). Auth is JWT Bearer in Authorization
-// header (no cookies), so reflecting the request Origin is safe and lets the
-// browser read responses cross-origin. Restrict via CORS_ORIGINS in prod.
-// corsOrigins null → reflect any (dev). empty → fail closed. list → allowlist.
+// Admin panel (apps/admin) and API (apps/api) run on separate origins in dev.
+// Auth is JWT Bearer (no cookies), so reflecting Origin is safe.
 const allowedOrigins = runtimeConfig.corsOrigins;
 app.use(
   "*",
   cors({
     origin: (origin) => {
       if (!origin) return null;
-      if (allowedOrigins === null) return origin; // dev: reflect any
+      if (allowedOrigins === null) return origin;
       return allowedOrigins.includes(origin) ? origin : null;
     },
     allowMethods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
@@ -95,13 +95,14 @@ app.get("/live", (c) => c.json({ status: "live" }));
 /** Readiness: bounded Mongo ping. Used for rollout / compose health. */
 app.get("/ready", async (c) => {
   try {
-    await getDb();
-    const raw = getRawDb();
-    await raw.command({ ping: 1 });
+    const { rawDb } = await resolveMongo();
+    await rawDb.command({ ping: 1 });
     return c.json({ status: "ready" });
   } catch {
-    // Never leak raw Mongo/driver error text to unauthenticated callers.
-    return c.json({ status: "not_ready", reason: "dependency_unavailable" }, 503);
+    return c.json(
+      { status: "not_ready", reason: "dependency_unavailable" },
+      503,
+    );
   }
 });
 
@@ -121,28 +122,18 @@ app.route("/admin/playground", playgroundRoutes);
 app.route("/admin/catalog-sources", catalogSourceRoutes);
 app.route("/admin/management-keys", managementKeyRoutes);
 
-// Public /v1 auth once — both OpenAI and Anthropic routers share this so a
-// request (e.g. POST /v1/messages) is not authenticated twice by each sub-app.
+// Public /v1 auth once — both OpenAI and Anthropic routers share this.
 app.use("/v1/*", requirePublicPrincipal);
 app.route("/", publicOpenAI);
 app.route("/", publicAnthropic);
 
-// Management server-to-server surface. Mounted at "/" because they self-scope
-// to /api/management/*. Auth once for the whole prefix; per-route scope gates
-// live on the handlers.
+// Management server-to-server surface.
 app.use("/api/management/*", requirePublicPrincipal);
 app.use("/api/management/*", requireManagementPrincipal);
 app.route("/", managementRead);
 app.route("/", managementWrite);
 
-// --- Static admin SPA (built by apps/admin via `vite build`) ---
-// In prod the API serves the admin panel from the same port so you only need
-// one domain. In dev, Vite serves the SPA separately (HMR) and proxies API
-// routes here. serveStatic calls next() on miss, so it never shadows API
-// routes above; this is registered last deliberately.
-//
-// resolve() makes the path cwd-independent: api runs from apps/api/, so
-// ../admin/dist points at apps/admin/dist regardless of where Bun was launched.
+// --- Static admin SPA ---
 const adminDistDir = resolve(import.meta.dirname, "../../admin/dist");
 const hasAdminDist = existsSync(join(adminDistDir, "index.html"));
 if (hasAdminDist) {
@@ -151,7 +142,6 @@ if (hasAdminDist) {
     serveStatic({
       root: adminDistDir,
       onFound: (_path, c) => {
-        // Hashed filenames -> immutable cache.
         c.header("Cache-Control", "public, max-age=31536000, immutable");
       },
     }),
@@ -164,9 +154,6 @@ if (hasAdminDist) {
 }
 
 app.notFound((c) => {
-  // SPA fallback for browser navigations only. API clients (Accept:
-  // application/json or text/event-stream for SSE) get a JSON 404 so a typo'd
-  // endpoint doesn't silently return HTML.
   const accept = c.req.header("Accept") ?? "";
   const wantsHtml = accept.includes("text/html");
   const wantsSse = accept.includes("text/event-stream");
@@ -182,34 +169,22 @@ app.onError((err, c) => {
 
 const port = runtimeConfig.port;
 
-try {
-  await getDb();
-  const db = getRawDb();
-  const mongoClient = getClient();
-
-  const preReport = await runMigrations(mongoClient, db, "pre");
-  if (preReport.applied.length > 0) {
-    console.log(`migrations: ${preReport.applied.length} pre-deploy applied`);
-  }
-
-  // Post-deploy (destructive) migrations are NOT run on API boot. They are
-  // executed exclusively by the manager's Discourse-style update flow:
-  //   Phase 4 pre (new image, old container serving)
-  //   → Phase 5 swap
-  //   → Phase 6 post (live new container)
-  // Applied migrations are tracked in `_migrations` (id + checksum); re-runs
-  // skip already-applied files. First install / local docker can also run
-  // `tokenpanel migrate post` (or relies on update Phase 6).
-  console.log("mongodb ready");
-} catch (err) {
-  console.error("mongodb migration failed:", err instanceof Error ? err.message : err);
-  process.exit(1);
-}
-
+console.log("mongodb ready");
 Bun.serve({ port, fetch: app.fetch });
 console.log(`api listening on http://localhost:${port}`);
 
-// Drain settlement_outbox (missing usage / settle failures) with bounded backoff.
-startSettlementReconcileWorker();
+// Start settlement reconcile worker via WorkerControl (task 10.9).
+await runtime.runPromise(
+  Effect.gen(function* () {
+    const workers = yield* WorkerControl;
+    yield* workers.start();
+  }),
+);
 
-export { app };
+// Ensure signals registered (bootApi may have done this).
+registerShutdownSignals(runtimeConfig);
+
+void mongo;
+void shutdownApi;
+
+export { app, runtime, runtimeConfig };

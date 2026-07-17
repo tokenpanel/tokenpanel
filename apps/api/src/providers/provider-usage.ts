@@ -18,31 +18,31 @@ export type CacheAccountingMode = "subset" | "additive";
 export type TokenUsage = {
   promptTokens: number;
   completionTokens: number;
-  reasoningTokens?: number;
-  cacheReadTokens?: number;
-  cacheWriteTokens?: number;
+  reasoningTokens?: number | undefined;
+  cacheReadTokens?: number | undefined;
+  cacheWriteTokens?: number | undefined;
   totalTokens: number;
   /**
    * Explicit cache billing mode from the adapter. Required for correct charges
    * when cache counters are present; frozen into settlement outbox context.
    */
-  cacheAccounting?: CacheAccountingMode;
+  cacheAccounting?: CacheAccountingMode | undefined;
 };
 
 export type ProviderUsage =
   | { status: "reported"; usage: TokenUsage }
-  | { status: "missing"; reason: string; providerRequestId?: string };
+  | { status: "missing"; reason: string; providerRequestId?: string | undefined };
 
 /**
  * Partial Anthropic stream usage fragment. Missing sides stay undefined —
  * never coerced to zero (that would undercharge when only one side arrives).
  */
 export type AnthropicStreamUsageFragment = {
-  promptTokens?: number;
-  completionTokens?: number;
-  reasoningTokens?: number;
-  cacheReadTokens?: number;
-  cacheWriteTokens?: number;
+  promptTokens?: number | undefined;
+  completionTokens?: number | undefined;
+  reasoningTokens?: number | undefined;
+  cacheReadTokens?: number | undefined;
+  cacheWriteTokens?: number | undefined;
 };
 
 /**
@@ -53,7 +53,7 @@ export type AnthropicStreamUsageAccum = TokenUsage & {
   hasInput: boolean;
   hasOutput: boolean;
   /** True when part sum overflowed MAX_SAFE_INTEGER — never settle. */
-  overflow?: boolean;
+  overflow?: boolean | undefined;
 };
 
 /**
@@ -113,9 +113,9 @@ function firstNum(...vals: unknown[]): number | undefined | null {
 export function partsSumForProcessedTotal(params: {
   promptTokens: number;
   completionTokens: number;
-  cacheReadTokens?: number;
-  cacheWriteTokens?: number;
-  cacheAccounting?: CacheAccountingMode;
+  cacheReadTokens?: number | undefined;
+  cacheWriteTokens?: number | undefined;
+  cacheAccounting?: CacheAccountingMode | undefined;
 }): number | null {
   const prompt = params.promptTokens;
   const completion = params.completionTokens;
@@ -141,11 +141,11 @@ export function partsSumForProcessedTotal(params: {
 export function normalizeProcessedTotalTokens(usage: {
   promptTokens: number;
   completionTokens: number;
-  reasoningTokens?: number;
-  cacheReadTokens?: number;
-  cacheWriteTokens?: number;
-  totalTokens?: number;
-  cacheAccounting?: CacheAccountingMode;
+  reasoningTokens?: number | undefined;
+  cacheReadTokens?: number | undefined;
+  cacheWriteTokens?: number | undefined;
+  totalTokens?: number | undefined;
+  cacheAccounting?: CacheAccountingMode | undefined;
 }): number | null {
   const parts = partsSumForProcessedTotal(usage);
   if (parts === null) return null;

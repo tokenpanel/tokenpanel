@@ -3,8 +3,8 @@ import { isDuplicateKeyError } from "../crypto.ts";
 
 class FakeMongoError extends Error {
   override name: string;
-  code?: number;
-  constructor(message: string, code?: number) {
+  code?: number | undefined;
+  constructor(message: string, code?: number | undefined) {
     super(message);
     this.name = "MongoServerError";
     this.code = code;

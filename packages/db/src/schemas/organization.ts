@@ -1,49 +1,25 @@
-import { z } from "zod";
-import { objectId, objectIdFromString, timestampFields } from "./common.ts";
-
 /**
- * Organization = tenant operating this panel.
- * Sells AI services to its own Customers.
+ * Organization schemas — Effect Schema production path (§11).
  */
-export const organizationDoc = z.object({
-  _id: objectId,
-  name: z.string().min(1).max(120),
-  slug: z
-    .string()
-    .min(1)
-    .max(60)
-    .regex(/^[a-z0-9-]+$/, "slug must be lowercase, hyphenated"),
-  ownerId: objectId,
-  defaultCurrency: z.string().length(3).regex(/^[A-Z]{3}$/),
-  ...timestampFields,
-});
+import {
+  OrganizationDoc as OrganizationDocSchema,
+  OrganizationCreateInput as OrganizationCreateInputSchema,
+  OrganizationApiCreateInput as OrganizationApiCreateInputSchema,
+  OrganizationApiUpdateInput as OrganizationApiUpdateInputSchema,
+  OrganizationUpdateInput as OrganizationUpdateInputSchema,
+} from "./effect/organization.ts";
+import { withParseApi } from "./parse.ts";
+import type { MutableDeep } from "./mutable.ts";
+import type { Schema } from "effect";
 
-export const organizationCreateInput = z.object({
-  name: z.string().min(1).max(120),
-  slug: z.string().min(1).max(60).regex(/^[a-z0-9-]+$/),
-  ownerId: objectIdFromString,
-  defaultCurrency: z.string().length(3).regex(/^[A-Z]{3}$/),
-});
+export const organizationDoc = withParseApi(OrganizationDocSchema);
+export const organizationCreateInput = withParseApi(OrganizationCreateInputSchema);
+export const organizationApiCreateInput = withParseApi(OrganizationApiCreateInputSchema);
+export const organizationApiUpdateInput = withParseApi(OrganizationApiUpdateInputSchema);
+export const organizationUpdateInput = withParseApi(OrganizationUpdateInputSchema);
 
-/** API create shape — ownerId comes from auth context, not the request body. */
-export const organizationApiCreateInput = z.object({
-  name: z.string().min(1).max(120),
-  slug: z.string().min(1).max(60).regex(/^[a-z0-9-]+$/).optional(),
-  defaultCurrency: z.string().length(3).regex(/^[A-Z]{3}$/).optional(),
-});
-
-/** API patch shape — all optional, validates shapes when present. */
-export const organizationApiUpdateInput = z.object({
-  name: z.string().min(1).max(120).optional(),
-  slug: z.string().min(1).max(60).regex(/^[a-z0-9-]+$/).optional(),
-  defaultCurrency: z.string().length(3).regex(/^[A-Z]{3}$/).optional(),
-});
-
-export type OrganizationDoc = z.infer<typeof organizationDoc>;
-export type OrganizationCreateInput = z.infer<typeof organizationCreateInput>;
-export type OrganizationApiCreateInput = z.infer<
-  typeof organizationApiCreateInput
->;
-export type OrganizationApiUpdateInput = z.infer<
-  typeof organizationApiUpdateInput
->;
+export type OrganizationDoc = MutableDeep<Schema.Schema.Type<typeof OrganizationDocSchema>>;
+export type OrganizationCreateInput = MutableDeep<Schema.Schema.Type<typeof OrganizationCreateInputSchema>>;
+export type OrganizationApiCreateInput = MutableDeep<Schema.Schema.Type<typeof OrganizationApiCreateInputSchema>>;
+export type OrganizationApiUpdateInput = MutableDeep<Schema.Schema.Type<typeof OrganizationApiUpdateInputSchema>>;
+export type OrganizationUpdateInput = MutableDeep<Schema.Schema.Type<typeof OrganizationUpdateInputSchema>>;

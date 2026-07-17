@@ -1,183 +1,139 @@
 import { Hono } from "hono";
-import { z } from "zod";
-import { zValidator } from "@hono/zod-validator";
+import { Effect } from "effect";
 import { ObjectId } from "mongodb";
-import type { Filter } from "mongodb";
+import { apiKeyCreateInput, apiKeyUpdateInput } from "@tokenpanel/db";
+import type { AuthVariables } from "../middleware/auth.ts";
+import { requireAuth, requireRole } from "../middleware/auth.ts";
 import {
-  getDb,
-  apiKeyUpdateInput,
-  type ApiKeyDoc,
-  type CustomerDoc,
-} from "@tokenpanel/db";
-import { requireAuth, requireRole, type AuthVariables } from "../middleware/auth.ts";
+  listCustomerApiKeys,
+  issueCustomerApiKey,
+  updateCustomerApiKey,
+  revokeCustomerApiKey,
+  stripCustomerKey,
+} from "../domains/keys/operations.ts";
 import {
-  CUSTOMER_KEY_PREFIX_LITERAL,
   API_KEY_LOOKUP_PREFIX_CHARS,
-  issueApiKeyWithRetry,
-} from "../services/api-key-issuer.ts";
+  CUSTOMER_KEY_PREFIX_LITERAL,
+} from "../domains/keys/policy.ts";
+import { runAdminEffect } from "../http/adapters/boundary.ts";
+import { sValidator } from "../http/validation/validator.ts";
+import { ApiKeyListQuery } from "../http/validation/query.ts";
+import { withParseApi } from "../http/validation/with-parse-api.ts";
+import { KeyRepository } from "../domains/ports/key-repository.ts";
+import { NotFoundError } from "../errors/families.ts";
 import { parseObjectIdParam } from "./route-utils.ts";
+
+/** @deprecated Test helper alias — use stripCustomerKey from domains/keys. */
+export const stripKey = stripCustomerKey;
+export { parseObjectIdParam };
+export const KEY_PREFIX_LITERAL = CUSTOMER_KEY_PREFIX_LITERAL;
+export const PREFIX_LENGTH = API_KEY_LOOKUP_PREFIX_CHARS;
+
+export const apiKeyListQuery = withParseApi(ApiKeyListQuery);
 
 const apiKeyRoutes = new Hono<{ Variables: AuthVariables }>();
 
 apiKeyRoutes.use("*", requireAuth);
 
-export const KEY_PREFIX_LITERAL = CUSTOMER_KEY_PREFIX_LITERAL;
-/**
- * Lookup prefix length — matches the public auth dispatcher's PREFIX_LENGTH
- * (16). 8 literal + 8 random hex ≈ 4.3B combos; birthday collision ~65K keys.
- */
-export const PREFIX_LENGTH = API_KEY_LOOKUP_PREFIX_CHARS;
-
-type StrippedApiKey = Omit<ApiKeyDoc, "keyHash"> & { hasKey: true };
-
-export function stripKey(doc: ApiKeyDoc): StrippedApiKey {
-  const { keyHash: _omit, ...rest } = doc;
-  void _omit;
-  return { ...rest, hasKey: true };
-}
-
-export { parseObjectIdParam };
-
-const listQuerySchema = z.object({
-  customerId: z.string().min(1).max(64).optional(),
-});
-
-apiKeyRoutes.get("/", zValidator("query", listQuerySchema), async (c) => {
+apiKeyRoutes.get("/", sValidator("query", apiKeyListQuery), async (c) => {
   const orgId = c.get("orgId");
   const q = c.req.valid("query");
-  const db = await getDb();
-
-  const filter: Filter<ApiKeyDoc> = { organizationId: orgId };
-  if (q.customerId !== undefined) {
-    if (!ObjectId.isValid(q.customerId)) {
-      return c.json({ error: "invalid_customer_id" }, 400);
-    }
-    filter.customerId = new ObjectId(q.customerId);
-  }
-
-  const docs = await db.apiKeys
-    .find(filter)
-    .sort({ createdAt: -1 })
-    .toArray();
-
-  const items = docs.map((d) => stripKey(d as ApiKeyDoc));
-  return c.json({ items });
+  return runAdminEffect(
+    c,
+    listCustomerApiKeys({
+      organizationId: orgId.toHexString(),
+      ...(q.customerId !== undefined ? { customerId: q.customerId } : {}),
+    }).pipe(Effect.map((items) => ({ items }))),
+    { operation: "listCustomerApiKeys" },
+  );
 });
 
-const createBodySchema = z.object({
-  customerId: z.string().min(1).max(64),
-  name: z.string().min(1).max(120),
-  modelWhitelist: z.array(z.string().min(1).max(80)).optional(),
-});
-
-apiKeyRoutes.post("/", requireRole("admin"), zValidator("json", createBodySchema), async (c) => {
-  const orgId = c.get("orgId");
-  const body = c.req.valid("json");
-  const db = await getDb();
-
-  if (!ObjectId.isValid(body.customerId)) {
-    return c.json({ error: "invalid_customer_id" }, 400);
-  }
-  const customerId = new ObjectId(body.customerId);
-
-  const customer = await db.customers.findOne({
-    _id: customerId,
-    organizationId: orgId,
-  });
-  if (!customer) {
-    return c.json({ error: "customer_not_found" }, 404);
-  }
-
-  // Key material + bounded unique-prefix retry: apps/api/src/services/api-key-issuer.ts
-  const now = new Date();
-  let createdDoc: ApiKeyDoc | null = null;
-  const result = await issueApiKeyWithRetry({
-    literal: KEY_PREFIX_LITERAL,
-    insert: async (issued) => {
-      const doc: ApiKeyDoc = {
-        _id: new ObjectId(),
-        organizationId: orgId,
-        customerId,
+apiKeyRoutes.post(
+  "/",
+  requireRole("admin"),
+  sValidator("json", apiKeyCreateInput),
+  async (c) => {
+    const orgId = c.get("orgId");
+    const body = c.req.valid("json");
+    return runAdminEffect(
+      c,
+      issueCustomerApiKey({
+        organizationId: orgId.toHexString(),
+        customerId:
+          typeof body.customerId === "string"
+            ? body.customerId
+            : String(body.customerId),
         name: body.name,
-        prefix: issued.prefix,
-        keyHash: issued.keyHash,
         modelWhitelist: body.modelWhitelist ?? [],
-        status: "active",
-        lastUsedAt: null,
-        createdAt: now,
-        updatedAt: now,
-      };
-      await db.apiKeys.insertOne(doc);
-      createdDoc = doc;
-    },
-  });
-
-  if (!result.ok || !createdDoc) {
-    return c.json({ error: "prefix_collision" }, 503);
-  }
-
-  return c.json({ apiKey: stripKey(createdDoc), key: result.issued.fullKey }, 201);
-});
+      }).pipe(
+        Effect.map((r) => ({
+          ...r.apiKey,
+          key: r.key,
+        })),
+      ),
+      { operation: "issueCustomerApiKey", successStatus: 201 },
+    );
+  },
+);
 
 apiKeyRoutes.get("/:id", async (c) => {
   const orgId = c.get("orgId");
-  const oid = parseObjectIdParam(c.req.param("id"));
-  if (!oid) return c.json({ error: "not_found" }, 404);
-  const db = await getDb();
-
-  const doc = await db.apiKeys.findOne({
-    _id: oid,
-    organizationId: orgId,
-  });
-  if (!doc) return c.json({ error: "not_found" }, 404);
-
-  return c.json(stripKey(doc as ApiKeyDoc));
+  const id = c.req.param("id");
+  if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
+  return runAdminEffect(
+    c,
+    Effect.gen(function* () {
+      const keys = yield* KeyRepository;
+      const doc = yield* keys.findCustomerKey(orgId.toHexString(), id);
+      if (!doc) {
+        return yield* Effect.fail(
+          new NotFoundError({
+            code: "not_found",
+            message: "API key not found",
+            resource: "api_key",
+            id,
+          }),
+        );
+      }
+      return stripCustomerKey(doc);
+    }),
+    { operation: "getCustomerApiKey" },
+  );
 });
 
 apiKeyRoutes.patch(
   "/:id",
   requireRole("admin"),
-  zValidator("json", apiKeyUpdateInput),
+  sValidator("json", apiKeyUpdateInput),
   async (c) => {
     const orgId = c.get("orgId");
-    const oid = parseObjectIdParam(c.req.param("id"));
-    if (!oid) return c.json({ error: "not_found" }, 404);
+    const id = c.req.param("id");
+    if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
     const body = c.req.valid("json");
-    const db = await getDb();
-
-    const update: Record<string, unknown> = { updatedAt: new Date() };
-    for (const [k, v] of Object.entries(body)) {
-      if (v === undefined) continue;
-      update[k] = v;
-    }
-
-    const updated = await db.apiKeys.findOneAndUpdate(
-      { _id: oid, organizationId: orgId },
-      { $set: update },
-      { returnDocument: "after" },
+    return runAdminEffect(
+      c,
+      updateCustomerApiKey({
+        organizationId: orgId.toHexString(),
+        keyId: id,
+        patch: body as Record<string, unknown>,
+      }),
+      { operation: "updateCustomerApiKey" },
     );
-    if (!updated) return c.json({ error: "not_found" }, 404);
-
-    return c.json(stripKey(updated as ApiKeyDoc));
   },
 );
 
 apiKeyRoutes.delete("/:id", requireRole("admin"), async (c) => {
   const orgId = c.get("orgId");
-  const oid = parseObjectIdParam(c.req.param("id"));
-  if (!oid) return c.json({ error: "not_found" }, 404);
-  const db = await getDb();
-
-  const updated = await db.apiKeys.findOneAndUpdate(
-    { _id: oid, organizationId: orgId },
-    { $set: { status: "revoked", updatedAt: new Date() } },
-    { returnDocument: "after" },
+  const id = c.req.param("id");
+  if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
+  return runAdminEffect(
+    c,
+    revokeCustomerApiKey({
+      organizationId: orgId.toHexString(),
+      keyId: id,
+    }),
+    { operation: "revokeCustomerApiKey" },
   );
-  if (!updated) return c.json({ error: "not_found" }, 404);
-
-  return c.json({ ok: true, status: updated.status });
 });
 
 export default apiKeyRoutes;
-export { apiKeyRoutes };
-export type { CustomerDoc };

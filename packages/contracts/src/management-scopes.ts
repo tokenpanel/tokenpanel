@@ -1,12 +1,14 @@
-import { z } from "zod";
-
 /**
  * Management API key scopes — single live descriptor source.
  *
  * Policy version: 2026-07-13
  * Values are stable public contract: changing a value is a breaking API change.
  * DB enum, API metadata endpoint, and admin UI all derive from this tuple.
+ *
+ * Effect Schema: `managementScopeSchema` (canonical §11 path).
  */
+import { Schema } from "effect";
+import { withParseApi } from "./parse.ts";
 
 export const MANAGEMENT_SCOPE_DEFINITIONS = [
   {
@@ -64,9 +66,13 @@ export type ManagementScope = ManagementScopeDefinition["value"];
 export const MANAGEMENT_SCOPES: readonly ManagementScope[] =
   MANAGEMENT_SCOPE_DEFINITIONS.map((d) => d.value);
 
-/** Zod enum over all scope values (tuple must be non-empty for z.enum). */
-export const managementScopeSchema = z.enum(
-  MANAGEMENT_SCOPES as unknown as [ManagementScope, ...ManagementScope[]],
+/** Effect Schema enum over all scope values (non-empty tuple for Literal). */
+const scopeLiterals = MANAGEMENT_SCOPES as unknown as [
+  ManagementScope,
+  ...ManagementScope[],
+];
+export const managementScopeSchema = withParseApi(
+  Schema.Literal(...scopeLiterals),
 );
 
 /** API `/__scopes/meta` item shape (scope field name matches historical response). */

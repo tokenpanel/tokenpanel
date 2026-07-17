@@ -1,18 +1,26 @@
 /**
  * Reconciliation worker: drains settlement_outbox pending/expired-lease rows.
  * Retries settleUsage when context holds a full usage + pricing snapshot.
- * Missing-usage rows without recoverable usage abandon immediately (no
- * provider usage-lookup API yet — spinning 20 times wastes work).
+ * Missing-usage rows without recoverable usage abandon immediately.
+ *
+ * Primary API is Effect (worker runs via getAppRuntime().runPromise).
  */
 
+import { Effect } from "effect";
 import { ObjectId } from "mongodb";
-import {
-  getDb,
-  type ModelDoc,
-  type ModelEntryDoc,
-  type ProviderDoc,
-  type SettlementOutboxDoc,
+import type {
+  ModelDoc,
+  ModelEntryDoc,
+  ProviderDoc,
+  RateLimitRule,
+  SettlementOutboxDoc,
 } from "@tokenpanel/db";
+import { ModelsRepo } from "../infrastructure/mongo/repositories/models.ts";
+import { UsageRepo } from "../infrastructure/mongo/repositories/usage.ts";
+import type { SettlementOutboxRepo } from "../infrastructure/mongo/repositories/settlement-outbox.ts";
+import type { PlansRepo } from "../infrastructure/mongo/repositories/plans.ts";
+import type { CustomersRepo } from "../infrastructure/mongo/repositories/customers.ts";
+import type { MongoDb } from "../runtime/services/mongo-db.ts";
 import {
   claimDueOutboxRows,
   claimFromRow,
@@ -29,8 +37,9 @@ import {
   settleUsage,
   type ChargeSchedule,
   type SettlementActor,
-} from "../lib/billing.ts";
+} from "../domains/settlement/settle.ts";
 import { getEffectiveRules } from "../lib/rate-limits.ts";
+import { syncLog } from "../infrastructure/telemetry/sync-log.ts";
 import type {
   CacheAccountingMode,
   TokenUsage,
@@ -78,12 +87,6 @@ function actorFromContext(
   };
 }
 
-/**
- * Resolve the original model entry only — never fall back to an unrelated
- * active/first entry (that would settle against the wrong upstream model /
- * pricing). When the live entry is gone but the outbox frozen a price +
- * upstream id, reconstruct a stub for attribution metadata only.
- */
 function resolveEntry(params: {
   modelEntries: ModelEntryDoc[];
   providerId: ObjectId;
@@ -100,7 +103,6 @@ function resolveEntry(params: {
     );
     if (exact) return { ok: true, entry: exact };
   } else {
-    // No upstream id stored: only accept a single matching-provider entry.
     const matches = modelEntries.filter((e) => e.providerId.equals(providerId));
     if (matches.length === 1 && matches[0]) {
       return { ok: true, entry: matches[0] };
@@ -110,7 +112,6 @@ function resolveEntry(params: {
     }
   }
 
-  // Original entry gone. Only continue if context froze price + upstream id.
   const frozenPrice =
     typeof ctx.priceMinor === "number" && Number.isFinite(ctx.priceMinor);
   const frozenUpstream =
@@ -129,11 +130,6 @@ function resolveEntry(params: {
   return { ok: false, reason: "entry_not_found" };
 }
 
-/**
- * Reconstruct minimal model/provider docs from frozen outbox context when live
- * config was deleted. settleUsage only needs aliasId / provider._id / entry
- * upstream attribution + precomputed price — not live secrets or base URLs.
- */
 function reconstructFrozenAttribution(params: {
   row: SettlementOutboxDoc;
   ctx: Record<string, unknown>;
@@ -145,7 +141,6 @@ function reconstructFrozenAttribution(params: {
   const { row, ctx, providerId, upstreamModelId, currency, priceSchedule } =
     params;
   const now = row.createdAt;
-  // tokenPriceSchedule requires input/output numbers.
   const price = {
     inputMinorPerMillion: priceSchedule.inputMinorPerMillion ?? 0,
     outputMinorPerMillion: priceSchedule.outputMinorPerMillion ?? 0,
@@ -199,7 +194,9 @@ function reconstructFrozenAttribution(params: {
     active: false,
     metadata: {
       reconstructed: true,
-      ...(typeof ctx.providerId === "string" ? { frozenProviderId: ctx.providerId } : {}),
+      ...(typeof ctx.providerId === "string"
+        ? { frozenProviderId: ctx.providerId }
+        : {}),
     },
     createdAt: now,
     updatedAt: now,
@@ -207,218 +204,231 @@ function reconstructFrozenAttribution(params: {
   return { model, provider, entry };
 }
 
+export type ReconcileResult =
+  | "reconciled"
+  | "retry"
+  | "abandoned"
+  | "stale_claim";
+
+export type ReconcileServices =
+  | SettlementOutboxRepo
+  | UsageRepo
+  | ModelsRepo
+  | PlansRepo
+  | CustomersRepo
+  | MongoDb;
+
 /**
- * Attempt to settle one outbox row.
- * settleUsage is idempotent on gatewayRequestId — safe if prior attempt
- * committed the charge but crashed before markOutboxReconciled.
+ * Attempt to settle one outbox row (Effect).
+ * settleUsage is idempotent on gatewayRequestId.
  */
-export async function reconcileOutboxRow(
+export const reconcileOutboxRow = (
   row: SettlementOutboxDoc,
   claim: OutboxClaim,
-): Promise<"reconciled" | "retry" | "abandoned" | "stale_claim"> {
-  const ctx = (row.context ?? {}) as Record<string, unknown>;
-  const usage = ctx.usage;
-  const hasUsage = isTokenUsage(usage);
+): Effect.Effect<ReconcileResult, never, ReconcileServices> =>
+  Effect.gen(function* () {
+    const ctx = (row.context ?? {}) as Record<string, unknown>;
+    const usage = ctx.usage;
+    const hasUsage = isTokenUsage(usage);
 
-  // No provider usage-lookup path yet: spinning unchanged snapshots is useless.
-  // Abandon immediately so ops can re-enqueue after manual/provider recovery.
-  if (!hasUsage) {
-    const ok = await markOutboxAbandoned(
-      row._id,
-      claim,
-      row.reason || "missing_usage_no_provider_lookup",
-    );
-    return ok ? "abandoned" : "stale_claim";
-  }
-
-  const db = await getDb();
-
-  // Idempotency first — crash-after-commit rows must mark reconciled even when
-  // live model/provider were deleted. Do not require live config for this path.
-  if (row.gatewayRequestId) {
-    const gwId = compactGatewayRequestId(row.gatewayRequestId);
-    const existing = await db.usageRecords.findOne({ gatewayRequestId: gwId });
-    if (existing) {
-      const ok = await markOutboxReconciled(row._id, claim);
-      return ok ? "reconciled" : "stale_claim";
+    if (!hasUsage) {
+      const ok = yield* markOutboxAbandoned(
+        row._id,
+        claim,
+        row.reason || "missing_usage_no_provider_lookup",
+      ).pipe(Effect.catchAll(() => Effect.succeed(false)));
+      return ok ? ("abandoned" as const) : ("stale_claim" as const);
     }
-  }
 
-  // Renew lease before potentially slow DB work.
-  if (!(await renewOutboxClaim(row._id, claim))) {
-    return "stale_claim";
-  }
+    if (row.gatewayRequestId) {
+      const gwId = compactGatewayRequestId(row.gatewayRequestId);
+      const usageRepo = yield* UsageRepo;
+      const existing = yield* usageRepo
+        .findByGatewayRequestId(gwId)
+        .pipe(Effect.catchAll(() => Effect.succeed(null)));
+      if (existing) {
+        const ok = yield* markOutboxReconciled(row._id, claim).pipe(
+          Effect.catchAll(() => Effect.succeed(false)),
+        );
+        return ok ? ("reconciled" as const) : ("stale_claim" as const);
+      }
+    }
 
-  const providerId =
-    row.providerId ??
-    (typeof ctx.providerId === "string" && ObjectId.isValid(ctx.providerId)
-      ? new ObjectId(ctx.providerId)
-      : undefined);
-  if (!providerId) {
-    const ok = await releaseOutboxAfterFailure(
-      row._id,
-      claim,
-      "provider_id_missing",
+    const renewed = yield* renewOutboxClaim(row._id, claim).pipe(
+      Effect.catchAll(() => Effect.succeed(false)),
     );
-    return ok ? "retry" : "stale_claim";
-  }
+    if (!renewed) return "stale_claim" as const;
 
-  const upstreamModelId =
-    row.upstreamModelId ??
-    (typeof ctx.upstreamModelId === "string" ? ctx.upstreamModelId : undefined);
+    const providerId =
+      row.providerId ??
+      (typeof ctx.providerId === "string" && ObjectId.isValid(ctx.providerId)
+        ? new ObjectId(ctx.providerId)
+        : undefined);
+    if (!providerId) {
+      const ok = yield* releaseOutboxAfterFailure(
+        row._id,
+        claim,
+        "provider_id_missing",
+      ).pipe(Effect.catchAll(() => Effect.succeed(false)));
+      return ok ? ("retry" as const) : ("stale_claim" as const);
+    }
 
-  const priceMinor =
-    typeof ctx.priceMinor === "number" && Number.isFinite(ctx.priceMinor)
-      ? Math.floor(ctx.priceMinor)
-      : undefined;
-  const costMinorFrozen =
-    typeof ctx.costMinor === "number" && Number.isFinite(ctx.costMinor)
-      ? Math.floor(ctx.costMinor)
-      : undefined;
-  const frozenSchedule = ctx.priceSchedule as ChargeSchedule | undefined;
+    const upstreamModelId =
+      row.upstreamModelId ??
+      (typeof ctx.upstreamModelId === "string" ? ctx.upstreamModelId : undefined);
 
-  let model = await db.models.findOne({
-    organizationId: row.organizationId,
-    aliasId: row.modelAliasId,
-  });
-  let provider = await db.providers.findOne({
-    _id: providerId,
-    organizationId: row.organizationId,
-  });
+    const priceMinor =
+      typeof ctx.priceMinor === "number" && Number.isFinite(ctx.priceMinor)
+        ? Math.floor(ctx.priceMinor)
+        : undefined;
+    const costMinorFrozen =
+      typeof ctx.costMinor === "number" && Number.isFinite(ctx.costMinor)
+        ? Math.floor(ctx.costMinor)
+        : undefined;
+    const frozenSchedule = ctx.priceSchedule as ChargeSchedule | undefined;
 
-  let entry: ModelEntryDoc | undefined;
-  if (model) {
-    const entryResult = resolveEntry({
-      modelEntries: model.entries,
-      providerId,
-      upstreamModelId,
-      ctx,
-    });
-    if (entryResult.ok) entry = entryResult.entry;
-  }
+    const models = yield* ModelsRepo;
+    let model = (yield* models
+      .findModelByAlias(row.organizationId, row.modelAliasId)
+      .pipe(Effect.catchAll(() => Effect.succeed(null)))) as ModelDoc | null;
+    let provider = (yield* models
+      .findProviderById(row.organizationId, providerId)
+      .pipe(Effect.catchAll(() => Effect.succeed(null)))) as ProviderDoc | null;
 
-  // Deleted live config: reconstruct from frozen price + upstream attribution.
-  // Prefer frozen priceMinor or priceSchedule so we can still settle.
-  const canReconstruct =
-    (priceMinor !== undefined || frozenSchedule !== undefined) &&
-    !!upstreamModelId;
+    let entry: ModelEntryDoc | undefined;
+    if (model) {
+      const entryResult = resolveEntry({
+        modelEntries: [...model.entries],
+        providerId,
+        upstreamModelId,
+        ctx,
+      });
+      if (entryResult.ok) entry = entryResult.entry;
+    }
 
-  if ((!model || !provider || !entry) && canReconstruct && upstreamModelId) {
+    const canReconstruct =
+      (priceMinor !== undefined || frozenSchedule !== undefined) &&
+      !!upstreamModelId;
+
+    if ((!model || !provider || !entry) && canReconstruct && upstreamModelId) {
+      const currency =
+        typeof ctx.currency === "string" && ctx.currency.length > 0
+          ? ctx.currency
+          : (model?.currency ?? "USD");
+      const priceSchedule: ChargeSchedule =
+        frozenSchedule ??
+        entry?.price ??
+        model?.price ??
+        { inputMinorPerMillion: 0, outputMinorPerMillion: 0 };
+      const stubs = reconstructFrozenAttribution({
+        row,
+        ctx,
+        providerId,
+        upstreamModelId,
+        currency,
+        priceSchedule,
+      });
+      if (!model) model = stubs.model;
+      if (!provider) provider = stubs.provider;
+      if (!entry) entry = stubs.entry;
+    }
+
+    if (!model) {
+      const ok = yield* releaseOutboxAfterFailure(
+        row._id,
+        claim,
+        "model_not_found",
+      ).pipe(Effect.catchAll(() => Effect.succeed(false)));
+      return ok ? ("retry" as const) : ("stale_claim" as const);
+    }
+    if (!provider) {
+      const ok = yield* releaseOutboxAfterFailure(
+        row._id,
+        claim,
+        "provider_not_found",
+      ).pipe(Effect.catchAll(() => Effect.succeed(false)));
+      return ok ? ("retry" as const) : ("stale_claim" as const);
+    }
+    if (!entry) {
+      const ok = yield* releaseOutboxAfterFailure(
+        row._id,
+        claim,
+        "entry_not_found",
+      ).pipe(Effect.catchAll(() => Effect.succeed(false)));
+      return ok ? ("retry" as const) : ("stale_claim" as const);
+    }
+
     const currency =
       typeof ctx.currency === "string" && ctx.currency.length > 0
         ? ctx.currency
-        : model?.currency ?? "USD";
-    const priceSchedule: ChargeSchedule =
-      frozenSchedule ??
-      entry?.price ??
-      model?.price ??
-      { inputMinorPerMillion: 0, outputMinorPerMillion: 0 };
-    const stubs = reconstructFrozenAttribution({
-      row,
-      ctx,
-      providerId,
-      upstreamModelId,
-      currency,
-      priceSchedule,
-    });
-    if (!model) model = stubs.model;
-    if (!provider) provider = stubs.provider;
-    if (!entry) entry = stubs.entry;
-  }
+        : model.currency;
 
-  if (!model) {
-    const ok = await releaseOutboxAfterFailure(
-      row._id,
-      claim,
-      "model_not_found",
-    );
-    return ok ? "retry" : "stale_claim";
-  }
-  if (!provider) {
-    const ok = await releaseOutboxAfterFailure(
-      row._id,
-      claim,
-      "provider_not_found",
-    );
-    return ok ? "retry" : "stale_claim";
-  }
-  if (!entry) {
-    const ok = await releaseOutboxAfterFailure(
-      row._id,
-      claim,
-      "entry_not_found",
-    );
-    return ok ? "retry" : "stale_claim";
-  }
+    const protocol =
+      row.protocol === "anthropic" || row.protocol === "openai"
+        ? row.protocol
+        : "openai";
 
-  const currency =
-    typeof ctx.currency === "string" && ctx.currency.length > 0
-      ? ctx.currency
-      : model.currency;
-
-  const protocol =
-    row.protocol === "anthropic" || row.protocol === "openai"
-      ? row.protocol
-      : "openai";
-
-  // Prefer frozen mode from outbox context / usage stamp — never amount heuristics.
-  const frozenMode: CacheAccountingMode | undefined =
-    ctx.cacheAccounting === "subset" || ctx.cacheAccounting === "additive"
-      ? ctx.cacheAccounting
-      : usage.cacheAccounting === "subset" || usage.cacheAccounting === "additive"
-        ? usage.cacheAccounting
-        : cacheAccountingForProtocol(protocol);
-  const usageWithMode: TokenUsage = {
-    ...usage,
-    cacheAccounting: frozenMode,
-  };
-
-  let finalPrice = priceMinor;
-  let finalCost = costMinorFrozen ?? 0;
-  if (finalPrice === undefined) {
-    // Prefer frozen schedule from context over live entry (entry may be stub
-    // or repriced since the original request). Same tier math as computeCharges.
-    const priceSchedule =
-      frozenSchedule ?? entry.price ?? model.price;
-    finalPrice = applyTokenSchedule(priceSchedule, usageWithMode, {
+    const frozenMode: CacheAccountingMode | undefined =
+      ctx.cacheAccounting === "subset" || ctx.cacheAccounting === "additive"
+        ? ctx.cacheAccounting
+        : usage.cacheAccounting === "subset" ||
+            usage.cacheAccounting === "additive"
+          ? usage.cacheAccounting
+          : cacheAccountingForProtocol(protocol);
+    const usageWithMode: TokenUsage = {
+      ...usage,
       cacheAccounting: frozenMode,
-    });
-    if (ctx.priceMinorOverride === 0) finalPrice = 0;
-  }
-  if (costMinorFrozen === undefined && ctx.costSchedule && typeof ctx.costSchedule === "object") {
-    finalCost = applyTokenSchedule(ctx.costSchedule as ChargeSchedule, usageWithMode, {
-      cacheAccounting: frozenMode,
-    });
-  }
+    };
 
-  const actor = actorFromContext(row, ctx);
-  // Prefer rules snapshot frozen at enqueue when present; else current rules.
-  const rules =
-    Array.isArray(ctx.rules)
-      ? (ctx.rules as Awaited<ReturnType<typeof getEffectiveRules>>)
-      : actor.customerId !== null
-        ? await getEffectiveRules(db, actor.customerId)
-        : [];
+    let finalPrice = priceMinor;
+    let finalCost = costMinorFrozen ?? 0;
+    if (finalPrice === undefined) {
+      const priceSchedule = frozenSchedule ?? entry.price ?? model.price;
+      finalPrice = applyTokenSchedule(priceSchedule, usageWithMode, {
+        cacheAccounting: frozenMode,
+      });
+      if (ctx.priceMinorOverride === 0) finalPrice = 0;
+    }
+    if (
+      costMinorFrozen === undefined &&
+      ctx.costSchedule &&
+      typeof ctx.costSchedule === "object"
+    ) {
+      finalCost = applyTokenSchedule(
+        ctx.costSchedule as ChargeSchedule,
+        usageWithMode,
+        { cacheAccounting: frozenMode },
+      );
+    }
 
-  // Prefer request-time timestamp frozen at enqueue; fall back to outbox
-  // createdAt (approx request time) — never recon wall clock alone.
-  let occurredAt: Date;
-  if (typeof ctx.occurredAt === "string" || ctx.occurredAt instanceof Date) {
-    const parsed = new Date(ctx.occurredAt as string | Date);
-    occurredAt = Number.isNaN(parsed.getTime()) ? row.createdAt : parsed;
-  } else {
-    occurredAt = row.createdAt;
-  }
+    const actor = actorFromContext(row, ctx);
+    let rules: readonly RateLimitRule[];
+    if (Array.isArray(ctx.rules)) {
+      rules = ctx.rules as RateLimitRule[];
+    } else if (actor.customerId !== null) {
+      rules = yield* getEffectiveRules(actor.customerId).pipe(
+        Effect.catchAll(() => Effect.succeed([] as RateLimitRule[])),
+      );
+    } else {
+      rules = [];
+    }
 
-  try {
-    // Idempotent on gatewayRequestId: crash between settle and mark is safe.
+    let occurredAt: Date;
+    if (typeof ctx.occurredAt === "string" || ctx.occurredAt instanceof Date) {
+      const parsed = new Date(ctx.occurredAt as string | Date);
+      occurredAt = Number.isNaN(parsed.getTime()) ? row.createdAt : parsed;
+    } else {
+      occurredAt = row.createdAt;
+    }
+
     const reservedMinor =
       typeof ctx.reservedMinor === "number" &&
       Number.isSafeInteger(ctx.reservedMinor) &&
       ctx.reservedMinor > 0
         ? ctx.reservedMinor
         : 0;
-    await settleUsage({
+
+    const settleOutcome = yield* settleUsage({
       orgId: row.organizationId,
       actor,
       model,
@@ -433,91 +443,88 @@ export async function reconcileOutboxRow(
       gatewayRequestId: row.gatewayRequestId,
       status: typeof ctx.status === "number" ? ctx.status : 200,
       durationMs: typeof ctx.durationMs === "number" ? ctx.durationMs : 0,
-      errorCode:
-        typeof ctx.errorCode === "string" ? ctx.errorCode : undefined,
+      errorCode: typeof ctx.errorCode === "string" ? ctx.errorCode : undefined,
       rules,
       occurredAt,
       reservedMinor,
       rethrowGuardFailure: true,
       skipGuardAudit: true,
-    });
-    const ok = await markOutboxReconciled(row._id, claim);
-    return ok ? "reconciled" : "stale_claim";
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    const ok = await releaseOutboxAfterFailure(row._id, claim, msg);
-    return ok ? "retry" : "stale_claim";
-  }
-}
+    }).pipe(Effect.either);
 
-export async function processSettlementOutboxBatch(
-  limit = 20,
-): Promise<{ claimed: number; reconciled: number; abandoned: number }> {
-  const claimed = await claimDueOutboxRows(limit);
-  let reconciled = 0;
-  let abandoned = 0;
-  for (const row of claimed) {
-    const claim = claimFromRow(row);
-    if (!claim) {
-      console.error("[settlement-reconcile] claimed row missing claimToken", {
-        id: row._id.toHexString(),
-      });
-      continue;
+    if (settleOutcome._tag === "Left") {
+      const msg =
+        settleOutcome.left instanceof Error
+          ? settleOutcome.left.message
+          : String(settleOutcome.left);
+      const ok = yield* releaseOutboxAfterFailure(row._id, claim, msg).pipe(
+        Effect.catchAll(() => Effect.succeed(false)),
+      );
+      return ok ? ("retry" as const) : ("stale_claim" as const);
     }
-    try {
-      const result = await reconcileOutboxRow(row, claim);
+
+    const ok = yield* markOutboxReconciled(row._id, claim).pipe(
+      Effect.catchAll(() => Effect.succeed(false)),
+    );
+    return ok ? ("reconciled" as const) : ("stale_claim" as const);
+  });
+
+export const processSettlementOutboxBatch = (
+  limit = 20,
+): Effect.Effect<
+  { claimed: number; reconciled: number; abandoned: number },
+  never,
+  ReconcileServices
+> =>
+  Effect.gen(function* () {
+    const claimed = yield* claimDueOutboxRows(limit).pipe(
+      Effect.catchAll(() => Effect.succeed([] as SettlementOutboxDoc[])),
+    );
+    let reconciled = 0;
+    let abandoned = 0;
+    for (const row of claimed) {
+      const claim = claimFromRow(row);
+      if (!claim) {
+        yield* Effect.sync(() =>
+          syncLog("error", "reconcile_missing_claim_token", {
+            id: row._id.toHexString(),
+          }),
+        );
+        continue;
+      }
+      const result = yield* reconcileOutboxRow(row, claim).pipe(
+        Effect.catchAllDefect((err) =>
+          Effect.gen(function* () {
+            const msg = err instanceof Error ? err.message : String(err);
+            yield* Effect.sync(() =>
+              syncLog("error", "reconcile_row_failed", {
+                id: row._id.toHexString(),
+                error: msg,
+              }),
+            );
+            yield* releaseOutboxAfterFailure(row._id, claim, msg).pipe(
+              Effect.catchAll(() => Effect.succeed(false)),
+            );
+            return "retry" as const;
+          }),
+        ),
+      );
       if (result === "reconciled") reconciled += 1;
       if (result === "abandoned") abandoned += 1;
-    } catch (err) {
-      console.error("[settlement-reconcile] row failed", {
-        id: row._id.toHexString(),
-        error: err instanceof Error ? err.message : String(err),
-      });
-      await releaseOutboxAfterFailure(
-        row._id,
-        claim,
-        err instanceof Error ? err.message : String(err),
-      );
     }
-  }
-  return { claimed: claimed.length, reconciled, abandoned };
-}
+    return { claimed: claimed.length, reconciled, abandoned };
+  });
 
-let reconTimer: ReturnType<typeof setInterval> | null = null;
-
-export function startSettlementReconcileWorker(opts?: {
+/**
+ * Legacy entrypoints — WorkerControl owns the supervised fiber.
+ */
+export function startSettlementReconcileWorker(_opts?: {
   intervalMs?: number;
   batchSize?: number;
+  initialDelayMs?: number;
 }): void {
-  if (reconTimer) return;
-  const intervalMs = opts?.intervalMs ?? 15_000;
-  const batchSize = opts?.batchSize ?? 20;
-  const tick = () => {
-    void processSettlementOutboxBatch(batchSize)
-      .then((r) => {
-        if (r.claimed > 0) {
-          console.log(
-            `[settlement-reconcile] claimed=${r.claimed} reconciled=${r.reconciled} abandoned=${r.abandoned}`,
-          );
-        }
-      })
-      .catch((err) => {
-        console.error(
-          "[settlement-reconcile] batch error",
-          err instanceof Error ? err.message : err,
-        );
-      });
-  };
-  setTimeout(tick, 3_000);
-  reconTimer = setInterval(tick, intervalMs);
-  if (typeof reconTimer === "object" && reconTimer && "unref" in reconTimer) {
-    reconTimer.unref();
-  }
+  // Intentionally empty.
 }
 
 export function stopSettlementReconcileWorker(): void {
-  if (reconTimer) {
-    clearInterval(reconTimer);
-    reconTimer = null;
-  }
+  // Intentionally empty.
 }

@@ -63,14 +63,14 @@ test("userCreateInput email format + max", () => {
 });
 
 test("userCreateInput has no top-level role field (role lives on membership)", () => {
-  expect("role" in userCreateInput.shape).toBe(false);
-  // role on a membership is honored
+  // role on a membership is honored; top-level role is ignored/stripped
   const r = userCreateInput.parse({
     ...base,
     username: "alice",
     memberships: [{ organizationId: orgIdHex(), role: "admin" }],
   });
   expect(r.memberships[0]!.role).toBe("admin");
+  expect("role" in r).toBe(false);
 });
 
 test("userDoc applies status default, has no global role", () => {
@@ -107,8 +107,16 @@ test("userUpdateInput allows partial updates, forbids password + role", () => {
   expect(userUpdateInput.safeParse({ email: "new@b.com" }).success).toBe(true);
   expect(userUpdateInput.safeParse({ status: "disabled" }).success).toBe(true);
   expect(userUpdateInput.safeParse({}).success).toBe(true);
-  expect("password" in userUpdateInput.shape).toBe(false);
-  expect("role" in userUpdateInput.shape).toBe(false);
+  // password / role are not part of update input (stripped / ignored)
+  const withPassword = userUpdateInput.safeParse({
+    email: "new@b.com",
+    password: "nope",
+  } as { email: string; password: string });
+  expect(withPassword.success).toBe(true);
+  if (withPassword.success) {
+    expect("password" in withPassword.data).toBe(false);
+    expect("role" in withPassword.data).toBe(false);
+  }
 });
 
 test("inviteCreateInput ttlHours bounds + default 168", () => {

@@ -1,9 +1,18 @@
 import type { MiddlewareHandler } from "hono";
 import { ObjectId } from "mongodb";
 import type { UserDoc, UserRole } from "@tokenpanel/db";
-import { getDb } from "@tokenpanel/db";
-import { verifyJwt, JwtError } from "../lib/crypto.ts";
-import { requireJwtSecret } from "../config/state.ts";
+import { Effect } from "effect";
+import {
+  resolveAdminSession,
+  requireRole as requireRoleOp,
+} from "../domains/auth/index.ts";
+import type { AuthzPrincipal } from "../domains/auth/types.ts";
+import {
+  runMiddlewareEffect,
+  renderedToResponse,
+} from "../http/adapters/boundary.ts";
+import { isAppError } from "../errors/families.ts";
+import { renderAdminError } from "../http/renderers/admin.ts";
 
 export type AuthVariables = {
   user: UserDoc;
@@ -14,7 +23,9 @@ export type AuthVariables = {
 
 type AuthMiddleware = MiddlewareHandler<{ Variables: AuthVariables }>;
 
-export function getToken(c: { req: { header: (name: string) => string | undefined } }): string | null {
+export function getToken(c: {
+  req: { header: (name: string) => string | undefined };
+}): string | null {
   const h = c.req.header("Authorization");
   if (!h) return null;
   const parts = h.split(" ");
@@ -24,56 +35,63 @@ export function getToken(c: { req: { header: (name: string) => string | undefine
   return token;
 }
 
+/**
+ * Admin JWT auth via ManagedRuntime + domain session op.
+ * Production and tests must install ManagedRuntime (bootApi / test helper).
+ */
 export const requireAuth: AuthMiddleware = async (c, next) => {
   const token = getToken(c);
-  if (!token) {
-    return c.json({ error: "unauthorized" }, 401);
-  }
-  let payload: ReturnType<typeof verifyJwt>;
-  try {
-    payload = verifyJwt(token, requireJwtSecret());
-  } catch (err) {
-    if (err instanceof JwtError) {
-      return c.json({ error: "unauthorized", reason: err.message }, 401);
-    }
-    return c.json({ error: "unauthorized" }, 401);
-  }
-  const db = await getDb();
-  const user = await db.users.findOne({ _id: new ObjectId(payload.sub) });
-  if (!user) {
-    return c.json({ error: "unauthorized" }, 401);
-  }
-  if (user.status !== "active") {
-    return c.json({ error: "forbidden", reason: "user_disabled" }, 403);
-  }
-  // Resolve the active-org membership. Role is per-membership, not global.
-  // The active org MUST have a matching membership or the session is invalid.
-  const activeMembership = user.memberships.find((m) =>
-    m.organizationId.equals(user.activeOrganizationId),
-  );
-  if (!activeMembership) {
-    return c.json({ error: "unauthorized", reason: "no_active_org_membership" }, 401);
-  }
-  c.set("user", user);
-  c.set("orgId", user.activeOrganizationId);
-  c.set("role", activeMembership.role);
+  const denied = await runMiddlewareEffect(c, resolveAdminSession(token), {
+    surface: "admin",
+    onSuccess: (session) => {
+      c.set("user", session.user);
+      c.set("orgId", session.orgId);
+      c.set("role", session.role);
+    },
+    mapError: (err) => {
+      if (!isAppError(err)) return null;
+      return renderAdminError(err);
+    },
+  });
+  if (denied) return denied;
   await next();
 };
 
 /**
- * Require a specific role for the ACTIVE organization. Role is read from
- * `c.get("role")`, which requireAuth resolved from the user's membership for
- * `c.get("orgId")`. A user who is admin in org A but member in org B will pass
- * this for admin-only actions only while A is active.
+ * Require a specific role for the ACTIVE organization (domain requireRole).
  */
 export function requireRole(role: UserRole): MiddlewareHandler<{
   Variables: AuthVariables;
 }> {
   return async (c, next) => {
-    const activeRole = c.get("role");
-    if (activeRole !== role) {
-      return c.json({ error: "forbidden" }, 403);
-    }
+    const user = c.get("user");
+    const principal: AuthzPrincipal = {
+      kind: "admin_user",
+      userId: user._id.toHexString(),
+      organizationId: c.get("orgId").toHexString(),
+      role: c.get("role"),
+      status: user.status === "disabled" ? "disabled" : "active",
+    };
+    const denied = await runMiddlewareEffect(
+      c,
+      requireRoleOp({ principal, role }),
+      {
+        surface: "admin",
+        onSuccess: () => undefined,
+        mapError: (err) => (isAppError(err) ? renderAdminError(err) : null),
+      },
+    );
+    if (denied) return denied;
     await next();
   };
 }
+
+/** Test/helper: run role check as Effect without Hono. */
+export function checkRoleEffect(
+  principal: AuthzPrincipal,
+  role: UserRole,
+): Effect.Effect<void, unknown> {
+  return requireRoleOp({ principal, role });
+}
+
+void renderedToResponse;

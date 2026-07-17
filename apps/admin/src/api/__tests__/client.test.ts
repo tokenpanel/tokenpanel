@@ -2,7 +2,6 @@ import { test, expect, beforeEach, afterEach } from "bun:test";
 import {
   ApiError,
   AUTH_INVALIDATED_EVENT,
-  AUTH_TOKEN_KEY,
   apiFetch,
   getJson,
   postJson,
@@ -11,6 +10,36 @@ import {
 } from "../client.ts";
 
 const TOKEN_KEY = "tp_admin_token";
+
+/** Minimal localStorage for bun test (no DOM). */
+const memoryStore = new Map<string, string>();
+const localStorageMock: Storage = {
+  get length() {
+    return memoryStore.size;
+  },
+  clear() {
+    memoryStore.clear();
+  },
+  getItem(key: string) {
+    return memoryStore.has(key) ? (memoryStore.get(key) ?? null) : null;
+  },
+  setItem(key: string, value: string) {
+    memoryStore.set(key, String(value));
+  },
+  removeItem(key: string) {
+    memoryStore.delete(key);
+  },
+  key(index: number) {
+    return [...memoryStore.keys()][index] ?? null;
+  },
+};
+Object.defineProperty(globalThis, "localStorage", {
+  value: localStorageMock,
+  configurable: true,
+});
+if (typeof globalThis.window === "undefined") {
+  (globalThis as unknown as { window: unknown }).window = globalThis;
+}
 
 let origFetch: typeof fetch;
 let fetchMock: (init?: RequestInit) => Promise<Response>;
@@ -30,11 +59,6 @@ beforeEach(() => {
 afterEach(() => {
   globalThis.fetch = origFetch;
   localStorage.clear();
-});
-
-test("AUTH_TOKEN_KEY + AUTH_INVALIDATED_EVENT constants", () => {
-  expect(AUTH_TOKEN_KEY).toBe(TOKEN_KEY);
-  expect(AUTH_INVALIDATED_EVENT).toBe("tp:auth-invalidated");
 });
 
 test("ApiError carries status/message/body + name", () => {

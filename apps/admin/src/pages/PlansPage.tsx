@@ -21,7 +21,9 @@ import { EmptyState } from "@/components/EmptyState";
 import { FadeIn, StaggerItem } from "@/components/anim";
 import { formatMoney } from "../utils/format.ts";
 
-type Interval = "day" | "week" | "month" | "year";
+import { PLAN_INTERVALS, type PlanInterval } from "@tokenpanel/contracts";
+
+type Interval = PlanInterval;
 type Dimension = "tokens" | "requests" | "spend_minor";
 type Scope = "customer" | "plan" | "model" | "endpoint";
 
@@ -67,7 +69,7 @@ interface PlansResponse {
   message?: string;
 }
 
-const INTERVALS: readonly Interval[] = ["day", "week", "month", "year"];
+const INTERVALS: readonly Interval[] = PLAN_INTERVALS;
 const DIMENSIONS: readonly Dimension[] = ["tokens", "requests", "spend_minor"];
 const SCOPES: readonly Scope[] = ["customer", "plan", "model", "endpoint"];
 

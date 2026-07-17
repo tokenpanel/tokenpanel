@@ -1,9 +1,8 @@
 /**
  * Route-level integration coverage for tp_mgmt_ auth through /v1 chat context.
  *
- * Mirrors models-metadata.integration.test.ts: injected getDb fakes (no live
- * replica set). Exercises the full resolveChatContext → actor/billing mapping
- * used by /v1/chat/completions and /v1/messages before upstream calls.
+ * Injected TypedDb fakes (no live replica set). Exercises resolveChatContext →
+ * actor/billing mapping used by /v1 chat before upstream calls.
  *
  * Scenarios from tokenpanel-nh5:
  *  - mgmt key without chat:write → 403 missing_scope
@@ -74,31 +73,30 @@ function makeCustomer(
   };
 }
 
-function makeGetDb(customers: CustomerDoc[]) {
-  return async (): Promise<TypedDb> =>
-    ({
-      customers: {
-        async findOne(filter: {
-          organizationId?: ObjectId;
-          email?: string;
-        }) {
-          return (
-            customers.find((c) => {
-              if (
-                filter.organizationId &&
-                !c.organizationId.equals(filter.organizationId)
-              ) {
-                return false;
-              }
-              if (filter.email !== undefined && c.email !== filter.email) {
-                return false;
-              }
-              return true;
-            }) ?? null
-          );
-        },
+function makeDb(customers: CustomerDoc[]): TypedDb {
+  return {
+    customers: {
+      async findOne(filter: {
+        organizationId?: ObjectId;
+        email?: string;
+      }) {
+        return (
+          customers.find((c) => {
+            if (
+              filter.organizationId &&
+              !c.organizationId.equals(filter.organizationId)
+            ) {
+              return false;
+            }
+            if (filter.email !== undefined && c.email !== filter.email) {
+              return false;
+            }
+            return true;
+          }) ?? null
+        );
       },
-    }) as unknown as TypedDb;
+    },
+  } as unknown as TypedDb;
 }
 
 /** Map V1ChatError the same way /v1/chat/completions does. */
@@ -143,12 +141,12 @@ describe("tp_mgmt_ auth through /v1 chat context", () => {
 
   test("mgmt key + unknown customerEmail → 404 customer_not_found", async () => {
     const principal = managementPrincipal();
-    const getDb = makeGetDb([]);
+    const db = makeDb([]);
     try {
       await resolveChatContext({
         principal,
         customerEmail: "nobody@example.com",
-        getDb,
+        db,
       });
       expect.unreachable("should have thrown");
     } catch (err) {
@@ -167,12 +165,12 @@ describe("tp_mgmt_ auth through /v1 chat context", () => {
       email: "alice@example.com",
       balance: { amountMinor: 5_000, reservedMinor: 0, currency: "USD" },
     });
-    const getDb = makeGetDb([customer]);
+    const db = makeDb([customer]);
 
     const ctx = await resolveChatContext({
       principal,
       customerEmail: "Alice@Example.com", // case-insensitive
-      getDb,
+      db,
     });
     expect(ctx.kind).toBe("management_attributed");
     if (ctx.kind !== "management_attributed") throw new Error("unreachable");
@@ -196,12 +194,12 @@ describe("tp_mgmt_ auth through /v1 chat context", () => {
       email: "paused@example.com",
       status: "suspended",
     });
-    const getDb = makeGetDb([customer]);
+    const db = makeDb([customer]);
     try {
       await resolveChatContext({
         principal,
         customerEmail: "paused@example.com",
-        getDb,
+        db,
       });
       expect.unreachable("should have thrown");
     } catch (err) {
@@ -220,12 +218,12 @@ describe("tp_mgmt_ auth through /v1 chat context", () => {
       organizationId: orgB,
       email: "shared@example.com",
     });
-    const getDb = makeGetDb([foreign]);
+    const db = makeDb([foreign]);
     try {
       await resolveChatContext({
         principal,
         customerEmail: "shared@example.com",
-        getDb,
+        db,
       });
       expect.unreachable("should have thrown");
     } catch (err) {

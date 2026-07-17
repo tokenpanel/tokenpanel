@@ -7,16 +7,17 @@ import {
   hashToken,
   encryptSecret,
   decryptSecret,
+  setJwtSecretForCrypto,
 } from "../crypto.ts";
 
 const SECRET = "test-secret-key-for-jwt-and-encryption-1234";
 
 beforeEach(() => {
-  process.env.JWT_SECRET = SECRET;
+  setJwtSecretForCrypto(SECRET);
 });
 
 afterEach(() => {
-  delete process.env.JWT_SECRET;
+  setJwtSecretForCrypto(null);
 });
 
 test("signJwt produces 3 dot-separated base64url parts", () => {
@@ -130,13 +131,11 @@ test("decryptSecret throws on tampered ciphertext (GCM auth failure)", () => {
   expect(() => decryptSecret(tampered)).toThrow();
 });
 
-test("encryptSecret/decryptSecret throw when JWT_SECRET unset", () => {
-  delete process.env.JWT_SECRET;
+test("encryptSecret/decryptSecret throw when JWT secret unset", () => {
+  setJwtSecretForCrypto(null);
   expect(() => encryptSecret("x")).toThrow(/JWT_SECRET/);
-  const enc = (() => {
-    process.env.JWT_SECRET = SECRET;
-    return encryptSecret("x");
-  })();
-  delete process.env.JWT_SECRET;
+  setJwtSecretForCrypto(SECRET);
+  const enc = encryptSecret("x");
+  setJwtSecretForCrypto(null);
   expect(() => decryptSecret(enc)).toThrow(/JWT_SECRET/);
 });

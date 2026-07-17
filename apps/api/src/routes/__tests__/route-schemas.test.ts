@@ -31,8 +31,8 @@ test("signupBody: valid payload passes", () => {
 
 test("signupBody: rejects unknown org fields (no longer accepted)", () => {
   // organizationName/organizationSlug were removed; signup now auto-creates
-  // a default org. Extra keys are ignored by zod by default, but the fields
-  // are no longer part of the schema — confirmed by parsing a minimal body.
+  // a default org. Extra keys are ignored by Effect Schema by default, but the
+  // fields are no longer part of the schema — confirmed by parsing a minimal body.
   const r = signupBody.safeParse({
     adminEmail: "a@b.com",
     adminUsername: "alice",

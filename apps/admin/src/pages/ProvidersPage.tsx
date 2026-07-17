@@ -137,7 +137,7 @@ function Field({
 }: {
   id: string;
   label: string;
-  hint?: string;
+  hint?: string | undefined;
   children: React.ReactNode;
 }): React.ReactElement {
   return (

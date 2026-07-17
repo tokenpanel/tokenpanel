@@ -8,6 +8,7 @@ import {
   Username,
   Password,
   CredentialString,
+  PanelPermissionSchema,
   exactOptional,
 } from "@tokenpanel/contracts/effect";
 
@@ -100,6 +101,8 @@ export type SignupBody = Schema.Schema.Type<typeof SignupBody>;
 export const InviteBody = Schema.Struct({
   email: Email,
   role: exactOptional(Schema.Literal("admin", "member")),
+  /** Member grants only; ignored when role is admin. Default empty (deny). */
+  permissions: exactOptional(Schema.Array(PanelPermissionSchema)),
   ttlHours: exactOptional(
     Schema.Number.pipe(
       Schema.int(),

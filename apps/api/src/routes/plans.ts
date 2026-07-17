@@ -6,7 +6,7 @@ import {
   subscriptionPlanUpdateInput,
 } from "@tokenpanel/db";
 import type { AuthVariables } from "../middleware/auth.ts";
-import { requireAuth, requireRole } from "../middleware/auth.ts";
+import { requireAuth, requirePermission } from "../middleware/auth.ts";
 import {
   listPlans,
   getPlan,
@@ -37,7 +37,7 @@ const planRoutes = new Hono<{ Variables: AuthVariables }>();
 
 planRoutes.use("*", requireAuth);
 
-planRoutes.get("/", async (c) => {
+planRoutes.get("/", requirePermission("plans:read"), async (c) => {
   const orgId = c.get("orgId");
   return runAdminEffect(
     c,
@@ -48,7 +48,7 @@ planRoutes.get("/", async (c) => {
 
 planRoutes.post(
   "/",
-  requireRole("admin"),
+  requirePermission("plans:write"),
   sValidator("json", subscriptionPlanCreateInput),
   async (c) => {
     const orgId = c.get("orgId");
@@ -71,7 +71,7 @@ planRoutes.post(
   },
 );
 
-planRoutes.get("/:id", async (c) => {
+planRoutes.get("/:id", requirePermission("plans:read"), async (c) => {
   const orgId = c.get("orgId");
   const id = c.req.param("id");
   if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
@@ -84,7 +84,7 @@ planRoutes.get("/:id", async (c) => {
 
 planRoutes.patch(
   "/:id",
-  requireRole("admin"),
+  requirePermission("plans:write"),
   sValidator("json", subscriptionPlanUpdateInput),
   async (c) => {
     const orgId = c.get("orgId");
@@ -103,7 +103,7 @@ planRoutes.patch(
   },
 );
 
-planRoutes.delete("/:id", requireRole("admin"), async (c) => {
+planRoutes.delete("/:id", requirePermission("plans:write"), async (c) => {
   const orgId = c.get("orgId");
   const id = c.req.param("id");
   if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);

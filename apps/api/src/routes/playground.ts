@@ -8,7 +8,11 @@ import type {
   ProviderDoc,
   RateLimitRule,
 } from "@tokenpanel/db";
-import { requireAuth, requireRole, type AuthVariables } from "../middleware/auth.ts";
+import {
+  requireAuth,
+  requirePermission,
+  type AuthVariables,
+} from "../middleware/auth.ts";
 import { billingAppError } from "../lib/billing-errors.ts";
 import { resolveModelOp } from "../domains/billing/workflow.ts";
 import { getEffectiveRulesOp } from "../domains/limits/operations.ts";
@@ -40,10 +44,9 @@ import { getAppRuntime } from "../runtime/app-runtime.ts";
 
 const playground = new Hono<{ Variables: AuthVariables }>();
 
-// Playground calls upstream providers with the org's decrypted API keys (like
-// discover-models), so it is admin-only — a member must not be able to drive
-// paid upstream calls or probe provider credentials.
-playground.use("*", requireAuth, requireRole("admin"));
+// Playground calls upstream providers with the org's decrypted API keys.
+// Gated by playground:write (admins hold all panel permissions).
+playground.use("*", requireAuth, requirePermission("playground:write"));
 
 type PlaygroundMessage = PlaygroundChatBody["messages"][number];
 

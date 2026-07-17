@@ -30,10 +30,10 @@ test("maskProvider: removes apiKeyEncrypted, adds hasApiKey true, preserves othe
   expect(m.sdkType).toBe("openai-compatible");
 });
 
-test("maskProvider: preserves providerOrg + headers + metadata", () => {
+test("maskProvider: preserves providerOrg + metadata; redacts header values to true", () => {
   const m = maskProvider(doc({ providerOrg: "org-1", headers: { "X-H": "v" }, metadata: { k: 1 } }));
   expect(m.providerOrg).toBe("org-1");
-  expect(m.headers).toEqual({ "X-H": "v" });
+  expect(m.headers).toEqual({ "X-H": true });
   expect(m.metadata).toEqual({ k: 1 });
 });
 

@@ -94,7 +94,7 @@ test("signupBody: rejects bad email + username regex", () => {
   ).toBe(false);
 });
 
-test("inviteBody: valid email, optional role + ttlHours", () => {
+test("inviteBody: valid email, optional role + permissions + ttlHours", () => {
   expect(inviteBody.safeParse({ email: "a@b.com" }).success).toBe(true);
   expect(inviteBody.safeParse({ email: "a@b.com", role: "admin" }).success).toBe(true);
   expect(inviteBody.safeParse({ email: "a@b.com", role: "owner" }).success).toBe(false);
@@ -102,6 +102,19 @@ test("inviteBody: valid email, optional role + ttlHours", () => {
   expect(inviteBody.safeParse({ email: "a@b.com", ttlHours: 0 }).success).toBe(false);
   expect(inviteBody.safeParse({ email: "a@b.com", ttlHours: 721 }).success).toBe(false);
   expect(inviteBody.safeParse({ email: "bad" }).success).toBe(false);
+  expect(
+    inviteBody.safeParse({
+      email: "a@b.com",
+      role: "member",
+      permissions: ["customers:read", "usage:read"],
+    }).success,
+  ).toBe(true);
+  expect(
+    inviteBody.safeParse({
+      email: "a@b.com",
+      permissions: ["not-a-real-permission"],
+    }).success,
+  ).toBe(false);
 });
 
 test("acceptBody: valid token+username+password", () => {

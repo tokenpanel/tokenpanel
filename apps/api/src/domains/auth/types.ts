@@ -2,11 +2,14 @@
  * Auth / identity domain value types (no Hono, no Mongo).
  */
 import type { UserRole } from "@tokenpanel/db";
+import type { PanelPermission } from "@tokenpanel/contracts";
 import type { HexId } from "../ports/common.ts";
 
 export type MembershipView = {
   readonly organizationId: HexId;
   readonly role: UserRole;
+  /** Explicit grants (members only; empty for admins in storage). */
+  readonly permissions: readonly PanelPermission[];
 };
 
 /** Public user view used by auth surfaces (admin JWT session). */
@@ -16,6 +19,11 @@ export type UserView = {
   readonly email: string;
   readonly status: string;
   readonly role: UserRole;
+  /**
+   * Effective permissions for the active organization.
+   * Admins receive the full panel catalog; members only their grants.
+   */
+  readonly permissions: readonly PanelPermission[];
   readonly memberships: readonly MembershipView[];
   readonly activeOrganizationId: HexId;
   readonly createdAt?: string | undefined;
@@ -66,6 +74,7 @@ export type CreateInviteInput = {
   readonly invitedBy: HexId;
   readonly email: string;
   readonly role?: UserRole | undefined;
+  readonly permissions?: readonly PanelPermission[] | undefined;
   readonly ttlHours?: number | undefined;
 };
 
@@ -75,6 +84,7 @@ export type CreateInviteResult = {
     readonly organizationId: HexId;
     readonly email: string;
     readonly role: UserRole;
+    readonly permissions: readonly PanelPermission[];
     readonly status: string;
     readonly expiresAt: Date;
     readonly createdAt: Date;
@@ -101,6 +111,8 @@ export type AuthzPrincipal =
       readonly userId: HexId;
       readonly organizationId: HexId;
       readonly role: UserRole;
+      /** Stored membership grants (empty for admin; check via hasPanelPermission). */
+      readonly permissions: readonly PanelPermission[];
       readonly status: "active" | "disabled";
     }
   | {

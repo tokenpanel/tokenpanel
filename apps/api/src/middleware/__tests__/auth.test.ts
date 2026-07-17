@@ -1,8 +1,9 @@
 import { test, expect, beforeAll, afterAll } from "bun:test";
 import { ObjectId } from "mongodb";
 import { Layer, ManagedRuntime } from "effect";
-import { getToken, requireRole } from "../auth.ts";
+import { getToken, requireRole, requirePermission } from "../auth.ts";
 import type { UserRole } from "@tokenpanel/db";
+import type { PanelPermission } from "@tokenpanel/contracts";
 import {
   createAppRuntime,
   clearAppRuntimeSingleton,
@@ -59,17 +60,27 @@ afterAll(async () => {
   clearAppRuntimeSingleton();
 });
 
-function roleCtx(role: UserRole | undefined): unknown {
+function roleCtx(
+  role: UserRole | undefined,
+  permissions: readonly PanelPermission[] = [],
+): unknown {
   const orgId = new ObjectId();
   return {
     get: (k: string) => {
       if (k === "role") return role;
+      if (k === "permissions") return permissions;
       if (k === "orgId") return orgId;
       if (k === "user") {
         return {
           _id: new ObjectId(),
           status: "active",
-          memberships: [{ organizationId: orgId, role: role ?? "member" }],
+          memberships: [
+            {
+              organizationId: orgId,
+              role: role ?? "member",
+              permissions,
+            },
+          ],
           activeOrganizationId: orgId,
         };
       }
@@ -116,6 +127,43 @@ test("requireRole('admin'): missing role → 403 (deny by default)", async () =>
   );
   expect((res as Response).status).toBe(403);
   expect(called).toBe(false);
+});
+
+test("requirePermission: admin always allowed", async () => {
+  let called = false;
+  const next = async () => {
+    called = true;
+  };
+  await requirePermission("providers:write")(
+    roleCtx("admin") as never,
+    next as never,
+  );
+  expect(called).toBe(true);
+});
+
+test("requirePermission: member without grant → 403", async () => {
+  let called = false;
+  const next = async () => {
+    called = true;
+  };
+  const res = await requirePermission("providers:write")(
+    roleCtx("member", ["providers:read"]) as never,
+    next as never,
+  );
+  expect((res as Response).status).toBe(403);
+  expect(called).toBe(false);
+});
+
+test("requirePermission: member with grant → allowed", async () => {
+  let called = false;
+  const next = async () => {
+    called = true;
+  };
+  await requirePermission("customers:read")(
+    roleCtx("member", ["customers:read"]) as never,
+    next as never,
+  );
+  expect(called).toBe(true);
 });
 
 void ManagedRuntime;

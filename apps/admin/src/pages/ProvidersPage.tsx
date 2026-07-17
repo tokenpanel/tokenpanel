@@ -43,7 +43,11 @@ interface Provider {
   sdkType: string;
   baseUrl: string;
   providerOrg?: string;
-  headers: Record<string, string>;
+  /**
+   * Header *names* only — values are redacted server-side
+   * (`Record<headerName, true>`). Values are write-only.
+   */
+  headers: Record<string, true>;
   active: boolean;
   metadata: Record<string, unknown>;
   hasApiKey: boolean;
@@ -117,15 +121,21 @@ export function isUrl(value: string): boolean {
   }
 }
 
+/**
+ * Populate edit form from a masked provider.
+ *
+ * Headers are names-only in the API response. Update replaces headers
+ * wholesale, so we leave the field empty on edit — only send headers when
+ * the user explicitly enters a new JSON object (same pattern as apiKey).
+ */
 export function fromProvider(p: Provider): FormState {
-  const headers = Object.keys(p.headers).length > 0 ? JSON.stringify(p.headers, null, 2) : "";
   return {
     name: p.name,
     sdkType: p.sdkType,
     apiKey: "",
     baseUrl: p.baseUrl,
     providerOrg: p.providerOrg ?? "",
-    headers,
+    headers: "",
   };
 }
 
@@ -304,7 +314,9 @@ export default function ProvidersPage(): React.ReactElement {
       return;
     }
 
-    let parsedHeaders: Record<string, string> | null = {};
+    // Omit headers on edit when field left blank so we don't wipe stored secrets.
+    // Create always sends headers (default {}).
+    let parsedHeaders: Record<string, string> | undefined;
     const headersRaw = form.headers.trim();
     if (headersRaw) {
       try {
@@ -326,6 +338,8 @@ export default function ProvidersPage(): React.ReactElement {
         setFormError("Headers must be valid JSON.");
         return;
       }
+    } else if (!editing) {
+      parsedHeaders = {};
     }
 
     setSaving(true);
@@ -335,8 +349,8 @@ export default function ProvidersPage(): React.ReactElement {
         sdkType,
         baseUrl,
         providerOrg: form.providerOrg.trim() || undefined,
-        headers: parsedHeaders,
       };
+      if (parsedHeaders !== undefined) body.headers = parsedHeaders;
       if (form.apiKey) body.apiKey = form.apiKey;
 
       if (editing) {
@@ -502,14 +516,33 @@ export default function ProvidersPage(): React.ReactElement {
                   placeholder="organization slug"
                 />
               </Field>
-              <Field id="prov-headers" label="Custom headers (optional JSON)" hint="JSON object of string→string. Sent with every upstream request.">
+              <Field
+                id="prov-headers"
+                label="Custom headers (optional JSON)"
+                hint={
+                  editing
+                    ? (() => {
+                        const names = Object.keys(editing.headers ?? {}).sort();
+                        const existing =
+                          names.length > 0
+                            ? ` Configured: ${names.join(", ")}.`
+                            : " None configured.";
+                        return `JSON object of string→string. Leave blank to keep existing headers.${existing} Sending a new object replaces the whole map.`;
+                      })()
+                    : "JSON object of string→string. Sent with every upstream request."
+                }
+              >
                 <Textarea
                   id="prov-headers"
                   rows={4}
                   value={form.headers}
                   disabled={saving}
                   onChange={(e) => updateField("headers", e.target.value)}
-                  placeholder={`{"X-Custom-Header": "value"}`}
+                  placeholder={
+                    editing
+                      ? "Leave blank to keep existing headers"
+                      : `{"X-Custom-Header": "value"}`
+                  }
                 />
               </Field>
             </div>

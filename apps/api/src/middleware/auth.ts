@@ -1,10 +1,12 @@
 import type { MiddlewareHandler } from "hono";
 import { ObjectId } from "mongodb";
 import type { UserDoc, UserRole } from "@tokenpanel/db";
+import type { PanelPermission } from "@tokenpanel/contracts";
 import { Effect } from "effect";
 import {
   resolveAdminSession,
   requireRole as requireRoleOp,
+  requirePermission as requirePermissionOp,
 } from "../domains/auth/index.ts";
 import type { AuthzPrincipal } from "../domains/auth/types.ts";
 import {
@@ -19,6 +21,8 @@ export type AuthVariables = {
   orgId: ObjectId;
   /** Role for the active org, resolved from the user's memberships. */
   role: UserRole;
+  /** Stored membership grants for the active org (empty when admin). */
+  permissions: readonly PanelPermission[];
 };
 
 type AuthMiddleware = MiddlewareHandler<{ Variables: AuthVariables }>;
@@ -39,6 +43,25 @@ export function getToken(c: {
  * Admin JWT auth via ManagedRuntime + domain session op.
  * Production and tests must install ManagedRuntime (bootApi / test helper).
  */
+function adminPrincipalFromContext(c: {
+  get: {
+    (key: "user"): UserDoc;
+    (key: "orgId"): ObjectId;
+    (key: "role"): UserRole;
+    (key: "permissions"): readonly PanelPermission[];
+  };
+}): AuthzPrincipal {
+  const user = c.get("user");
+  return {
+    kind: "admin_user",
+    userId: user._id.toHexString(),
+    organizationId: c.get("orgId").toHexString(),
+    role: c.get("role"),
+    permissions: c.get("permissions"),
+    status: user.status === "disabled" ? "disabled" : "active",
+  };
+}
+
 export const requireAuth: AuthMiddleware = async (c, next) => {
   const token = getToken(c);
   const denied = await runMiddlewareEffect(c, resolveAdminSession(token), {
@@ -47,6 +70,10 @@ export const requireAuth: AuthMiddleware = async (c, next) => {
       c.set("user", session.user);
       c.set("orgId", session.orgId);
       c.set("role", session.role);
+      c.set(
+        "permissions",
+        session.permissions as readonly PanelPermission[],
+      );
     },
     mapError: (err) => {
       if (!isAppError(err)) return null;
@@ -59,22 +86,40 @@ export const requireAuth: AuthMiddleware = async (c, next) => {
 
 /**
  * Require a specific role for the ACTIVE organization (domain requireRole).
+ * Prefer requirePermission for new gates.
  */
 export function requireRole(role: UserRole): MiddlewareHandler<{
   Variables: AuthVariables;
 }> {
   return async (c, next) => {
-    const user = c.get("user");
-    const principal: AuthzPrincipal = {
-      kind: "admin_user",
-      userId: user._id.toHexString(),
-      organizationId: c.get("orgId").toHexString(),
-      role: c.get("role"),
-      status: user.status === "disabled" ? "disabled" : "active",
-    };
+    const principal = adminPrincipalFromContext(c);
     const denied = await runMiddlewareEffect(
       c,
       requireRoleOp({ principal, role }),
+      {
+        surface: "admin",
+        onSuccess: () => undefined,
+        mapError: (err) => (isAppError(err) ? renderAdminError(err) : null),
+      },
+    );
+    if (denied) return denied;
+    await next();
+  };
+}
+
+/**
+ * Require a panel permission for the ACTIVE organization.
+ */
+export function requirePermission(
+  permission: PanelPermission,
+): MiddlewareHandler<{
+  Variables: AuthVariables;
+}> {
+  return async (c, next) => {
+    const principal = adminPrincipalFromContext(c);
+    const denied = await runMiddlewareEffect(
+      c,
+      requirePermissionOp({ principal, permission }),
       {
         surface: "admin",
         onSuccess: () => undefined,
@@ -92,6 +137,14 @@ export function checkRoleEffect(
   role: UserRole,
 ): Effect.Effect<void, unknown> {
   return requireRoleOp({ principal, role });
+}
+
+/** Test/helper: run permission check as Effect without Hono. */
+export function checkPermissionEffect(
+  principal: AuthzPrincipal,
+  permission: PanelPermission,
+): Effect.Effect<void, unknown> {
+  return requirePermissionOp({ principal, permission });
 }
 
 void renderedToResponse;

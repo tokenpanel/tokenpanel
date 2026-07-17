@@ -8,6 +8,11 @@ import {
   type ReactNode,
 } from "react";
 import {
+  effectivePanelPermissions,
+  hasPanelPermission,
+  type PanelPermission,
+} from "@tokenpanel/contracts";
+import {
   AUTH_INVALIDATED_EVENT,
   clearToken,
   getJson,
@@ -20,10 +25,13 @@ import {
 import { tokenValidatedState } from "./bootstrap-state.ts";
 
 export type UserRole = "admin" | "member";
+export type { PanelPermission };
 
 export interface Membership {
   organizationId: string;
   role: UserRole;
+  /** Stored grants for this membership (empty for admins). */
+  permissions: PanelPermission[];
 }
 
 export interface User {
@@ -33,8 +41,25 @@ export interface User {
   status: string;
   /** Role for the active organization (resolved from memberships). */
   role: UserRole;
+  /**
+   * Effective permissions for the active organization.
+   * Admins receive the full catalog; members only their grants.
+   */
+  permissions: PanelPermission[];
   memberships: Membership[];
   activeOrganizationId: string;
+}
+
+/**
+ * Admin always has every panel permission; members need an explicit grant.
+ * Safe when `user` is null / permissions missing (treat as no access).
+ */
+export function hasPermission(
+  user: Pick<User, "role" | "permissions"> | null | undefined,
+  permission: PanelPermission,
+): boolean {
+  if (!user) return false;
+  return hasPanelPermission(user.role, user.permissions ?? [], permission);
 }
 
 interface AuthStatusResponse {
@@ -74,6 +99,31 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
+/** Normalize API user so missing permissions fields don't break the UI. */
+function normalizeUser(raw: User): User {
+  const memberships = (raw.memberships ?? []).map((m) => ({
+    organizationId: m.organizationId,
+    role: m.role,
+    permissions: (m.permissions ?? []) as PanelPermission[],
+  }));
+  const role = raw.role;
+  const effective =
+    raw.permissions !== undefined && raw.permissions !== null
+      ? (raw.permissions as PanelPermission[])
+      : ([
+          ...effectivePanelPermissions(
+            role,
+            memberships.find((m) => m.organizationId === raw.activeOrganizationId)
+              ?.permissions,
+          ),
+        ] as PanelPermission[]);
+  return {
+    ...raw,
+    permissions: effective,
+    memberships,
+  };
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
@@ -103,7 +153,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           if (!cancelled) {
             // tokenValidatedState centralizes the token-success invariant
             // (needsSetup MUST become false, not null) so it is unit-tested.
-            const next = tokenValidatedState(me);
+            const next = tokenValidatedState(normalizeUser(me));
             setUser(next.user);
             setNeedsSetup(next.needsSetup);
             setLoading(next.loading);
@@ -138,7 +188,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const login = useCallback(async (username: string, password: string) => {
     const res = await postJson<LoginResponse>("/admin/auth/login", { username, password });
     setToken(res.token);
-    setUser(res.user);
+    setUser(normalizeUser(res.user));
     setNeedsSetup(false);
   }, []);
 
@@ -168,7 +218,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         confirmPassword: input.confirmPassword,
       });
       setToken(res.token);
-      setUser(res.user);
+      setUser(normalizeUser(res.user));
       setNeedsSetup(false);
     },
     [],
@@ -182,15 +232,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         role: UserRole;
       }>("/admin/organizations/switch", { organizationId });
       setToken(res.token);
-      setUser((prev) =>
-        prev
-          ? {
-              ...prev,
-              activeOrganizationId: res.activeOrganizationId,
-              role: res.role,
-            }
-          : prev,
-      );
+      setUser((prev) => {
+        if (!prev) return prev;
+        const membership = prev.memberships.find(
+          (m) => m.organizationId === res.activeOrganizationId,
+        );
+        const role = res.role;
+        const permissions = [
+          ...effectivePanelPermissions(role, membership?.permissions ?? []),
+        ] as PanelPermission[];
+        return {
+          ...prev,
+          activeOrganizationId: res.activeOrganizationId,
+          role,
+          permissions,
+        };
+      });
     },
     [],
   );
@@ -247,4 +304,19 @@ export function useAuth(): AuthContextValue {
     throw new Error("useAuth must be used within AuthProvider");
   }
   return ctx;
+}
+
+/** Convenience hook: effective permission checks for the signed-in user. */
+export function usePermissions(): {
+  user: User | null;
+  has: (permission: PanelPermission) => boolean;
+} {
+  const { user } = useAuth();
+  return useMemo(
+    () => ({
+      user,
+      has: (permission: PanelPermission) => hasPermission(user, permission),
+    }),
+    [user],
+  );
 }

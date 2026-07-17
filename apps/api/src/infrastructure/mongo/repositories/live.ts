@@ -279,7 +279,7 @@ export const UserRepositoryLive = Layer.effect(
             },
           );
         }),
-      addMembership: (userId, organizationId, role, setActive) =>
+      addMembership: (userId, organizationId, role, setActive, permissions) =>
         Effect.gen(function* () {
           const $set: Record<string, unknown> = { updatedAt: clock.now() };
           if (setActive) {
@@ -293,6 +293,7 @@ export const UserRepositoryLive = Layer.effect(
                   memberships: {
                     organizationId: toObjectId(organizationId),
                     role,
+                    permissions: [...(permissions ?? [])],
                   },
                 },
                 $set,
@@ -358,6 +359,10 @@ export const InviteRepositoryLive = Layer.effect(
             invitedBy: toObjectId(record.invitedBy),
             email: record.email,
             role: record.role,
+            permissions:
+              record.role === "admin"
+                ? []
+                : [...(record.permissions ?? [])],
             tokenHash: record.tokenHash,
             status: "pending",
             acceptedAt: null,

@@ -20,6 +20,9 @@ import type { Schema } from "effect";
 export const userRole = withParseApi(UserRoleSchema);
 export type UserRole = Schema.Schema.Type<typeof UserRoleSchema>;
 
+/** Re-export panel permission atom (canonical catalog lives in contracts). */
+export type { PanelPermission } from "./effect/identity.ts";
+
 export const membershipDoc = withParseApi(MembershipDocSchema);
 export const membershipInput = withParseApi(MembershipInputSchema);
 export type MembershipDoc = MutableDeep<Schema.Schema.Type<typeof MembershipDocSchema>>;

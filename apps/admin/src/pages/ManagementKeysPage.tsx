@@ -5,7 +5,7 @@ import type {
   ManagementKeyCreateResponse,
   ManagementKeyListResponse,
 } from "../api/management-keys.ts";
-import { useAuth } from "../auth/AuthContext.tsx";
+import { hasPermission, useAuth } from "../auth/AuthContext.tsx";
 import { formatRelative } from "../utils/format.ts";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -42,7 +42,8 @@ const SCOPES_BY_GROUP = groupBy(MANAGEMENT_SCOPE_DEFINITIONS, (s) => s.group);
 
 export default function ManagementKeysPage(): React.ReactElement {
   const { user } = useAuth();
-  const isAdmin = user?.role === "admin";
+  const canRead = hasPermission(user, "management_keys:read");
+  const canWrite = hasPermission(user, "management_keys:write");
   const activeOrgId = user?.activeOrganizationId;
 
   const [keys, setKeys] = useState<ManagementKey[]>([]);
@@ -69,6 +70,12 @@ export default function ManagementKeysPage(): React.ReactElement {
     setName("");
     setSelected(new Set());
     async function load() {
+      if (!canRead) {
+        setKeys([]);
+        setLoading(false);
+        setError(null);
+        return;
+      }
       setLoading(true);
       setError(null);
       try {
@@ -86,7 +93,7 @@ export default function ManagementKeysPage(): React.ReactElement {
     return () => {
       cancelled = true;
     };
-  }, [activeOrgId]);
+  }, [activeOrgId, canRead]);
 
   function resetForm() {
     setName("");
@@ -210,7 +217,7 @@ export default function ManagementKeysPage(): React.ReactElement {
           Management keys use the <code className="font-mono text-xs">tp_mgmt_</code> prefix and are
           separate from customer API keys (<code className="font-mono text-xs">tp_live_</code>).
         </p>
-        {isAdmin && !showCreate ? (
+        {canWrite && !showCreate ? (
           <Button size="sm" onClick={openCreate}>
             <Plus className="size-4" />
             Create Key
@@ -218,7 +225,7 @@ export default function ManagementKeysPage(): React.ReactElement {
         ) : null}
       </div>
 
-      {showCreate && isAdmin ? (
+      {showCreate && canWrite ? (
         <FadeIn>
           <Card className="p-5">
             <form className="flex flex-col gap-4" onSubmit={onSubmit}>
@@ -288,17 +295,26 @@ export default function ManagementKeysPage(): React.ReactElement {
         </FadeIn>
       ) : null}
 
-      {!isAdmin ? (
+      {!canRead ? (
         <Alert>
           <ShieldCheck className="size-4" />
           <AlertDescription>
-            Only org admins can create or modify management keys. Contact an admin if you need a key
-            for an integration.
+            You need <code className="font-mono text-xs">management_keys:read</code> to view
+            management keys. Contact an admin if you need access.
+          </AlertDescription>
+        </Alert>
+      ) : !canWrite ? (
+        <Alert>
+          <ShieldCheck className="size-4" />
+          <AlertDescription>
+            You can view management keys but need{" "}
+            <code className="font-mono text-xs">management_keys:write</code> to create or revoke
+            them.
           </AlertDescription>
         </Alert>
       ) : null}
 
-      {loading ? null : keys.length === 0 ? (
+      {loading || !canRead ? null : keys.length === 0 ? (
         <EmptyState
           icon={<KeyRound className="size-5" />}
           title="No management keys yet"
@@ -351,7 +367,7 @@ export default function ManagementKeysPage(): React.ReactElement {
                     </TableCell>
                     <TableCell className="text-right">
                       <div className="flex justify-end gap-1.5">
-                        {k.status === "active" && isAdmin ? (
+                        {k.status === "active" && canWrite ? (
                           <>
                             <Button
                               variant="outline"

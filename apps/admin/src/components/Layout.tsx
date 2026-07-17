@@ -17,7 +17,8 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
-import { useAuth } from "../auth/AuthContext.tsx";
+import { hasPermission, useAuth } from "../auth/AuthContext.tsx";
+import type { PanelPermission } from "../auth/AuthContext.tsx";
 import { getJson } from "../api/client.ts";
 import type { OrganizationListResponse, Organization } from "../api/types.ts";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -59,6 +60,11 @@ interface NavItem {
   to: string;
   label: string;
   icon: React.ComponentType<{ className?: string; strokeWidth?: number }>;
+  /**
+   * Required panel permission to show this nav item.
+   * `null` = always visible (orgs list, self settings).
+   */
+  permission: PanelPermission | null;
 }
 
 interface NavSectionDef {
@@ -70,38 +76,45 @@ const NAV_SECTIONS: readonly NavSectionDef[] = [
   {
     label: "Overview",
     items: [
-      { to: "/", label: "Dashboard", icon: LayoutDashboard },
-      { to: "/analytics", label: "Analytics", icon: BarChart3 },
+      { to: "/", label: "Dashboard", icon: LayoutDashboard, permission: "dashboard:read" },
+      { to: "/analytics", label: "Analytics", icon: BarChart3, permission: "usage:read" },
     ],
   },
   {
     label: "Catalog",
     items: [
-      { to: "/providers", label: "Providers", icon: Plug },
-      { to: "/models", label: "Models", icon: Boxes },
-      { to: "/plans", label: "Plans", icon: CreditCard },
+      { to: "/providers", label: "Providers", icon: Plug, permission: "providers:read" },
+      { to: "/models", label: "Models", icon: Boxes, permission: "models:read" },
+      { to: "/plans", label: "Plans", icon: CreditCard, permission: "plans:read" },
     ],
   },
   {
     label: "Access",
     items: [
-      { to: "/customers", label: "Customers", icon: Users },
-      { to: "/api-keys", label: "API Keys", icon: KeyRound },
-      { to: "/management-keys", label: "Management Keys", icon: ShieldCheck },
+      { to: "/customers", label: "Customers", icon: Users, permission: "customers:read" },
+      { to: "/api-keys", label: "API Keys", icon: KeyRound, permission: "customer_keys:read" },
+      {
+        to: "/management-keys",
+        label: "Management Keys",
+        icon: ShieldCheck,
+        permission: "management_keys:read",
+      },
     ],
   },
   {
     label: "Tools",
-    items: [{ to: "/playground", label: "Playground", icon: MessageSquare }],
+    items: [
+      { to: "/playground", label: "Playground", icon: MessageSquare, permission: "playground:write" },
+    ],
   },
   {
     label: "Admin",
     items: [
-      { to: "/organizations", label: "Organizations", icon: Building2 },
-      { to: "/settings", label: "Settings", icon: Settings },
+      { to: "/organizations", label: "Organizations", icon: Building2, permission: null },
+      { to: "/settings", label: "Settings", icon: Settings, permission: null },
     ],
   },
-] as const;
+];
 
 const NAV_ITEMS: readonly NavItem[] = NAV_SECTIONS.flatMap((s) => s.items);
 
@@ -305,9 +318,18 @@ function BrandHeader(): React.ReactElement {
 
 function NavSections(): React.ReactElement {
   const location = useLocation();
+  const { user } = useAuth();
+
+  const sections = NAV_SECTIONS.map((section) => ({
+    ...section,
+    items: section.items.filter(
+      (item) => item.permission === null || hasPermission(user, item.permission),
+    ),
+  })).filter((section) => section.items.length > 0);
+
   return (
     <>
-      {NAV_SECTIONS.map((section) => (
+      {sections.map((section) => (
         <SidebarGroup key={section.label} className="py-1.5">
           <SidebarGroupLabel>{section.label}</SidebarGroupLabel>
           <SidebarGroupContent>

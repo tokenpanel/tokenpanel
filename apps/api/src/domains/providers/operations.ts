@@ -20,14 +20,23 @@ export type ProviderDomainError =
   | SystemError
   | RepoError;
 
-export type ProviderView = Omit<ProviderDoc, "apiKeyEncrypted"> & {
+export type ProviderView = Omit<ProviderDoc, "apiKeyEncrypted" | "headers"> & {
   readonly hasApiKey: true;
+  /**
+   * Header *names* only — values are secrets (Authorization, X-API-Key, …).
+   * Full values are write-only via providers:write.
+   */
+  readonly headers: Readonly<Record<string, true>>;
 };
 
 export function maskProvider(doc: ProviderDoc): ProviderView {
-  const { apiKeyEncrypted: _omit, ...rest } = doc;
+  const { apiKeyEncrypted: _omit, headers: rawHeaders, ...rest } = doc;
   void _omit;
-  return { ...rest, hasApiKey: true };
+  const headers: Record<string, true> = {};
+  for (const name of Object.keys(rawHeaders ?? {})) {
+    headers[name] = true;
+  }
+  return { ...rest, headers, hasApiKey: true };
 }
 
 export type SdkTypeValidator = (sdkType: string) => boolean;

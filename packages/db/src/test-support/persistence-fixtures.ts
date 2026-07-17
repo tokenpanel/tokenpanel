@@ -77,7 +77,7 @@ export function userFixture(over: Partial<UserDoc> = {}): UserDoc {
   const orgId = fixObjectId(FIXTURE_IDS.org);
   return {
     _id: fixObjectId(FIXTURE_IDS.user),
-    memberships: [{ organizationId: orgId, role: "admin" }],
+    memberships: [{ organizationId: orgId, role: "admin", permissions: [] }],
     activeOrganizationId: orgId,
     username: "alice",
     email: "alice@example.com",
@@ -103,6 +103,7 @@ export function inviteFixture(over: Partial<InviteDoc> = {}): InviteDoc {
     invitedBy: fixObjectId(FIXTURE_IDS.user),
     email: "bob@example.com",
     role: "member",
+    permissions: [],
     tokenHash: "hash-of-token",
     status: "pending",
     acceptedAt: null,

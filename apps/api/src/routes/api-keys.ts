@@ -3,7 +3,7 @@ import { Effect } from "effect";
 import { ObjectId } from "mongodb";
 import { apiKeyCreateInput, apiKeyUpdateInput } from "@tokenpanel/db";
 import type { AuthVariables } from "../middleware/auth.ts";
-import { requireAuth, requireRole } from "../middleware/auth.ts";
+import { requireAuth, requirePermission } from "../middleware/auth.ts";
 import {
   listCustomerApiKeys,
   issueCustomerApiKey,
@@ -35,22 +35,27 @@ const apiKeyRoutes = new Hono<{ Variables: AuthVariables }>();
 
 apiKeyRoutes.use("*", requireAuth);
 
-apiKeyRoutes.get("/", sValidator("query", apiKeyListQuery), async (c) => {
-  const orgId = c.get("orgId");
-  const q = c.req.valid("query");
-  return runAdminEffect(
-    c,
-    listCustomerApiKeys({
-      organizationId: orgId.toHexString(),
-      ...(q.customerId !== undefined ? { customerId: q.customerId } : {}),
-    }).pipe(Effect.map((items) => ({ items }))),
-    { operation: "listCustomerApiKeys" },
-  );
-});
+apiKeyRoutes.get(
+  "/",
+  requirePermission("customer_keys:read"),
+  sValidator("query", apiKeyListQuery),
+  async (c) => {
+    const orgId = c.get("orgId");
+    const q = c.req.valid("query");
+    return runAdminEffect(
+      c,
+      listCustomerApiKeys({
+        organizationId: orgId.toHexString(),
+        ...(q.customerId !== undefined ? { customerId: q.customerId } : {}),
+      }).pipe(Effect.map((items) => ({ items }))),
+      { operation: "listCustomerApiKeys" },
+    );
+  },
+);
 
 apiKeyRoutes.post(
   "/",
-  requireRole("admin"),
+  requirePermission("customer_keys:write"),
   sValidator("json", apiKeyCreateInput),
   async (c) => {
     const orgId = c.get("orgId");
@@ -76,34 +81,38 @@ apiKeyRoutes.post(
   },
 );
 
-apiKeyRoutes.get("/:id", async (c) => {
-  const orgId = c.get("orgId");
-  const id = c.req.param("id");
-  if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
-  return runAdminEffect(
-    c,
-    Effect.gen(function* () {
-      const keys = yield* KeyRepository;
-      const doc = yield* keys.findCustomerKey(orgId.toHexString(), id);
-      if (!doc) {
-        return yield* Effect.fail(
-          new NotFoundError({
-            code: "not_found",
-            message: "API key not found",
-            resource: "api_key",
-            id,
-          }),
-        );
-      }
-      return stripCustomerKey(doc);
-    }),
-    { operation: "getCustomerApiKey" },
-  );
-});
+apiKeyRoutes.get(
+  "/:id",
+  requirePermission("customer_keys:read"),
+  async (c) => {
+    const orgId = c.get("orgId");
+    const id = c.req.param("id");
+    if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
+    return runAdminEffect(
+      c,
+      Effect.gen(function* () {
+        const keys = yield* KeyRepository;
+        const doc = yield* keys.findCustomerKey(orgId.toHexString(), id);
+        if (!doc) {
+          return yield* Effect.fail(
+            new NotFoundError({
+              code: "not_found",
+              message: "API key not found",
+              resource: "api_key",
+              id,
+            }),
+          );
+        }
+        return stripCustomerKey(doc);
+      }),
+      { operation: "getCustomerApiKey" },
+    );
+  },
+);
 
 apiKeyRoutes.patch(
   "/:id",
-  requireRole("admin"),
+  requirePermission("customer_keys:write"),
   sValidator("json", apiKeyUpdateInput),
   async (c) => {
     const orgId = c.get("orgId");
@@ -122,18 +131,22 @@ apiKeyRoutes.patch(
   },
 );
 
-apiKeyRoutes.delete("/:id", requireRole("admin"), async (c) => {
-  const orgId = c.get("orgId");
-  const id = c.req.param("id");
-  if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
-  return runAdminEffect(
-    c,
-    revokeCustomerApiKey({
-      organizationId: orgId.toHexString(),
-      keyId: id,
-    }),
-    { operation: "revokeCustomerApiKey" },
-  );
-});
+apiKeyRoutes.delete(
+  "/:id",
+  requirePermission("customer_keys:write"),
+  async (c) => {
+    const orgId = c.get("orgId");
+    const id = c.req.param("id");
+    if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
+    return runAdminEffect(
+      c,
+      revokeCustomerApiKey({
+        organizationId: orgId.toHexString(),
+        keyId: id,
+      }),
+      { operation: "revokeCustomerApiKey" },
+    );
+  },
+);
 
 export default apiKeyRoutes;

@@ -16,6 +16,7 @@ import { InviteRepository } from "../ports/invite-repository.ts";
 import { KeyRepository } from "../ports/key-repository.ts";
 import { Crypto } from "../../runtime/services/crypto.ts";
 import { AppConfig } from "../../runtime/services/app-config.ts";
+import { hasPanelPermission } from "@tokenpanel/contracts";
 import { roleForOrganization } from "../auth/authz.ts";
 
 export type OrgDomainError =
@@ -228,11 +229,17 @@ export const updateOrganization = (input: {
         }),
       );
     }
-    if (role !== "admin") {
+    const membership = input.user.memberships.find(
+      (m) => m.organizationId.toHexString() === input.organizationId,
+    );
+    const perms = membership?.permissions ?? [];
+    if (!hasPanelPermission(role, perms, "organization:write")) {
       return yield* Effect.fail(
         new AuthorizationError({
           code: "forbidden",
-          message: "Admin role required",
+          message: "Missing required permission",
+          reason: "missing_permission",
+          scope: "organization:write",
         }),
       );
     }

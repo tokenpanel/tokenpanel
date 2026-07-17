@@ -15,19 +15,35 @@ import {
 import {
   Password as PasswordBound,
   CredentialString,
+  PanelPermissionSchema,
 } from "@tokenpanel/contracts/effect";
 
 export const UserRole = Schema.Literal("admin", "member");
 export type UserRole = Schema.Schema.Type<typeof UserRole>;
 
+/** Panel permission atom (re-export of contracts catalog). */
+export const PanelPermission = PanelPermissionSchema;
+export type PanelPermission = Schema.Schema.Type<typeof PanelPermissionSchema>;
+
+/**
+ * Member grants. Empty by default (deny). Admins ignore this field —
+ * effective permissions resolve to the full panel catalog.
+ */
+const MemberPermissions = Schema.optionalWith(
+  Schema.Array(PanelPermissionSchema),
+  { default: () => [] as const },
+);
+
 export const MembershipDoc = Schema.Struct({
   organizationId: ObjectIdFromSelf,
   role: UserRole,
+  permissions: MemberPermissions,
 });
 
 export const MembershipInput = Schema.Struct({
   organizationId: ObjectIdFromString,
   role: UserRole,
+  permissions: MemberPermissions,
 });
 
 export type MembershipDoc = Schema.Schema.Type<typeof MembershipDoc>;
@@ -71,6 +87,8 @@ export const InviteDoc = Schema.Struct({
   invitedBy: ObjectIdFromSelf,
   email: Email,
   role: Schema.optionalWith(UserRole, { default: () => "member" as const }),
+  /** Applied when invite role is member; ignored for admin invites. */
+  permissions: MemberPermissions,
   tokenHash: Schema.String.pipe(Schema.minLength(1)),
   status: Schema.optionalWith(InviteStatus, {
     default: () => "pending" as const,
@@ -85,6 +103,7 @@ export const InviteCreateInput = Schema.Struct({
   invitedBy: ObjectIdFromString,
   email: Email,
   role: exactOptional(UserRole),
+  permissions: exactOptional(Schema.Array(PanelPermissionSchema)),
   ttlHours: Schema.optionalWith(
     Schema.Number.pipe(
       Schema.int(),

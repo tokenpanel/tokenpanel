@@ -11,7 +11,7 @@ import {
   type ModelEntryDoc,
 } from "@tokenpanel/db";
 import type { AuthVariables } from "../middleware/auth.ts";
-import { requireAuth, requireRole } from "../middleware/auth.ts";
+import { requireAuth, requirePermission } from "../middleware/auth.ts";
 import {
   listModels,
   getModel,
@@ -57,7 +57,7 @@ export function createModelRoutes(): Hono<{ Variables: AuthVariables }> {
 
   modelRoutes.use("*", requireAuth);
 
-  modelRoutes.get("/", async (c) => {
+  modelRoutes.get("/", requirePermission("models:read"), async (c) => {
     const orgId = c.get("orgId");
     return runAdminEffect(
       c,
@@ -70,7 +70,7 @@ export function createModelRoutes(): Hono<{ Variables: AuthVariables }> {
 
   modelRoutes.post(
     "/",
-    requireRole("admin"),
+    requirePermission("models:write"),
     sValidator("json", modelCreateInput),
     async (c) => {
       const body = c.req.valid("json");
@@ -120,7 +120,7 @@ export function createModelRoutes(): Hono<{ Variables: AuthVariables }> {
     },
   );
 
-  modelRoutes.get("/:id", async (c) => {
+  modelRoutes.get("/:id", requirePermission("models:read"), async (c) => {
     const orgId = c.get("orgId");
     const id = c.req.param("id");
     if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
@@ -133,7 +133,7 @@ export function createModelRoutes(): Hono<{ Variables: AuthVariables }> {
 
   modelRoutes.patch(
     "/:id",
-    requireRole("admin"),
+    requirePermission("models:write"),
     sValidator("json", modelUpdateInput),
     async (c) => {
       const body = c.req.valid("json");
@@ -176,23 +176,27 @@ export function createModelRoutes(): Hono<{ Variables: AuthVariables }> {
     },
   );
 
-  modelRoutes.delete("/:id", requireRole("admin"), async (c) => {
-    const orgId = c.get("orgId");
-    const id = c.req.param("id");
-    if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
-    return runAdminEffect(
-      c,
-      deleteModel({
-        organizationId: orgId.toHexString(),
-        modelId: id,
-      }),
-      { operation: "deleteModel" },
-    );
-  });
+  modelRoutes.delete(
+    "/:id",
+    requirePermission("models:write"),
+    async (c) => {
+      const orgId = c.get("orgId");
+      const id = c.req.param("id");
+      if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
+      return runAdminEffect(
+        c,
+        deleteModel({
+          organizationId: orgId.toHexString(),
+          modelId: id,
+        }),
+        { operation: "deleteModel" },
+      );
+    },
+  );
 
   modelRoutes.put(
     "/:id/fallbacks",
-    requireRole("admin"),
+    requirePermission("models:write"),
     sValidator("json", fallbackReorderInput),
     async (c) => {
       const orgId = c.get("orgId");
@@ -213,7 +217,7 @@ export function createModelRoutes(): Hono<{ Variables: AuthVariables }> {
 
   modelRoutes.post(
     "/:id/entries",
-    requireRole("admin"),
+    requirePermission("models:write"),
     sValidator("json", modelEntryInput),
     async (c) => {
       const orgId = c.get("orgId");
@@ -234,7 +238,7 @@ export function createModelRoutes(): Hono<{ Variables: AuthVariables }> {
 
   modelRoutes.delete(
     "/:id/entries/:entryId",
-    requireRole("admin"),
+    requirePermission("models:write"),
     async (c) => {
       const orgId = c.get("orgId");
       const id = c.req.param("id");

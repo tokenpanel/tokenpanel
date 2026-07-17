@@ -152,7 +152,7 @@ app.post(
 
 app.post(
   "/customers/:id/subscription",
-  requireManagementScope("customers:write"),
+  requireManagementScope("subscriptions:write"),
   sValidator("json", subscribeBody),
   async (c) => {
     const orgId = c.get("orgId");

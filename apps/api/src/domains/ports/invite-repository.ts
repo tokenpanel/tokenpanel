@@ -3,6 +3,7 @@
  */
 import { Context, type Effect } from "effect";
 import type { InviteDoc, UserRole } from "@tokenpanel/db";
+import type { PanelPermission } from "@tokenpanel/contracts";
 import type { HexId, RepoError } from "./common.ts";
 
 export type NewInviteRecord = {
@@ -10,6 +11,7 @@ export type NewInviteRecord = {
   readonly invitedBy: HexId;
   readonly email: string;
   readonly role: UserRole;
+  readonly permissions?: readonly PanelPermission[] | undefined;
   readonly tokenHash: string;
   readonly expiresAt: Date;
 };

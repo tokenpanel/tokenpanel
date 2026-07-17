@@ -5,6 +5,8 @@
  */
 import { Effect } from "effect";
 import type { UserRole } from "@tokenpanel/db";
+import type { PanelPermission } from "@tokenpanel/contracts";
+import { effectivePanelPermissions } from "@tokenpanel/contracts";
 import {
   AuthenticationError,
   AuthorizationError,
@@ -210,7 +212,13 @@ export const signup = (
         username: input.adminUsername,
         email: input.adminEmail,
         passwordHash,
-        memberships: [{ organizationId: org._id, role: "admin" as const }],
+        memberships: [
+          {
+            organizationId: org._id,
+            role: "admin" as const,
+            permissions: [],
+          },
+        ],
         activeOrganizationId: org._id.toHexString(),
         status: "active",
       })
@@ -337,11 +345,14 @@ export const createInvite = (
     const token = yield* crypto.randomToken(INVITE_TOKEN_BYTES);
     const tokenHash = yield* crypto.hashToken(token);
     const role: UserRole = input.role ?? "member";
+    const permissions =
+      role === "admin" ? [] : [...(input.permissions ?? [])];
     const invite = yield* invites.insert({
       organizationId: input.organizationId,
       invitedBy: input.invitedBy,
       email: input.email,
       role,
+      permissions,
       tokenHash,
       expiresAt,
     });
@@ -351,6 +362,7 @@ export const createInvite = (
         organizationId: invite.organizationId.toHexString(),
         email: invite.email,
         role: invite.role,
+        permissions: invite.permissions ?? [],
         status: invite.status,
         expiresAt: invite.expiresAt,
         createdAt: invite.createdAt,
@@ -367,6 +379,7 @@ export const listInvites = (
     readonly id: string;
     readonly email: string;
     readonly role: UserRole;
+    readonly permissions: readonly PanelPermission[];
     readonly status: string;
     readonly expiresAt: Date;
     readonly createdAt: Date;
@@ -381,6 +394,7 @@ export const listInvites = (
       id: i._id.toHexString(),
       email: i.email,
       role: i.role,
+      permissions: i.permissions ?? [],
       status: i.status,
       expiresAt: i.expiresAt,
       createdAt: i.createdAt,
@@ -451,9 +465,16 @@ export const acceptInvite = (
     const inviteRole = invite.role as UserRole;
     const existingUser = yield* users.findByEmail(invite.email);
 
+    const invitePermissions =
+      inviteRole === "admin" ? [] : [...(invite.permissions ?? [])];
+
     let userId: string;
     let username: string;
-    let memberships: { organizationId: string; role: UserRole }[];
+    let memberships: {
+      organizationId: string;
+      role: UserRole;
+      permissions: readonly PanelPermission[];
+    }[];
 
     if (existingUser) {
       const ok = yield* crypto.verifyPassword(
@@ -486,6 +507,7 @@ export const acceptInvite = (
         memberships = existingUser.memberships.map((m) => ({
           organizationId: m.organizationId.toHexString(),
           role: m.role,
+          permissions: m.permissions ?? [],
         }));
         yield* users.setActiveOrganization(userId, orgId.toHexString());
       } else {
@@ -494,13 +516,19 @@ export const acceptInvite = (
           orgId.toHexString(),
           inviteRole,
           true,
+          invitePermissions,
         );
         memberships = (updated?.memberships ?? [
           ...existingUser.memberships,
-          { organizationId: orgId, role: inviteRole },
+          {
+            organizationId: orgId,
+            role: inviteRole,
+            permissions: invitePermissions,
+          },
         ]).map((m) => ({
           organizationId: m.organizationId.toHexString(),
           role: m.role,
+          permissions: m.permissions ?? [],
         }));
       }
     } else {
@@ -522,7 +550,13 @@ export const acceptInvite = (
         username: input.username,
         email: invite.email,
         passwordHash,
-        memberships: [{ organizationId: orgId, role: inviteRole }],
+        memberships: [
+          {
+            organizationId: orgId,
+            role: inviteRole,
+            permissions: invitePermissions,
+          },
+        ],
         activeOrganizationId: orgId.toHexString(),
         status: "active",
       });
@@ -531,6 +565,7 @@ export const acceptInvite = (
       memberships = created.memberships.map((m) => ({
         organizationId: m.organizationId.toHexString(),
         role: m.role,
+        permissions: m.permissions ?? [],
       }));
     }
 
@@ -550,6 +585,7 @@ export const acceptInvite = (
       username,
       email: invite.email,
       role: inviteRole,
+      permissions: effectivePanelPermissions(inviteRole, invitePermissions),
       status: "active",
       memberships,
       activeOrganizationId: orgId.toHexString(),

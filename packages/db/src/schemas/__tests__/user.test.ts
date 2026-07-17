@@ -36,13 +36,58 @@ test("membershipDoc coerces ObjectId + requires role", () => {
   expect(membershipDoc.safeParse({ organizationId: new ObjectId(), role: "owner" }).success).toBe(false);
 });
 
+test("membershipDoc defaults permissions to [] when omitted", () => {
+  const r = membershipDoc.parse({
+    organizationId: new ObjectId(),
+    role: "member",
+  });
+  expect(r.permissions).toEqual([]);
+});
+
+test("membershipDoc accepts explicit permissions grants", () => {
+  const r = membershipDoc.parse({
+    organizationId: new ObjectId(),
+    role: "member",
+    permissions: ["customers:read", "usage:read"],
+  });
+  expect(r.permissions).toEqual(["customers:read", "usage:read"]);
+});
+
+test("membershipDoc rejects unknown permission strings", () => {
+  expect(
+    membershipDoc.safeParse({
+      organizationId: new ObjectId(),
+      role: "member",
+      permissions: ["customers:read", "chat:write"],
+    }).success,
+  ).toBe(false);
+  expect(
+    membershipDoc.safeParse({
+      organizationId: new ObjectId(),
+      role: "member",
+      permissions: ["not-a-permission"],
+    }).success,
+  ).toBe(false);
+});
+
 test("membershipInput coerces string orgId to ObjectId", () => {
   const r = membershipInput.parse({
     organizationId: orgIdHex(),
     role: "admin",
   });
   expect(r.organizationId).toBeInstanceOf(ObjectId);
+  expect(r.permissions).toEqual([]);
   expect(membershipInput.safeParse({ organizationId: "bad", role: "admin" }).success).toBe(false);
+});
+
+test("membershipInput rejects unknown permission strings", () => {
+  expect(
+    membershipInput.safeParse({
+      organizationId: orgIdHex(),
+      role: "member",
+      permissions: ["providers:secrets"],
+    }).success,
+  ).toBe(false);
 });
 
 test("userCreateInput username regex + bounds", () => {
@@ -86,6 +131,8 @@ test("userDoc applies status default, has no global role", () => {
   });
   expect(r.status).toBe("active");
   expect("role" in r).toBe(false);
+  // optionalWith default: legacy docs without permissions decode to []
+  expect(r.memberships[0]!.permissions).toEqual([]);
 });
 
 test("userDoc requires memberships min 1", () => {
@@ -167,5 +214,41 @@ test("inviteDoc requires expiresAt Date + tokenHash", () => {
       createdAt: new Date(),
       updatedAt: new Date(),
     }).success,
+  ).toBe(false);
+});
+
+test("inviteDoc defaults permissions to [] when omitted", () => {
+  const r = inviteDoc.parse({
+    _id: new ObjectId(),
+    organizationId: new ObjectId(),
+    invitedBy: new ObjectId(),
+    email: "a@b.com",
+    tokenHash: "hash",
+    expiresAt: new Date(),
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  });
+  expect(r.permissions).toEqual([]);
+  expect(r.role).toBe("member");
+});
+
+test("inviteDoc accepts + rejects permissions", () => {
+  const base = {
+    _id: new ObjectId(),
+    organizationId: new ObjectId(),
+    invitedBy: new ObjectId(),
+    email: "a@b.com",
+    tokenHash: "hash",
+    expiresAt: new Date(),
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  };
+  const ok = inviteDoc.parse({
+    ...base,
+    permissions: ["models:read", "providers:read"],
+  });
+  expect(ok.permissions).toEqual(["models:read", "providers:read"]);
+  expect(
+    inviteDoc.safeParse({ ...base, permissions: ["nope:write"] }).success,
   ).toBe(false);
 });

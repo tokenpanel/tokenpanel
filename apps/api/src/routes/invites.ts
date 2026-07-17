@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { sValidator } from "../http/validation/validator.ts";
 import type { AuthVariables } from "../middleware/auth.ts";
-import { requireAuth, requireRole } from "../middleware/auth.ts";
+import { requireAuth, requirePermission } from "../middleware/auth.ts";
 import {
   listInvites,
   createInvite,
@@ -23,7 +23,7 @@ export const inviteRoutes = new Hono<{ Variables: AuthVariables }>();
 
 inviteRoutes.use("*", requireAuth);
 
-inviteRoutes.get("/", async (c) => {
+inviteRoutes.get("/", requirePermission("invites:read"), async (c) => {
   const orgId = c.get("orgId");
   return runAdminEffect(
     c,
@@ -36,7 +36,7 @@ inviteRoutes.get("/", async (c) => {
 
 inviteRoutes.post(
   "/",
-  requireRole("admin"),
+  requirePermission("invites:write"),
   sValidator("json", inviteBody),
   async (c) => {
     const user = c.get("user");
@@ -49,6 +49,9 @@ inviteRoutes.post(
         invitedBy: user._id.toHexString(),
         email: body.email,
         ...(body.role !== undefined ? { role: body.role } : {}),
+        ...(body.permissions !== undefined
+          ? { permissions: body.permissions }
+          : {}),
         ...(body.ttlHours !== undefined ? { ttlHours: body.ttlHours } : {}),
       }),
       { operation: "createInvite", successStatus: 201 },
@@ -56,7 +59,7 @@ inviteRoutes.post(
   },
 );
 
-inviteRoutes.delete("/:id", requireRole("admin"), async (c) => {
+inviteRoutes.delete("/:id", requirePermission("invites:write"), async (c) => {
   const orgId = c.get("orgId");
   const id = c.req.param("id");
   return runAdminEffect(c, revokeInvite(id, orgId.toHexString()), {

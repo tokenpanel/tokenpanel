@@ -6,7 +6,7 @@ import {
   customerUpdateInput,
 } from "@tokenpanel/db";
 import type { AuthVariables } from "../middleware/auth.ts";
-import { requireAuth, requireRole } from "../middleware/auth.ts";
+import { requireAuth, requirePermission } from "../middleware/auth.ts";
 import {
   listCustomers,
   getCustomer,
@@ -61,25 +61,30 @@ const app = new Hono<{ Variables: AuthVariables }>();
 
 app.use("*", requireAuth);
 
-app.get("/", sValidator("query", customerListQuery), async (c) => {
-  const orgId = c.get("orgId");
-  const q = c.req.valid("query");
-  return runAdminEffect(
-    c,
-    listCustomers({
-      organizationId: orgId.toHexString(),
-      ...(q.status !== undefined ? { status: q.status } : {}),
-      ...(q.q !== undefined ? { q: q.q } : {}),
-      limit: q.limit,
-      skip: q.skip,
-    }),
-    { operation: "listCustomers" },
-  );
-});
+app.get(
+  "/",
+  requirePermission("customers:read"),
+  sValidator("query", customerListQuery),
+  async (c) => {
+    const orgId = c.get("orgId");
+    const q = c.req.valid("query");
+    return runAdminEffect(
+      c,
+      listCustomers({
+        organizationId: orgId.toHexString(),
+        ...(q.status !== undefined ? { status: q.status } : {}),
+        ...(q.q !== undefined ? { q: q.q } : {}),
+        limit: q.limit,
+        skip: q.skip,
+      }),
+      { operation: "listCustomers" },
+    );
+  },
+);
 
 app.post(
   "/",
-  requireRole("admin"),
+  requirePermission("customers:write"),
   sValidator("json", customerCreateInput),
   async (c) => {
     const orgId = c.get("orgId");
@@ -99,7 +104,7 @@ app.post(
   },
 );
 
-app.get("/:id", async (c) => {
+app.get("/:id", requirePermission("customers:read"), async (c) => {
   const orgId = c.get("orgId");
   const id = c.req.param("id");
   if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
@@ -112,7 +117,7 @@ app.get("/:id", async (c) => {
 
 app.patch(
   "/:id",
-  requireRole("admin"),
+  requirePermission("customers:write"),
   sValidator("json", customerUpdateInput),
   async (c) => {
     const orgId = c.get("orgId");
@@ -131,7 +136,7 @@ app.patch(
   },
 );
 
-app.delete("/:id", requireRole("admin"), async (c) => {
+app.delete("/:id", requirePermission("customers:write"), async (c) => {
   const orgId = c.get("orgId");
   const id = c.req.param("id");
   if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
@@ -147,7 +152,7 @@ app.delete("/:id", requireRole("admin"), async (c) => {
 
 app.post(
   "/:id/balance",
-  requireRole("admin"),
+  requirePermission("balances:write"),
   sValidator("json", balanceAdjustBody),
   async (c) => {
     const orgId = c.get("orgId");
@@ -191,6 +196,7 @@ app.post(
 
 app.get(
   "/:id/balance/history",
+  requirePermission("balances:read"),
   sValidator("query", historyQuery),
   async (c) => {
     const orgId = c.get("orgId");
@@ -212,7 +218,7 @@ app.get(
 
 app.post(
   "/:id/subscription",
-  requireRole("admin"),
+  requirePermission("subscriptions:write"),
   sValidator("json", subscribeBody),
   async (c) => {
     const orgId = c.get("orgId");
@@ -234,21 +240,25 @@ app.post(
   },
 );
 
-app.get("/:id/subscription", async (c) => {
-  const orgId = c.get("orgId");
-  const id = c.req.param("id");
-  if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
-  return runAdminEffect(
-    c,
-    getActiveSubscription({
-      organizationId: orgId.toHexString(),
-      customerId: id,
-    }),
-    { operation: "getActiveSubscription" },
-  );
-});
+app.get(
+  "/:id/subscription",
+  requirePermission("customers:read"),
+  async (c) => {
+    const orgId = c.get("orgId");
+    const id = c.req.param("id");
+    if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
+    return runAdminEffect(
+      c,
+      getActiveSubscription({
+        organizationId: orgId.toHexString(),
+        customerId: id,
+      }),
+      { operation: "getActiveSubscription" },
+    );
+  },
+);
 
-app.get("/:id/limits", async (c) => {
+app.get("/:id/limits", requirePermission("customers:read"), async (c) => {
   const orgId = c.get("orgId");
   const id = c.req.param("id");
   if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
@@ -262,7 +272,7 @@ app.get("/:id/limits", async (c) => {
   );
 });
 
-app.get("/:id/budgets", async (c) => {
+app.get("/:id/budgets", requirePermission("customers:read"), async (c) => {
   const orgId = c.get("orgId");
   const id = c.req.param("id");
   if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
@@ -278,6 +288,7 @@ app.get("/:id/budgets", async (c) => {
 
 app.get(
   "/:id/usage",
+  requirePermission("usage:read"),
   sValidator("query", usageDateRangeQuery),
   async (c) => {
     const orgId = c.get("orgId");

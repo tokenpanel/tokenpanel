@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { sValidator } from "../http/validation/validator.ts";
 import type { AuthVariables } from "../middleware/auth.ts";
-import { requireAuth } from "../middleware/auth.ts";
+import { requireAuth, requirePermission } from "../middleware/auth.ts";
 import { analyticsSummary } from "../domains/analytics/operations.ts";
 import { runAdminEffect } from "../http/adapters/boundary.ts";
 import { AnalyticsSummaryQuery } from "../http/validation/query.ts";
@@ -15,6 +15,7 @@ analyticsSummaryRoutes.use("*", requireAuth);
 
 analyticsSummaryRoutes.get(
   "/summary",
+  requirePermission("usage:read"),
   sValidator("query", analyticsSummaryQuery),
   async (c) => {
     const orgId = c.get("orgId");

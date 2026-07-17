@@ -58,6 +58,19 @@ export type {
 } from "./management-scopes.ts";
 
 export {
+  PANEL_PERMISSION_DEFINITIONS,
+  PANEL_PERMISSIONS,
+  PANEL_READ_PERMISSIONS,
+  panelPermissionSchema,
+  effectivePanelPermissions,
+  hasPanelPermission,
+} from "./panel-permissions.ts";
+export type {
+  PanelPermission,
+  PanelPermissionDefinition,
+} from "./panel-permissions.ts";
+
+export {
   TOKENS_PER_MILLION_COUNT,
   currencyCodeSchema,
   moneyMinorSchema,

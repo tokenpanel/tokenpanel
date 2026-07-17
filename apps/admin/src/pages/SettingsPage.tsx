@@ -1,5 +1,10 @@
-import { useEffect, useState, type FormEvent } from "react";
-import { useAuth, type UserRole } from "../auth/AuthContext.tsx";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
+import {
+  hasPermission,
+  useAuth,
+  type PanelPermission,
+  type UserRole,
+} from "../auth/AuthContext.tsx";
 import { deleteJson, getJson, postJson } from "../api/client.ts";
 import type {
   InviteCreateResponse,
@@ -7,6 +12,11 @@ import type {
   InviteListResponse,
   Invite,
 } from "../api/types.ts";
+import {
+  PANEL_PERMISSION_DEFINITIONS,
+  PANEL_READ_PERMISSIONS,
+  type PanelPermission as CatalogPermission,
+} from "@tokenpanel/contracts";
 import { formatDate, formatRelative } from "../utils/format.ts";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -17,6 +27,7 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { PasswordInput } from "@/components/ui/password-input";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Table,
   TableBody,
@@ -51,9 +62,50 @@ export function statusVariant(status: string): "warning" | "success" | "destruct
   }
 }
 
+function groupBy<T, K extends string>(items: readonly T[], key: (t: T) => K): Record<K, T[]> {
+  const out = {} as Record<K, T[]>;
+  for (const item of items) {
+    const k = key(item);
+    (out[k] ??= []).push(item);
+  }
+  return out;
+}
+
+const PERMS_BY_GROUP = groupBy(PANEL_PERMISSION_DEFINITIONS, (d) => d.group);
+
+/** Support-style preset: read dashboards/customers/usage + invite list. */
+const SUPPORT_PRESET: readonly CatalogPermission[] = [
+  "dashboard:read",
+  "customers:read",
+  "balances:read",
+  "usage:read",
+  "plans:read",
+  "customer_keys:read",
+  "invites:read",
+  "catalog_sources:read",
+];
+
+/** Billing-style preset: balances + customers + plans read/write for ledger work. */
+const BILLING_PRESET: readonly CatalogPermission[] = [
+  "dashboard:read",
+  "customers:read",
+  "balances:read",
+  "balances:write",
+  "usage:read",
+  "plans:read",
+  "subscriptions:write",
+];
+
+function inviteId(inv: Invite): string {
+  return inv._id ?? inv.id ?? "";
+}
+
 export default function SettingsPage(): React.ReactElement {
   const { user, updateEmail, changePassword } = useAuth();
   const isAdmin = user?.role === "admin";
+  const canWriteInvites = hasPermission(user, "invites:write");
+  const canReadInvites =
+    hasPermission(user, "invites:read") || canWriteInvites;
 
   const [invites, setInvites] = useState<Invite[]>([]);
   const [loadingInvites, setLoadingInvites] = useState(false);
@@ -131,13 +183,23 @@ export default function SettingsPage(): React.ReactElement {
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteRole, setInviteRole] = useState<UserRole>("member");
   const [inviteTtl, setInviteTtl] = useState("");
+  const [invitePermissions, setInvitePermissions] = useState<Set<PanelPermission>>(
+    () => new Set(),
+  );
   const [creating, setCreating] = useState(false);
   const [createdToken, setCreatedToken] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [revokingId, setRevokingId] = useState<string | null>(null);
 
+  const permissionCount = invitePermissions.size;
+
+  const groupEntries = useMemo(
+    () => Object.entries(PERMS_BY_GROUP) as [string, (typeof PANEL_PERMISSION_DEFINITIONS)[number][]][],
+    [],
+  );
+
   useEffect(() => {
-    if (!isAdmin) return;
+    if (!canReadInvites) return;
     let cancelled = false;
     async function load() {
       setLoadingInvites(true);
@@ -157,7 +219,28 @@ export default function SettingsPage(): React.ReactElement {
     return () => {
       cancelled = true;
     };
-  }, [isAdmin]);
+  }, [canReadInvites]);
+
+  function setRole(next: UserRole) {
+    setInviteRole(next);
+    // Admins get the full catalog server-side; clear grants on role flip.
+    if (next === "admin") {
+      setInvitePermissions(new Set());
+    }
+  }
+
+  function applyPreset(perms: readonly CatalogPermission[]) {
+    setInvitePermissions(new Set(perms as PanelPermission[]));
+  }
+
+  function togglePermission(perm: PanelPermission) {
+    setInvitePermissions((prev) => {
+      const next = new Set(prev);
+      if (next.has(perm)) next.delete(perm);
+      else next.add(perm);
+      return next;
+    });
+  }
 
   async function onInvite(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -166,18 +249,32 @@ export default function SettingsPage(): React.ReactElement {
     setError(null);
     const ttlHours = inviteTtl.trim() ? Number(inviteTtl.trim()) : undefined;
     try {
-      const body: { email: string; role?: string; ttlHours?: number } = {
+      const body: {
+        email: string;
+        role?: string;
+        permissions?: string[];
+        ttlHours?: number;
+      } = {
         email: inviteEmail.trim(),
         role: inviteRole,
       };
+      if (inviteRole === "member") {
+        body.permissions = Array.from(invitePermissions).sort();
+      }
       if (ttlHours !== undefined && !Number.isNaN(ttlHours) && ttlHours > 0) {
         body.ttlHours = ttlHours;
       }
       const res = await postJson<InviteCreateResponse>("/admin/invites", body);
       setCreatedToken(res.token);
-      setInvites((prev) => [res.invite, ...prev.filter((i) => i._id !== res.invite._id)]);
+      const newId = inviteId(res.invite);
+      setInvites((prev) => [
+        res.invite,
+        ...prev.filter((i) => inviteId(i) !== newId),
+      ]);
       setInviteEmail("");
       setInviteTtl("");
+      setInviteRole("member");
+      setInvitePermissions(new Set());
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create invite.");
     } finally {
@@ -190,7 +287,7 @@ export default function SettingsPage(): React.ReactElement {
     setError(null);
     try {
       await deleteJson<InviteDeleteResponse>(`/admin/invites/${encodeURIComponent(id)}`);
-      setInvites((prev) => prev.filter((i) => i._id !== id));
+      setInvites((prev) => prev.filter((i) => inviteId(i) !== id));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to revoke invite.");
     } finally {
@@ -341,7 +438,7 @@ export default function SettingsPage(): React.ReactElement {
         </TabsContent>
 
         <TabsContent value="invites">
-          {isAdmin ? (
+          {canReadInvites || canWriteInvites ? (
             <div className="flex flex-col gap-4">
               {createdToken ? (
                 <Alert variant="info">
@@ -365,32 +462,153 @@ export default function SettingsPage(): React.ReactElement {
                 </Alert>
               ) : null}
 
-              <Card className="p-5">
-                <form className="flex flex-col gap-3 sm:flex-row sm:items-end" onSubmit={onInvite}>
-                  <div className="flex flex-1 flex-col gap-1.5">
-                    <Label htmlFor="invite-email">Email</Label>
-                    <Input id="invite-email" type="email" placeholder="newuser@example.com" value={inviteEmail} required disabled={creating} onChange={(e) => setInviteEmail(e.target.value)} />
-                  </div>
-                  <div className="flex flex-col gap-1.5">
-                    <Label htmlFor="invite-role">Role</Label>
-                    <Select value={inviteRole} onValueChange={(v) => setInviteRole(v as UserRole)} disabled={creating}>
-                      <SelectTrigger id="invite-role" className="w-[120px]">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="member">Member</SelectItem>
-                        <SelectItem value="admin">Admin</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="flex flex-col gap-1.5">
-                    <Label htmlFor="invite-ttl">TTL (hours, optional)</Label>
-                    <Input id="invite-ttl" type="number" min={1} placeholder="72" value={inviteTtl} disabled={creating} onChange={(e) => setInviteTtl(e.target.value)} className="w-[160px]" />
-                  </div>
-                  <Button type="submit" disabled={creating}>{creating ? "Inviting…" : "Invite User"}</Button>
-                </form>
-                <p className="mt-2 text-xs text-muted-foreground">Default TTL is 72 hours if left blank.</p>
-              </Card>
+              {canWriteInvites ? (
+                <Card className="p-5">
+                  <form className="flex flex-col gap-4" onSubmit={onInvite}>
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+                      <div className="flex flex-1 flex-col gap-1.5">
+                        <Label htmlFor="invite-email">Email</Label>
+                        <Input
+                          id="invite-email"
+                          type="email"
+                          placeholder="newuser@example.com"
+                          value={inviteEmail}
+                          required
+                          disabled={creating}
+                          onChange={(e) => setInviteEmail(e.target.value)}
+                        />
+                      </div>
+                      <div className="flex flex-col gap-1.5">
+                        <Label htmlFor="invite-role">Role</Label>
+                        <Select
+                          value={inviteRole}
+                          onValueChange={(v) => setRole(v as UserRole)}
+                          disabled={creating}
+                        >
+                          <SelectTrigger id="invite-role" className="w-[120px]">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="member">Member</SelectItem>
+                            <SelectItem value="admin">Admin</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="flex flex-col gap-1.5">
+                        <Label htmlFor="invite-ttl">TTL (hours, optional)</Label>
+                        <Input
+                          id="invite-ttl"
+                          type="number"
+                          min={1}
+                          placeholder="72"
+                          value={inviteTtl}
+                          disabled={creating}
+                          onChange={(e) => setInviteTtl(e.target.value)}
+                          className="w-[160px]"
+                        />
+                      </div>
+                      <Button type="submit" disabled={creating}>
+                        {creating ? "Inviting…" : "Invite User"}
+                      </Button>
+                    </div>
+
+                    {inviteRole === "member" ? (
+                      <div className="flex flex-col gap-3">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div>
+                            <Label>Panel permissions</Label>
+                            <p className="text-xs text-muted-foreground">
+                              Grants for this member in the active organization.
+                              {permissionCount > 0
+                                ? ` ${permissionCount} selected.`
+                                : " None selected (empty access until granted)."}
+                            </p>
+                          </div>
+                          <div className="flex flex-wrap gap-1.5">
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              disabled={creating}
+                              onClick={() => applyPreset([])}
+                            >
+                              Empty
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              disabled={creating}
+                              onClick={() => applyPreset(PANEL_READ_PERMISSIONS)}
+                            >
+                              Viewer
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              disabled={creating}
+                              onClick={() => applyPreset(SUPPORT_PRESET)}
+                            >
+                              Support
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              disabled={creating}
+                              onClick={() => applyPreset(BILLING_PRESET)}
+                            >
+                              Billing
+                            </Button>
+                          </div>
+                        </div>
+                        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                          {groupEntries.map(([group, items]) => (
+                            <div
+                              key={group}
+                              className="flex flex-col gap-2 rounded-md border border-border p-3"
+                            >
+                              <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                                {group}
+                              </div>
+                              {items.map((def) => (
+                                <label
+                                  key={def.value}
+                                  className="flex cursor-pointer items-start gap-2 text-sm"
+                                  title={def.description}
+                                >
+                                  <Checkbox
+                                    checked={invitePermissions.has(def.value)}
+                                    onCheckedChange={() => togglePermission(def.value)}
+                                    disabled={creating}
+                                    className="mt-0.5"
+                                  />
+                                  <span className="flex flex-col">
+                                    <span className="font-medium leading-tight">
+                                      {def.description}
+                                    </span>
+                                    <code className="font-mono text-[10px] text-muted-foreground">
+                                      {def.value}
+                                    </code>
+                                  </span>
+                                </label>
+                              ))}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ) : (
+                      <p className="text-xs text-muted-foreground">
+                        Admin invites receive the full panel permission catalog automatically.
+                      </p>
+                    )}
+                  </form>
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    Default TTL is 72 hours if left blank. New invites default to member with no grants.
+                  </p>
+                </Card>
+              ) : null}
 
               {loadingInvites ? null : invites.length === 0 ? (
                 <Card className="p-8">
@@ -408,6 +626,7 @@ export default function SettingsPage(): React.ReactElement {
                         <TableRow>
                           <TableHead>Email</TableHead>
                           <TableHead>Role</TableHead>
+                          <TableHead>Permissions</TableHead>
                           <TableHead>Status</TableHead>
                           <TableHead>Expires</TableHead>
                           <TableHead>Created</TableHead>
@@ -415,22 +634,53 @@ export default function SettingsPage(): React.ReactElement {
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {invites.map((inv) => (
-                          <TableRow key={inv._id}>
-                            <TableCell>{inv.email}</TableCell>
-                            <TableCell className="capitalize">{inv.role}</TableCell>
-                            <TableCell><Badge variant={statusVariant(inv.status)}>{inv.status}</Badge></TableCell>
-                            <TableCell>{formatDate(inv.expiresAt)}</TableCell>
-                            <TableCell className="text-muted-foreground">{formatRelative(inv.createdAt)}</TableCell>
-                            <TableCell className="text-right">
-                              {inv.status === "pending" ? (
-                                <Button variant="destructive" size="sm" disabled={revokingId === inv._id} onClick={() => void onRevokeInvite(inv._id)}>
-                                  {revokingId === inv._id ? "Revoking…" : "Revoke"}
-                                </Button>
-                              ) : null}
-                            </TableCell>
-                          </TableRow>
-                        ))}
+                        {invites.map((inv) => {
+                          const id = inviteId(inv);
+                          const perms = inv.permissions ?? [];
+                          return (
+                            <TableRow key={id || inv.email}>
+                              <TableCell>{inv.email}</TableCell>
+                              <TableCell className="capitalize">{inv.role}</TableCell>
+                              <TableCell>
+                                {inv.role === "admin" ? (
+                                  <span className="text-xs text-muted-foreground">Full access</span>
+                                ) : perms.length === 0 ? (
+                                  <span className="text-xs text-muted-foreground">None</span>
+                                ) : (
+                                  <div className="flex max-w-[280px] flex-wrap gap-1">
+                                    {perms.map((p) => (
+                                      <span
+                                        key={p}
+                                        className="rounded border border-border bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground"
+                                      >
+                                        {p}
+                                      </span>
+                                    ))}
+                                  </div>
+                                )}
+                              </TableCell>
+                              <TableCell>
+                                <Badge variant={statusVariant(inv.status)}>{inv.status}</Badge>
+                              </TableCell>
+                              <TableCell>{formatDate(inv.expiresAt)}</TableCell>
+                              <TableCell className="text-muted-foreground">
+                                {formatRelative(inv.createdAt)}
+                              </TableCell>
+                              <TableCell className="text-right">
+                                {inv.status === "pending" && canWriteInvites && id ? (
+                                  <Button
+                                    variant="destructive"
+                                    size="sm"
+                                    disabled={revokingId === id}
+                                    onClick={() => void onRevokeInvite(id)}
+                                  >
+                                    {revokingId === id ? "Revoking…" : "Revoke"}
+                                  </Button>
+                                ) : null}
+                              </TableCell>
+                            </TableRow>
+                          );
+                        })}
                       </TableBody>
                     </Table>
                   </Card>
@@ -441,8 +691,8 @@ export default function SettingsPage(): React.ReactElement {
             <Card className="max-w-2xl p-6">
               <EmptyState
                 icon={<Lock className="size-5" />}
-                title="Admins only"
-                description="Only admins can manage invites. Contact an admin if you need to invite a new user."
+                title="No invite access"
+                description="You need invites:read or invites:write to manage organization invites. Contact an admin if you need to invite a new user."
               />
             </Card>
           )}

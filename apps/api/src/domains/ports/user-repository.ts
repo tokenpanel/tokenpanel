@@ -7,6 +7,7 @@ import type {
   UserRole,
   MembershipDoc,
 } from "@tokenpanel/db";
+import type { PanelPermission } from "@tokenpanel/contracts";
 import type { HexId, RepoError } from "./common.ts";
 
 export type NewUserRecord = {
@@ -57,6 +58,7 @@ export type UserRepositoryService = {
     organizationId: HexId,
     role: UserRole,
     setActive: boolean,
+    permissions?: readonly PanelPermission[],
   ) => Effect.Effect<UserDoc | null, RepoError>;
   readonly findMembersOfOrg: (
     organizationId: HexId,

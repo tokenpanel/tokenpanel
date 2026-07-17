@@ -18,3 +18,4 @@ export {
 export * from "./safe-map.ts";
 export * from "./model.ts";
 export * from "./management-scopes.ts";
+export * from "./panel-permissions.ts";

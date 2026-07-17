@@ -40,8 +40,8 @@ function ownerUser(): UserDoc {
     email: "owner@example.com",
     passwordHash: "x",
     memberships: [
-      { organizationId: ORG_A, role: "admin" },
-      { organizationId: ORG_B, role: "admin" },
+      { organizationId: ORG_A, role: "admin", permissions: [] },
+      { organizationId: ORG_B, role: "admin", permissions: [] },
     ],
     activeOrganizationId: ORG_A,
     status: "active",

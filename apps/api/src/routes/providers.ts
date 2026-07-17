@@ -3,7 +3,7 @@ import { Effect } from "effect";
 import { ObjectId } from "mongodb";
 import { providerCreateInput, providerUpdateInput } from "@tokenpanel/db";
 import type { AuthVariables } from "../middleware/auth.ts";
-import { requireAuth, requireRole } from "../middleware/auth.ts";
+import { requireAuth, requirePermission } from "../middleware/auth.ts";
 import {
   listProviders,
   getProvider,
@@ -24,11 +24,11 @@ const providerRoutes = new Hono<{ Variables: AuthVariables }>();
 
 providerRoutes.use("*", requireAuth);
 
-providerRoutes.get("/adapters", (c) => {
+providerRoutes.get("/adapters", requirePermission("providers:read"), (c) => {
   return c.json({ items: listAdapters() });
 });
 
-providerRoutes.get("/", async (c) => {
+providerRoutes.get("/", requirePermission("providers:read"), async (c) => {
   const orgId = c.get("orgId");
   return runAdminEffect(
     c,
@@ -41,7 +41,7 @@ providerRoutes.get("/", async (c) => {
 
 providerRoutes.post(
   "/",
-  requireRole("admin"),
+  requirePermission("providers:write"),
   sValidator("json", providerCreateInput),
   async (c) => {
     const orgId = c.get("orgId");
@@ -65,7 +65,7 @@ providerRoutes.post(
   },
 );
 
-providerRoutes.get("/:id", async (c) => {
+providerRoutes.get("/:id", requirePermission("providers:read"), async (c) => {
   const orgId = c.get("orgId");
   const id = c.req.param("id");
   if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
@@ -81,7 +81,7 @@ providerRoutes.get("/:id", async (c) => {
 
 providerRoutes.patch(
   "/:id",
-  requireRole("admin"),
+  requirePermission("providers:write"),
   sValidator("json", providerUpdateInput),
   async (c) => {
     const orgId = c.get("orgId");
@@ -102,34 +102,38 @@ providerRoutes.patch(
   },
 );
 
-providerRoutes.delete("/:id", requireRole("admin"), async (c) => {
-  const orgId = c.get("orgId");
-  const id = c.req.param("id");
-  if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
-  return runAdminEffect(
-    c,
-    deleteProvider({
-      organizationId: orgId.toHexString(),
-      providerId: id,
-    }),
-    {
-      operation: "deleteProvider",
-      mapError: (err) => {
-        if (
-          isAppError(err) &&
-          err._tag === "ConflictError" &&
-          err.code === "provider_in_use"
-        ) {
-          return {
-            status: 409,
-            body: { error: "provider_in_use", message: err.message },
-            headers: {},
-          };
-        }
-        return null;
+providerRoutes.delete(
+  "/:id",
+  requirePermission("providers:write"),
+  async (c) => {
+    const orgId = c.get("orgId");
+    const id = c.req.param("id");
+    if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
+    return runAdminEffect(
+      c,
+      deleteProvider({
+        organizationId: orgId.toHexString(),
+        providerId: id,
+      }),
+      {
+        operation: "deleteProvider",
+        mapError: (err) => {
+          if (
+            isAppError(err) &&
+            err._tag === "ConflictError" &&
+            err.code === "provider_in_use"
+          ) {
+            return {
+              status: 409,
+              body: { error: "provider_in_use", message: err.message },
+              headers: {},
+            };
+          }
+          return null;
+        },
       },
-    },
-  );
-});
+    );
+  },
+);
 
 export default providerRoutes;

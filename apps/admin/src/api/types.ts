@@ -81,9 +81,13 @@ export interface ApiKeyDeleteResponse {
 }
 
 export interface Invite {
-  _id: string;
+  /** Backend domain field is `id`; some responses may still expose `_id`. */
+  _id?: string;
+  id?: string;
   email: string;
   role: string;
+  /** Stored grants for member invites (empty for admin). */
+  permissions?: string[];
   status: string;
   expiresAt: string;
   createdAt: string;
@@ -96,6 +100,8 @@ export interface InviteListResponse {
 export interface InviteCreateRequest {
   email: string;
   role?: string;
+  /** Member grants only; ignored for admin invites on the server. */
+  permissions?: string[];
   ttlHours?: number;
 }
 

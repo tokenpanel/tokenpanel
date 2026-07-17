@@ -4,6 +4,11 @@
  */
 import { Effect } from "effect";
 import type { UserRole, ManagementScope } from "@tokenpanel/db";
+import type { PanelPermission } from "@tokenpanel/contracts";
+import {
+  hasPanelPermission,
+  effectivePanelPermissions,
+} from "@tokenpanel/contracts";
 import {
   AuthenticationError,
   AuthorizationError,
@@ -17,6 +22,7 @@ export type RequireRoleInput = {
 
 /**
  * Require admin_user principal with the given active-org role.
+ * Prefer requirePermission for new admin-panel gates.
  */
 export function requireRole(
   input: RequireRoleInput,
@@ -52,6 +58,71 @@ export function requireRole(
     }
   });
 }
+
+export type RequirePermissionInput = {
+  readonly principal: AuthzPrincipal;
+  readonly permission: PanelPermission;
+};
+
+/**
+ * Require admin_user principal holding `permission` for the active org.
+ * Admins hold the full panel catalog; members need an explicit grant.
+ */
+export function requirePermission(
+  input: RequirePermissionInput,
+): Effect.Effect<void, AuthenticationError | AuthorizationError> {
+  return Effect.gen(function* () {
+    const p = input.principal;
+    if (p.kind !== "admin_user") {
+      return yield* Effect.fail(
+        new AuthorizationError({
+          code: "forbidden",
+          message: "Admin session required",
+          reason: "wrong_principal_kind",
+        }),
+      );
+    }
+    if (p.status !== "active") {
+      return yield* Effect.fail(
+        new AuthorizationError({
+          code: "user_disabled",
+          message: "User disabled",
+          reason: "user_disabled",
+        }),
+      );
+    }
+    if (
+      !hasPanelPermission(p.role, p.permissions, input.permission)
+    ) {
+      return yield* Effect.fail(
+        new AuthorizationError({
+          code: "forbidden",
+          message: "Missing required permission",
+          reason: "missing_permission",
+          scope: input.permission,
+        }),
+      );
+    }
+  });
+}
+
+/**
+ * Pure permission check for redaction / conditional UI data.
+ */
+export function principalHasPermission(
+  principal: AuthzPrincipal,
+  required: PanelPermission,
+): boolean {
+  if (principal.kind !== "admin_user") return false;
+  if (principal.status !== "active") return false;
+  return hasPanelPermission(
+    principal.role,
+    principal.permissions,
+    required,
+  );
+}
+
+export { effectivePanelPermissions, hasPanelPermission };
 
 export type RequireScopeInput = {
   readonly principal: AuthzPrincipal;

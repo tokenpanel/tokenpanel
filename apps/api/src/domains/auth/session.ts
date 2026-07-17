@@ -37,6 +37,8 @@ export type AdminSession = {
   readonly user: UserDoc;
   readonly orgId: UserDoc["activeOrganizationId"];
   readonly role: UserRole;
+  /** Stored membership grants for the active org (empty when admin). */
+  readonly permissions: readonly string[];
 };
 
 export type ResolvedPublicPrincipal =
@@ -121,6 +123,7 @@ export const resolveAdminSession = (
       user,
       orgId: user.activeOrganizationId,
       role: activeMembership.role,
+      permissions: activeMembership.permissions ?? [],
     };
   });
 

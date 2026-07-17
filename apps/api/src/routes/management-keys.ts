@@ -6,7 +6,7 @@ import {
   managementApiKeyUpdateInput,
 } from "@tokenpanel/db";
 import type { AuthVariables } from "../middleware/auth.ts";
-import { requireAuth, requireRole } from "../middleware/auth.ts";
+import { requireAuth, requirePermission } from "../middleware/auth.ts";
 import {
   listManagementKeys,
   issueManagementKey,
@@ -40,6 +40,7 @@ managementKeyRoutes.use("*", requireAuth);
 
 managementKeyRoutes.get(
   "/",
+  requirePermission("management_keys:read"),
   sValidator("query", managementKeyListQuery),
   async (c) => {
     const orgId = c.get("orgId");
@@ -57,7 +58,7 @@ managementKeyRoutes.get(
 
 managementKeyRoutes.post(
   "/",
-  requireRole("admin"),
+  requirePermission("management_keys:write"),
   sValidator("json", managementApiKeyCreateInput),
   async (c) => {
     const orgId = c.get("orgId");
@@ -79,34 +80,38 @@ managementKeyRoutes.post(
   },
 );
 
-managementKeyRoutes.get("/:id", async (c) => {
-  const orgId = c.get("orgId");
-  const id = c.req.param("id");
-  if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
-  return runAdminEffect(
-    c,
-    Effect.gen(function* () {
-      const keys = yield* KeyRepository;
-      const doc = yield* keys.findManagementKey(orgId.toHexString(), id);
-      if (!doc) {
-        return yield* Effect.fail(
-          new NotFoundError({
-            code: "not_found",
-            message: "Management key not found",
-            resource: "management_key",
-            id,
-          }),
-        );
-      }
-      return stripManagementKey(doc);
-    }),
-    { operation: "getManagementKey" },
-  );
-});
+managementKeyRoutes.get(
+  "/:id",
+  requirePermission("management_keys:read"),
+  async (c) => {
+    const orgId = c.get("orgId");
+    const id = c.req.param("id");
+    if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
+    return runAdminEffect(
+      c,
+      Effect.gen(function* () {
+        const keys = yield* KeyRepository;
+        const doc = yield* keys.findManagementKey(orgId.toHexString(), id);
+        if (!doc) {
+          return yield* Effect.fail(
+            new NotFoundError({
+              code: "not_found",
+              message: "Management key not found",
+              resource: "management_key",
+              id,
+            }),
+          );
+        }
+        return stripManagementKey(doc);
+      }),
+      { operation: "getManagementKey" },
+    );
+  },
+);
 
 managementKeyRoutes.patch(
   "/:id",
-  requireRole("admin"),
+  requirePermission("management_keys:write"),
   sValidator("json", managementApiKeyUpdateInput),
   async (c) => {
     const orgId = c.get("orgId");
@@ -125,18 +130,22 @@ managementKeyRoutes.patch(
   },
 );
 
-managementKeyRoutes.delete("/:id", requireRole("admin"), async (c) => {
-  const orgId = c.get("orgId");
-  const id = c.req.param("id");
-  if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
-  return runAdminEffect(
-    c,
-    revokeManagementKey({
-      organizationId: orgId.toHexString(),
-      keyId: id,
-    }),
-    { operation: "revokeManagementKey" },
-  );
-});
+managementKeyRoutes.delete(
+  "/:id",
+  requirePermission("management_keys:write"),
+  async (c) => {
+    const orgId = c.get("orgId");
+    const id = c.req.param("id");
+    if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
+    return runAdminEffect(
+      c,
+      revokeManagementKey({
+        organizationId: orgId.toHexString(),
+        keyId: id,
+      }),
+      { operation: "revokeManagementKey" },
+    );
+  },
+);
 
 export default managementKeyRoutes;

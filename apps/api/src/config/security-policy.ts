@@ -109,7 +109,7 @@ export const THROTTLE_WINDOW_MS = 15 * 60 * 1000;
 /** Lockout duration after max attempts. Unit: milliseconds. */
 export const THROTTLE_LOCKOUT_MS = 15 * 60 * 1000;
 
-/** Max client IPs retained in one throttle map before global purge. Unit: count. */
+/** Hard cap on client IPs retained in one throttle map. Unit: count. */
 export const THROTTLE_MAX_STORE_SIZE_COUNT = 50_000;
 
 /** Admin login: failures from one IP before lockout. Unit: count. */

@@ -2,23 +2,34 @@
  * Provider lifecycle + dependency checks (task 8.4).
  */
 import { Effect } from "effect";
-import type { ProviderDoc } from "@tokenpanel/db";
+import type { ModelCatalogDoc, ProviderDoc } from "@tokenpanel/db";
 import {
   ConflictError,
   NotFoundError,
   ValidationError,
   SystemError,
+  type ProviderAppError,
 } from "../../errors/families.ts";
+import { classifyProviderError } from "../../errors/classify-provider.ts";
 import type { HexId, RepoError } from "../ports/common.ts";
+import type { CatalogUpsertEntry } from "../ports/model-repository.ts";
+import { ModelRepository } from "../ports/model-repository.ts";
 import { ProviderRepository } from "../ports/provider-repository.ts";
 import { Crypto } from "../../runtime/services/crypto.ts";
+import {
+  buildAdapterContext,
+  type DiscoveredModel,
+  type ProviderAdapter,
+} from "../../providers/index.ts";
+import { resolveProviderHttpTimeoutMs } from "./http-timeout.ts";
 
 export type ProviderDomainError =
   | ConflictError
   | NotFoundError
   | ValidationError
   | SystemError
-  | RepoError;
+  | RepoError
+  | ProviderAppError;
 
 export type ProviderView = Omit<ProviderDoc, "apiKeyEncrypted" | "headers"> & {
   readonly hasApiKey: true;
@@ -81,6 +92,7 @@ export const createProvider = (input: {
   readonly baseUrl: string;
   readonly providerOrg?: string | null | undefined;
   readonly headers?: Readonly<Record<string, string>> | undefined;
+  readonly httpTimeoutMs?: number | null | undefined;
   readonly metadata?: Readonly<Record<string, unknown>> | undefined;
   readonly isKnownSdkType: SdkTypeValidator;
 }): Effect.Effect<
@@ -119,6 +131,9 @@ export const createProvider = (input: {
       providerOrg: input.providerOrg ?? null,
       headers: input.headers ?? {},
       active: true,
+      ...(input.httpTimeoutMs !== undefined
+        ? { httpTimeoutMs: input.httpTimeoutMs }
+        : {}),
       metadata: input.metadata ?? {},
     });
     return maskProvider(doc);
@@ -135,6 +150,7 @@ export const updateProvider = (input: {
     readonly providerOrg?: string | null | undefined;
     readonly headers?: Readonly<Record<string, string>> | undefined;
     readonly active?: boolean | undefined;
+    readonly httpTimeoutMs?: number | null | undefined;
     readonly metadata?: Readonly<Record<string, unknown>> | undefined;
   };
   readonly isKnownSdkType: SdkTypeValidator;
@@ -244,4 +260,162 @@ export const deleteProvider = (input: {
       );
     }
     return { ok: true as const };
+  });
+
+/**
+ * Cached upstream models for a provider (model_catalog), after provider exists.
+ */
+export const listProviderCatalog = (input: {
+  readonly organizationId: HexId;
+  readonly providerId: HexId;
+}): Effect.Effect<
+  { items: readonly ModelCatalogDoc[] },
+  ProviderDomainError,
+  ProviderRepository | ModelRepository
+> =>
+  Effect.gen(function* () {
+    const providers = yield* ProviderRepository;
+    const provider = yield* providers.findById(
+      input.organizationId,
+      input.providerId,
+    );
+    if (!provider) {
+      return yield* Effect.fail(
+        new NotFoundError({
+          code: "not_found",
+          message: "Provider not found",
+          resource: "provider",
+          id: input.providerId,
+        }),
+      );
+    }
+    const models = yield* ModelRepository;
+    const items = yield* models.listCatalog(
+      input.organizationId,
+      input.providerId,
+    );
+    return { items };
+  });
+
+function toCatalogUpsert(m: DiscoveredModel): CatalogUpsertEntry {
+  return {
+    upstreamModelId: m.upstreamModelId,
+    displayName: m.displayName,
+    reasoning: m.reasoning ?? false,
+    toolCall: m.toolCall ?? false,
+    attachment: m.attachment ?? false,
+    limits: m.limits,
+    modalities: m.modalities as ModelCatalogDoc["modalities"],
+    raw: m.raw ?? {},
+    ...(m.structuredOutput !== undefined
+      ? { structuredOutput: m.structuredOutput }
+      : {}),
+    ...(m.temperature !== undefined ? { temperature: m.temperature } : {}),
+    ...(m.status !== undefined
+      ? { status: m.status as ModelCatalogDoc["status"] }
+      : {}),
+    ...(m.cost !== undefined
+      ? { cost: m.cost as ModelCatalogDoc["cost"] }
+      : {}),
+  };
+}
+
+/**
+ * Call provider adapter listModels, upsert into model_catalog, return discovered.
+ * Uses org provider credentials (decrypt). Gated by providers:write at HTTP.
+ *
+ * `globalTimeoutMs` is PROVIDER_HTTP_TIMEOUT_MS; per-provider `httpTimeoutMs`
+ * overrides when set (including 0 = disable).
+ */
+export const discoverProviderModels = (input: {
+  readonly organizationId: HexId;
+  readonly providerId: HexId;
+  readonly getAdapter: (sdkType: string) => ProviderAdapter | undefined;
+  /** Process global default (PROVIDER_HTTP_TIMEOUT_MS). */
+  readonly globalTimeoutMs?: number | undefined;
+  /**
+   * @deprecated Prefer globalTimeoutMs + provider.httpTimeoutMs resolution.
+   * When set without globalTimeoutMs, used as the effective timeout directly.
+   */
+  readonly timeoutMs?: number | undefined;
+}): Effect.Effect<
+  { items: readonly DiscoveredModel[] },
+  ProviderDomainError,
+  ProviderRepository | ModelRepository | Crypto
+> =>
+  Effect.gen(function* () {
+    const providers = yield* ProviderRepository;
+    const provider = yield* providers.findById(
+      input.organizationId,
+      input.providerId,
+    );
+    if (!provider) {
+      return yield* Effect.fail(
+        new NotFoundError({
+          code: "not_found",
+          message: "Provider not found",
+          resource: "provider",
+          id: input.providerId,
+        }),
+      );
+    }
+
+    const adapter = input.getAdapter(provider.sdkType);
+    if (!adapter) {
+      return yield* Effect.fail(
+        new ValidationError({
+          code: "validation_error",
+          message: `unknown_sdk_type: ${provider.sdkType}`,
+          mode: "default_400",
+        }),
+      );
+    }
+
+    const crypto = yield* Crypto;
+    const apiKey = yield* crypto.decryptSecret(provider.apiKeyEncrypted).pipe(
+      Effect.mapError(
+        (e) =>
+          new SystemError({
+            code: "system_error",
+            message: "Failed to decrypt provider secret",
+            diagnostic: e instanceof Error ? e.message : String(e),
+          }),
+      ),
+    );
+
+    const globalMs =
+      input.globalTimeoutMs !== undefined
+        ? input.globalTimeoutMs
+        : (input.timeoutMs ?? 0);
+    const effectiveTimeoutMs = resolveProviderHttpTimeoutMs(
+      provider.httpTimeoutMs,
+      globalMs,
+    );
+
+    const ctx = buildAdapterContext({
+      baseUrl: provider.baseUrl,
+      apiKey,
+      providerOrg: provider.providerOrg,
+      headers: provider.headers as Record<string, string>,
+      ...(effectiveTimeoutMs > 0 ? { timeoutMs: effectiveTimeoutMs } : {}),
+    });
+
+    const discovered = yield* adapter.listModels(ctx).pipe(
+      Effect.mapError((err) =>
+        classifyProviderError(err, {
+          operation: "listModels",
+          provider: provider.sdkType,
+          label: "discover-models",
+        }),
+      ),
+    );
+
+    const modelsRepo = yield* ModelRepository;
+    yield* modelsRepo.upsertCatalog(
+      input.organizationId,
+      input.providerId,
+      discovered.map(toCatalogUpsert),
+    );
+
+    return { items: discovered };
   });

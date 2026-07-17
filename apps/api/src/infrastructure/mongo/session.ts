@@ -4,7 +4,8 @@
  * - acquire session → optional startTransaction → body → commit/abort → endSession
  * - endSession always runs (success, expected error, defect, interrupt)
  * - Transient labels classified via classifyMongoError
- * - NO automatic unsafe retry of non-idempotent work
+ * - On UnknownTransactionCommitResult: retry commit only (MongoDB guidance).
+ *   Never re-runs body from this helper — callers own body-level retries.
  */
 import { Effect } from "effect";
 import type { ClientSession, TransactionOptions } from "mongodb";
@@ -21,11 +22,39 @@ export type WithSessionOptions = {
   readonly transactionOptions?: TransactionOptions | undefined;
 };
 
+/** Mongo may return this when commit outcome is ambiguous — retry commit only. */
+const UNKNOWN_COMMIT = "UnknownTransactionCommitResult";
+
+const COMMIT_MAX_ATTEMPTS = 10;
+
+function hasErrorLabel(err: unknown, label: string): boolean {
+  if (typeof err !== "object" || err === null) return false;
+  const labels = (err as { errorLabels?: unknown }).errorLabels;
+  return Array.isArray(labels) && labels.includes(label);
+}
+
+async function commitTransaction(session: ClientSession): Promise<void> {
+  if (!session.inTransaction()) return;
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < COMMIT_MAX_ATTEMPTS; attempt++) {
+    try {
+      await session.commitTransaction();
+      return;
+    } catch (err) {
+      lastErr = err;
+      // Ambiguous commit: retry commit only, never the transaction body.
+      if (hasErrorLabel(err, UNKNOWN_COMMIT)) continue;
+      throw err;
+    }
+  }
+  throw lastErr;
+}
+
 /**
  * Run `body` with a ClientSession. Cleanup is exact-once via acquireRelease.
  *
- * Does not retry TransientTransactionError / WriteConflict — callers that
- * need safe retry must do so explicitly with idempotent operations only.
+ * Does not retry TransientTransactionError / WriteConflict on the body —
+ * callers that need safe retry must do so explicitly with idempotent ops.
  */
 export function withMongoSession<A, E, R>(
   body: (session: ClientSession) => Effect.Effect<A, E, R>,
@@ -84,11 +113,7 @@ export function withMongoSession<A, E, R>(
           onSuccess: (value) =>
             Effect.gen(function* () {
               yield* Effect.tryPromise({
-                try: async () => {
-                  if (session.inTransaction()) {
-                    await session.commitTransaction();
-                  }
-                },
+                try: () => commitTransaction(session),
                 catch: (err) => classifyMongoError(err),
               });
               return value;

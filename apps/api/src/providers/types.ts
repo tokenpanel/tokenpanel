@@ -119,7 +119,8 @@ export type AdapterContext = {
   headers?: Record<string, string> | undefined;
   signal?: AbortSignal | undefined;
   /**
-   * App-level HTTP timeout from PROVIDER_HTTP_TIMEOUT_MS.
+   * App-level HTTP timeout (ms), resolved from per-provider `httpTimeoutMs`
+   * or global PROVIDER_HTTP_TIMEOUT_MS (default 120_000).
    * 0 / undefined = no app timeout (only caller AbortSignal).
    * Non-streaming: full request. Streaming: TTFB / headers only.
    */

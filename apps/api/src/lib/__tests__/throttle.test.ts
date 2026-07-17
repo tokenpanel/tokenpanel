@@ -104,3 +104,78 @@ test("distinct client IPs accumulate lockout independently", () => {
   expect(th.check(locked).allowed).toBe(false);
   expect(th.check(other).allowed).toBe(true);
 });
+
+// Hard cap: fresh keys must not grow the store past maxStoreSize.
+test("maxStoreSize: four fresh IPs never exceed cap of 2", () => {
+  const c = clock();
+  const th = new FailureThrottle({
+    maxAttempts: 5,
+    windowMs: 60_000,
+    lockoutMs: 60_000,
+    maxStoreSize: 2,
+    now: c.now,
+  });
+
+  th.recordFailure("203.0.113.1");
+  th.recordFailure("203.0.113.2");
+  th.recordFailure("203.0.113.3");
+  th.recordFailure("203.0.113.4");
+
+  expect(th.size()).toBeLessThanOrEqual(2);
+  expect(th.size()).toBe(2);
+});
+
+// Under pressure, unlocked oldest entries leave first so active lockouts survive.
+test("maxStoreSize: prefers evicting unlocked over locked entries", () => {
+  const c = clock();
+  const th = new FailureThrottle({
+    maxAttempts: 2,
+    windowMs: 60_000,
+    lockoutMs: 60_000,
+    maxStoreSize: 2,
+    now: c.now,
+  });
+
+  // Lock ip-locked into the store.
+  th.recordFailure("ip-locked");
+  th.recordFailure("ip-locked");
+  expect(th.check("ip-locked").allowed).toBe(false);
+
+  // One unlocked neighbour fills the cap.
+  th.recordFailure("ip-open");
+  expect(th.size()).toBe(2);
+
+  // New IP must take a slot; unlocked neighbour should go, lockout retained.
+  th.recordFailure("ip-new");
+  expect(th.size()).toBeLessThanOrEqual(2);
+  expect(th.check("ip-locked").allowed).toBe(false);
+  expect(th.check("ip-open").allowed).toBe(true); // state gone → allowed
+});
+
+// Stale entries free capacity before any hard eviction of live keys.
+test("maxStoreSize: purges stale before hard-evicting live keys", () => {
+  const c = clock();
+  const th = new FailureThrottle({
+    maxAttempts: 5,
+    windowMs: 1000,
+    lockoutMs: 500,
+    maxStoreSize: 2,
+    now: c.now,
+  });
+
+  th.recordFailure("stale-a");
+  th.recordFailure("stale-b");
+  expect(th.size()).toBe(2);
+
+  // Age failures past window and past any lockout; both entries become stale.
+  c.advance(2000);
+
+  th.recordFailure("fresh-a");
+  th.recordFailure("fresh-b");
+  expect(th.size()).toBe(2);
+
+  // Live keys kept; stale ones replaced without needing a third slot.
+  // Lock fresh-a to prove it was retained after the second insert.
+  for (let i = 0; i < 4; i++) th.recordFailure("fresh-a");
+  expect(th.check("fresh-a").allowed).toBe(false);
+});

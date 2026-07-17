@@ -6,12 +6,18 @@ import type { PanelPermission } from "@tokenpanel/contracts";
 import { effectivePanelPermissions } from "@tokenpanel/contracts";
 import type { UserView } from "./types.ts";
 
+/**
+ * @param activeOrganizationIdOverride — session-scoped tenant (prefer over
+ *   user.activeOrganizationId for authenticated request views).
+ */
 export function toUserView(
   user: UserDoc,
   roleOverride?: UserRole,
   permissionsOverride?: readonly PanelPermission[],
+  activeOrganizationIdOverride?: string,
 ): UserView {
-  const activeId = user.activeOrganizationId.toHexString();
+  const activeId =
+    activeOrganizationIdOverride ?? user.activeOrganizationId.toHexString();
   const activeMembership = user.memberships.find(
     (m) => m.organizationId.toHexString() === activeId,
   );

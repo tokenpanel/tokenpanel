@@ -8,6 +8,7 @@ import {
   PANEL_READ_PERMISSIONS,
   effectivePanelPermissions,
   hasPanelPermission,
+  canGrantPanelAccess,
   type PanelPermission,
   type PanelPermissionDefinition,
 } from "../panel-permissions.ts";
@@ -18,6 +19,7 @@ export {
   PANEL_READ_PERMISSIONS,
   effectivePanelPermissions,
   hasPanelPermission,
+  canGrantPanelAccess,
 };
 export type { PanelPermission, PanelPermissionDefinition };
 

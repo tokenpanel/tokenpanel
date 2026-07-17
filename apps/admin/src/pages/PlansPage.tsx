@@ -21,11 +21,16 @@ import { EmptyState } from "@/components/EmptyState";
 import { FadeIn, StaggerItem } from "@/components/anim";
 import { formatMoney } from "../utils/format.ts";
 
-import { PLAN_INTERVALS, type PlanInterval } from "@tokenpanel/contracts";
+import {
+  PLAN_INTERVALS,
+  findDuplicateRateLimitStream,
+  duplicateRateLimitStreamMessage,
+  type PlanInterval,
+} from "@tokenpanel/contracts";
 
 type Interval = PlanInterval;
 type Dimension = "tokens" | "requests" | "spend_minor";
-type Scope = "customer" | "plan" | "model" | "endpoint";
+type Scope = "customer" | "plan" | "model";
 
 interface Money {
   amountMinor: number;
@@ -71,7 +76,7 @@ interface PlansResponse {
 
 const INTERVALS: readonly Interval[] = PLAN_INTERVALS;
 const DIMENSIONS: readonly Dimension[] = ["tokens", "requests", "spend_minor"];
-const SCOPES: readonly Scope[] = ["customer", "plan", "model", "endpoint"];
+const SCOPES: readonly Scope[] = ["customer", "plan", "model"];
 
 const WINDOW_PRESETS: readonly { label: string; seconds: number }[] = [
   { label: "1h", seconds: 3600 },
@@ -190,10 +195,23 @@ export function validateDraft(draft: DraftPlan): string | null {
     if (r.dimension === "spend_minor") {
       if (!/^[A-Z]{3}$/.test(r.currency.toUpperCase())) return "Spend rule requires a 3-letter currency.";
     }
-    if ((r.scope === "model" || r.scope === "endpoint") && !r.scopeTarget.trim()) {
-      return "Model/endpoint scope requires a scope target.";
+    if (r.scope === "model" && !r.scopeTarget.trim()) {
+      return "Model scope requires a model alias.";
     }
   }
+
+  const streamDup = findDuplicateRateLimitStream(
+    draft.rateLimits.map((r) => ({
+      windowSeconds: Number(r.windowSeconds),
+      dimension: r.dimension,
+      scope: r.scope,
+      scopeTarget: r.scopeTarget.trim() || null,
+      currency: r.dimension === "spend_minor" ? r.currency.toUpperCase() : null,
+      active: r.active,
+    })),
+  );
+  if (streamDup) return duplicateRateLimitStreamMessage(streamDup);
+
   return null;
 }
 
@@ -220,7 +238,7 @@ function ruleSummary(r: RateLimitRule): string {
       : String(r.capValue);
   const dim = r.dimension === "tokens" ? "tokens" : r.dimension === "requests" ? "requests" : "spend";
   const scope =
-    r.scope === "model" || r.scope === "endpoint"
+    r.scope === "model"
       ? `${r.scope}${r.scopeTarget ? ` ${r.scopeTarget}` : ""}`
       : r.scope;
   return `${formatWindow(r.windowSeconds)} \u00B7 max ${cap} ${dim} \u00B7 ${scope} scope${r.active ? "" : " \u00B7 off"}`;
@@ -406,7 +424,7 @@ export default function PlansPage(): React.ReactElement {
           : r.capValue;
       const dim = r.dimension === "tokens" ? "tokens" : r.dimension === "requests" ? "requests" : "spend";
       const scope =
-        r.scope === "model" || r.scope === "endpoint"
+        r.scope === "model"
           ? `${r.scope}${r.scopeTarget.trim() ? ` ${r.scopeTarget.trim()}` : ""}`
           : r.scope;
       return `${formatWindow(Number.isFinite(seconds) ? seconds : 0)} \u00B7 max ${cap} ${dim} \u00B7 ${scope} scope${r.active ? "" : " \u00B7 off"}`;
@@ -554,9 +572,9 @@ export default function PlansPage(): React.ReactElement {
                       </Select>
                     </FormField>
 
-                    {(rule.scope === "model" || rule.scope === "endpoint") && (
-                      <FormField id={`rule-target-${rule.id}`} label="Scope target">
-                        <Input type="text" maxLength={120} value={rule.scopeTarget} placeholder={rule.scope === "model" ? "model alias" : "/endpoint path"} disabled={saving} onChange={(e) => updateRule(idx, "scopeTarget", e.target.value)} />
+                    {rule.scope === "model" && (
+                      <FormField id={`rule-target-${rule.id}`} label="Model alias">
+                        <Input type="text" maxLength={120} value={rule.scopeTarget} placeholder="model alias" disabled={saving} onChange={(e) => updateRule(idx, "scopeTarget", e.target.value)} />
                       </FormField>
                     )}
 

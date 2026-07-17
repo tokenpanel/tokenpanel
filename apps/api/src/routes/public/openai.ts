@@ -7,6 +7,7 @@ import {
   preFlightWorkflow,
   resolveModelOp,
   type BalanceReservation,
+  type LimitReservation,
 } from "../../domains/billing/workflow.ts";
 import {
   resolveChatContextEffect,
@@ -158,6 +159,7 @@ function resolveModelAndRules(params: {
         model,
         rules: [] as readonly RateLimitRule[],
         reservation: null as BalanceReservation | null,
+        limitReservation: null as LimitReservation | null,
       })),
     );
   }
@@ -175,6 +177,7 @@ function resolveModelAndRules(params: {
       model: r.model,
       rules: r.rules,
       reservation: r.reservation,
+      limitReservation: r.limitReservation,
     })),
   );
 }
@@ -241,6 +244,7 @@ type ChatPrep = {
   readonly model: ModelDoc;
   readonly rules: readonly RateLimitRule[];
   readonly reservation: BalanceReservation | null;
+  readonly limitReservation: LimitReservation | null;
 };
 
 publicOpenAI.post("/v1/chat/completions", async (c) => {
@@ -289,6 +293,7 @@ publicOpenAI.post("/v1/chat/completions", async (c) => {
       model: preflight.model,
       rules: preflight.rules,
       reservation: preflight.reservation,
+      limitReservation: preflight.limitReservation,
     } satisfies ChatPrep;
   });
 
@@ -306,6 +311,7 @@ publicOpenAI.post("/v1/chat/completions", async (c) => {
           rules: p.rules,
           protocol: "openai",
           reservation: p.reservation,
+          limitReservation: p.limitReservation,
           reservedMinor: p.reservation?.reservedMinor ?? 0,
           startedAtMs: Date.now(),
           priceMinorOverride:
@@ -339,7 +345,8 @@ publicOpenAI.post("/v1/chat/completions", async (c) => {
     );
   }
 
-  const { ctx, request, model, rules, reservation } = prepExit.value;
+  const { ctx, request, model, rules, reservation, limitReservation } =
+    prepExit.value;
   const reservedMinor = reservation?.reservedMinor ?? 0;
   const actor = actorForChatContext(ctx);
   const start = Date.now();
@@ -362,6 +369,7 @@ publicOpenAI.post("/v1/chat/completions", async (c) => {
     rules,
     protocol: "openai",
     reservation,
+    limitReservation,
     reservedMinor,
     startedAtMs: start,
     priceMinorOverride,

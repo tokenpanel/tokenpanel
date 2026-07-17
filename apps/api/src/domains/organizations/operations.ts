@@ -87,6 +87,8 @@ function allocateUniqueSlug(
 
 export const listOrganizationsForUser = (
   user: UserDoc,
+  /** Session-scoped active org (not user.activeOrganizationId). */
+  activeOrganizationId: HexId,
 ): Effect.Effect<
   {
     readonly items: readonly OrganizationView[];
@@ -104,7 +106,7 @@ export const listOrganizationsForUser = (
     );
     return {
       items,
-      activeOrganizationId: user.activeOrganizationId.toHexString(),
+      activeOrganizationId,
     };
   });
 

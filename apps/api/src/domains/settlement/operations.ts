@@ -23,6 +23,7 @@ import {
   resolveCacheAccounting,
 } from "../billing/charges.ts";
 import { toProviderUsage, type UsageOutcome } from "../providers/usage.ts";
+import type { LimitReservation } from "../../lib/rate-limits.ts";
 import {
   settleUsage,
   settleUsageOrOutbox,
@@ -123,6 +124,7 @@ export const settleOrOutboxWorkflow = (params: {
   readonly providerRequestId?: string | undefined;
   readonly gatewayRequestId?: string | undefined;
   readonly reservedMinor?: number | undefined;
+  readonly limitReservation?: LimitReservation | null | undefined;
   readonly status: number;
   readonly durationMs: number;
   readonly errorCode?: string | undefined;
@@ -149,6 +151,7 @@ export const settleOrOutboxWorkflow = (params: {
       providerRequestId: params.providerRequestId,
       gatewayRequestId: params.gatewayRequestId,
       reservedMinor: params.reservedMinor,
+      limitReservation: params.limitReservation,
       status: params.status,
       durationMs: params.durationMs,
       errorCode: params.errorCode,
@@ -188,6 +191,7 @@ export const settleUsageWorkflow = (params: {
   readonly rules: readonly RateLimitRule[];
   readonly occurredAt?: Date | undefined;
   readonly reservedMinor?: number | undefined;
+  readonly limitReservation?: LimitReservation | null | undefined;
 }): Effect.Effect<void, SettlementOpError, SettleServices> =>
   settleUsage({
     ...params,

@@ -3,6 +3,7 @@
  *
  * Single application Effect path — no Promise dual-path.
  * Every org uses atomic reservedMinor holds before provider calls.
+ * Rolling rate limits use the same admission pattern via reserveLimits.
  */
 
 import { Effect } from "effect";
@@ -17,14 +18,17 @@ import {
 } from "../../errors/families.ts";
 import { Clock } from "../../runtime/services/clock.ts";
 import {
-  checkLimits,
   getEffectiveRules,
+  releaseLimits,
+  reserveLimits,
+  type LimitReservation,
   type ViolatedLimit,
 } from "../../lib/rate-limits.ts";
 import { CustomersRepo } from "../../infrastructure/mongo/repositories/customers.ts";
 import { ModelsRepo } from "../../infrastructure/mongo/repositories/models.ts";
 import type { PlansRepo } from "../../infrastructure/mongo/repositories/plans.ts";
 import type { UsageRepo } from "../../infrastructure/mongo/repositories/usage.ts";
+import type { MongoDb } from "../../runtime/services/mongo-db.ts";
 import {
   releaseBalanceReservation,
   reserveBalance,
@@ -43,11 +47,18 @@ export type BalanceReservation = {
   organizationId: ObjectId;
 };
 
+export type { LimitReservation };
+
 export type PreFlightResult = {
   readonly model: ModelDoc;
   readonly rules: readonly RateLimitRule[];
   /** Non-null when balance was held (caller must settle or release). */
   readonly reservation: BalanceReservation | null;
+  /**
+   * Rolling-limit holds (may be empty holds). Non-null when rules were
+   * evaluated; caller must settleLimits or releaseLimits.
+   */
+  readonly limitReservation: LimitReservation | null;
   readonly estimatedTokens: number;
   readonly estimatedSpendMinor: number;
 };
@@ -64,7 +75,8 @@ export type BillingWorkflowServices =
   | CustomersRepo
   | ModelsRepo
   | PlansRepo
-  | UsageRepo;
+  | UsageRepo
+  | MongoDb;
 
 function mapRateLimit(v: ViolatedLimit): RateLimitExceededError {
   return new RateLimitExceededError({
@@ -134,10 +146,13 @@ export const resolveModelOp = (
   });
 
 /**
- * Application pre-flight: model access, rate limits (Clock), atomic balance
- * reserve before the provider call.
+ * Application pre-flight: model access, atomic rate-limit reserve (Clock),
+ * atomic balance reserve before the provider call.
  *
  * When `model` is omitted, loads via ModelsRepo from orgId + aliasId.
+ *
+ * Order: limits first, then balance. If balance fails after limits were
+ * reserved, limit holds are released before returning the error.
  */
 export const preFlightWorkflow = (params: {
   readonly orgId: ObjectId;
@@ -147,7 +162,6 @@ export const preFlightWorkflow = (params: {
   readonly model?: ModelDoc | undefined;
   readonly estimatedPromptTokens?: number | undefined;
   readonly maxCompletionTokens?: number | undefined;
-  readonly scopeTarget?: string | undefined;
   /** Inject rules to skip DB (tests). */
   readonly rules?: readonly RateLimitRule[] | undefined;
   /** Inject balance snapshot to skip customer read (tests). */
@@ -189,16 +203,19 @@ export const preFlightWorkflow = (params: {
         Effect.mapError(mapSystem("Failed to load rate-limit rules")),
       ));
 
-    if (rules.length > 0 && estimate.estimatedTokens > 0) {
-      const limitResult = yield* checkLimits({
+    let limitReservation: LimitReservation | null = null;
+    if (rules.length > 0) {
+      const limitResult = yield* reserveLimits({
+        organizationId: params.orgId,
         customerId: params.customerId,
-        rules: [...rules],
+        rules,
         estimatedTokens: estimate.estimatedTokens,
         estimatedSpendMinor: estimate.estimatedSpendMinor,
+        currency: estimate.currency,
         modelAliasId: params.aliasId,
-        scopeTarget: params.scopeTarget,
         nowMs: clock.nowMs(),
-      }).pipe(Effect.mapError(mapSystem("Rate-limit evaluation failed")));
+        dryRun: params.dryRun,
+      }).pipe(Effect.mapError(mapSystem("Rate-limit reservation failed")));
       if (!limitResult.ok) {
         const v = limitResult.violated[0];
         if (v) return yield* Effect.fail(mapRateLimit(v));
@@ -210,6 +227,7 @@ export const preFlightWorkflow = (params: {
           }),
         );
       }
+      limitReservation = limitResult.reservation;
     }
 
     let reservation: BalanceReservation | null = null;
@@ -223,6 +241,12 @@ export const preFlightWorkflow = (params: {
           .findByIdAnyOrg(params.customerId)
           .pipe(Effect.mapError(mapSystem("Failed to load customer balance")));
         if (!customer) {
+          // Release limit holds before failing.
+          if (limitReservation && !params.dryRun) {
+            yield* releaseLimits(limitReservation).pipe(
+              Effect.catchAll(() => Effect.void),
+            );
+          }
           return yield* Effect.fail(
             new AuthorizationError({
               code: "customer_not_found",
@@ -265,6 +289,11 @@ export const preFlightWorkflow = (params: {
           currency: estimate.currency,
         }).pipe(Effect.mapError(mapSystem("Balance reservation failed")));
         if (!held.reserved) {
+          if (limitReservation) {
+            yield* releaseLimits(limitReservation).pipe(
+              Effect.catchAll(() => Effect.void),
+            );
+          }
           return yield* Effect.fail(
             failReserveDecision(
               snap,
@@ -287,12 +316,13 @@ export const preFlightWorkflow = (params: {
       model,
       rules,
       reservation,
+      limitReservation,
       estimatedTokens: estimate.estimatedTokens,
       estimatedSpendMinor: estimate.estimatedSpendMinor,
     };
   });
 
-/** Best-effort release of a preFlight hold. */
+/** Best-effort release of a preFlight balance hold. */
 export const releaseReservationWorkflow = (
   reservation: BalanceReservation | null | undefined,
 ): Effect.Effect<void, never, CustomersRepo> =>
@@ -303,6 +333,29 @@ export const releaseReservationWorkflow = (
       organizationId: reservation.organizationId,
       reservedMinor: reservation.reservedMinor,
     }).pipe(Effect.catchAll(() => Effect.succeed(false)));
+  });
+
+/** Best-effort release of a preFlight rolling-limit hold. */
+export const releaseLimitReservationWorkflow = (
+  limitReservation: LimitReservation | null | undefined,
+): Effect.Effect<void, never, UsageRepo> =>
+  Effect.gen(function* () {
+    if (!limitReservation || limitReservation.holds.length === 0) return;
+    yield* releaseLimits(limitReservation).pipe(
+      Effect.catchAll(() => Effect.void),
+    );
+  });
+
+/**
+ * Best-effort release of balance + limit holds (cancel / pre-commit fail).
+ */
+export const releaseAllPreflightHolds = (params: {
+  readonly reservation?: BalanceReservation | null | undefined;
+  readonly limitReservation?: LimitReservation | null | undefined;
+}): Effect.Effect<void, never, CustomersRepo | UsageRepo> =>
+  Effect.gen(function* () {
+    yield* releaseReservationWorkflow(params.reservation);
+    yield* releaseLimitReservationWorkflow(params.limitReservation);
   });
 
 /** Settle after hold: debit actual + release reserved. */

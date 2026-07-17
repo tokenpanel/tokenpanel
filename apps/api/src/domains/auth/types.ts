@@ -60,6 +60,8 @@ export type UpdateMeInput = {
   readonly userId: HexId;
   readonly currentEmail: string;
   readonly email: string;
+  /** Session tenant so the response matches request org context. */
+  readonly activeOrganizationId?: HexId | undefined;
 };
 
 export type ChangePasswordInput = {
@@ -76,6 +78,13 @@ export type CreateInviteInput = {
   readonly role?: UserRole | undefined;
   readonly permissions?: readonly PanelPermission[] | undefined;
   readonly ttlHours?: number | undefined;
+  /**
+   * Actor performing the invite (active-org membership).
+   * Required so domain can reject privilege escalation:
+   * grant ⊆ actor effective permissions.
+   */
+  readonly actorRole: UserRole;
+  readonly actorPermissions: readonly PanelPermission[];
 };
 
 export type CreateInviteResult = {

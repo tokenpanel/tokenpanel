@@ -14,7 +14,9 @@ import type {
 } from "../api/types.ts";
 import {
   PANEL_PERMISSION_DEFINITIONS,
+  PANEL_PERMISSIONS,
   PANEL_READ_PERMISSIONS,
+  canGrantPanelAccess,
   type PanelPermission as CatalogPermission,
 } from "@tokenpanel/contracts";
 import { formatDate, formatRelative } from "../utils/format.ts";
@@ -71,8 +73,6 @@ function groupBy<T, K extends string>(items: readonly T[], key: (t: T) => K): Re
   return out;
 }
 
-const PERMS_BY_GROUP = groupBy(PANEL_PERMISSION_DEFINITIONS, (d) => d.group);
-
 /** Support-style preset: read dashboards/customers/usage + invite list. */
 const SUPPORT_PRESET: readonly CatalogPermission[] = [
   "dashboard:read",
@@ -100,12 +100,54 @@ function inviteId(inv: Invite): string {
   return inv._id ?? inv.id ?? "";
 }
 
+/** Intersect a preset with permissions the actor may grant. */
+function filterGrantable(
+  perms: readonly CatalogPermission[],
+  grantable: ReadonlySet<PanelPermission>,
+): CatalogPermission[] {
+  return perms.filter((p) => grantable.has(p));
+}
+
 export default function SettingsPage(): React.ReactElement {
   const { user, updateEmail, changePassword } = useAuth();
   const isAdmin = user?.role === "admin";
   const canWriteInvites = hasPermission(user, "invites:write");
   const canReadInvites =
     hasPermission(user, "invites:read") || canWriteInvites;
+
+  /** Permissions this actor may attach to an invite (own effective set). */
+  const grantablePermissions = useMemo((): ReadonlySet<PanelPermission> => {
+    if (!user) return new Set();
+    if (user.role === "admin") return new Set(PANEL_PERMISSIONS);
+    return new Set(user.permissions ?? []);
+  }, [user]);
+
+  /** Only admins (full catalog) may create admin-role invites. */
+  const canInviteAdmin =
+    !!user &&
+    canGrantPanelAccess(
+      user.role,
+      user.permissions ?? [],
+      "admin",
+      [],
+    );
+
+  const grantableDefinitions = useMemo(
+    () =>
+      PANEL_PERMISSION_DEFINITIONS.filter((d) =>
+        grantablePermissions.has(d.value),
+      ),
+    [grantablePermissions],
+  );
+
+  const groupEntries = useMemo(
+    () =>
+      Object.entries(groupBy(grantableDefinitions, (d) => d.group)) as [
+        string,
+        (typeof PANEL_PERMISSION_DEFINITIONS)[number][],
+      ][],
+    [grantableDefinitions],
+  );
 
   const [invites, setInvites] = useState<Invite[]>([]);
   const [loadingInvites, setLoadingInvites] = useState(false);
@@ -198,10 +240,21 @@ export default function SettingsPage(): React.ReactElement {
 
   const permissionCount = invitePermissions.size;
 
-  const groupEntries = useMemo(
-    () => Object.entries(PERMS_BY_GROUP) as [string, (typeof PANEL_PERMISSION_DEFINITIONS)[number][]][],
-    [],
-  );
+  // Drop any selected grants that become ungrantable (e.g. org switch).
+  useEffect(() => {
+    setInvitePermissions((prev) => {
+      let changed = false;
+      const next = new Set<PanelPermission>();
+      for (const p of prev) {
+        if (grantablePermissions.has(p)) next.add(p);
+        else changed = true;
+      }
+      return changed ? next : prev;
+    });
+    if (!canInviteAdmin && inviteRole === "admin") {
+      setInviteRole("member");
+    }
+  }, [grantablePermissions, canInviteAdmin, inviteRole]);
 
   useEffect(() => {
     if (!canReadInvites) return;
@@ -227,6 +280,7 @@ export default function SettingsPage(): React.ReactElement {
   }, [canReadInvites]);
 
   function setRole(next: UserRole) {
+    if (next === "admin" && !canInviteAdmin) return;
     setInviteRole(next);
     // Admins get the full catalog server-side; clear grants on role flip.
     if (next === "admin") {
@@ -235,10 +289,13 @@ export default function SettingsPage(): React.ReactElement {
   }
 
   function applyPreset(perms: readonly CatalogPermission[]) {
-    setInvitePermissions(new Set(perms as PanelPermission[]));
+    setInvitePermissions(
+      new Set(filterGrantable(perms, grantablePermissions) as PanelPermission[]),
+    );
   }
 
   function togglePermission(perm: PanelPermission) {
+    if (!grantablePermissions.has(perm)) return;
     setInvitePermissions((prev) => {
       const next = new Set(prev);
       if (next.has(perm)) next.delete(perm);
@@ -495,7 +552,9 @@ export default function SettingsPage(): React.ReactElement {
                           </SelectTrigger>
                           <SelectContent>
                             <SelectItem value="member">Member</SelectItem>
-                            <SelectItem value="admin">Admin</SelectItem>
+                            {canInviteAdmin ? (
+                              <SelectItem value="admin">Admin</SelectItem>
+                            ) : null}
                           </SelectContent>
                         </Select>
                       </div>
@@ -523,7 +582,7 @@ export default function SettingsPage(): React.ReactElement {
                           <div>
                             <Label>Panel permissions</Label>
                             <p className="text-xs text-muted-foreground">
-                              Grants for this member in the active organization.
+                              Only permissions you hold can be granted.
                               {permissionCount > 0
                                 ? ` ${permissionCount} selected.`
                                 : " None selected (empty access until granted)."}
@@ -543,8 +602,16 @@ export default function SettingsPage(): React.ReactElement {
                               type="button"
                               variant="outline"
                               size="sm"
-                              disabled={creating}
-                              onClick={() => applyPreset(PANEL_READ_PERMISSIONS)}
+                              disabled={
+                                creating ||
+                                filterGrantable(
+                                  PANEL_READ_PERMISSIONS,
+                                  grantablePermissions,
+                                ).length === 0
+                              }
+                              onClick={() =>
+                                applyPreset(PANEL_READ_PERMISSIONS)
+                              }
                             >
                               Viewer
                             </Button>
@@ -552,7 +619,13 @@ export default function SettingsPage(): React.ReactElement {
                               type="button"
                               variant="outline"
                               size="sm"
-                              disabled={creating}
+                              disabled={
+                                creating ||
+                                filterGrantable(
+                                  SUPPORT_PRESET,
+                                  grantablePermissions,
+                                ).length === 0
+                              }
                               onClick={() => applyPreset(SUPPORT_PRESET)}
                             >
                               Support
@@ -561,51 +634,68 @@ export default function SettingsPage(): React.ReactElement {
                               type="button"
                               variant="outline"
                               size="sm"
-                              disabled={creating}
+                              disabled={
+                                creating ||
+                                filterGrantable(
+                                  BILLING_PRESET,
+                                  grantablePermissions,
+                                ).length === 0
+                              }
                               onClick={() => applyPreset(BILLING_PRESET)}
                             >
                               Billing
                             </Button>
                           </div>
                         </div>
-                        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                          {groupEntries.map(([group, items]) => (
-                            <div
-                              key={group}
-                              className="flex flex-col gap-2 rounded-md border border-border p-3"
-                            >
-                              <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                                {group}
-                              </div>
-                              {items.map((def) => (
-                                <label
-                                  key={def.value}
-                                  className="flex cursor-pointer items-start gap-2 text-sm"
-                                  title={def.description}
-                                >
-                                  <Checkbox
-                                    checked={invitePermissions.has(def.value)}
-                                    onCheckedChange={() => togglePermission(def.value)}
-                                    disabled={creating}
-                                    className="mt-0.5"
-                                  />
-                                  <span className="flex flex-col">
-                                    <span className="font-medium leading-tight">
-                                      {def.description}
+                        {groupEntries.length === 0 ? (
+                          <p className="text-xs text-muted-foreground">
+                            You have no grantable panel permissions beyond invite
+                            management itself. Invites will create members with
+                            empty access.
+                          </p>
+                        ) : (
+                          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                            {groupEntries.map(([group, items]) => (
+                              <div
+                                key={group}
+                                className="flex flex-col gap-2 rounded-md border border-border p-3"
+                              >
+                                <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                                  {group}
+                                </div>
+                                {items.map((def) => (
+                                  <label
+                                    key={def.value}
+                                    className="flex cursor-pointer items-start gap-2 text-sm"
+                                    title={def.description}
+                                  >
+                                    <Checkbox
+                                      checked={invitePermissions.has(def.value)}
+                                      onCheckedChange={() =>
+                                        togglePermission(def.value)
+                                      }
+                                      disabled={creating}
+                                      className="mt-0.5"
+                                    />
+                                    <span className="flex flex-col">
+                                      <span className="font-medium leading-tight">
+                                        {def.description}
+                                      </span>
+                                      <code className="font-mono text-[10px] text-muted-foreground">
+                                        {def.value}
+                                      </code>
                                     </span>
-                                    <code className="font-mono text-[10px] text-muted-foreground">
-                                      {def.value}
-                                    </code>
-                                  </span>
-                                </label>
-                              ))}
-                            </div>
-                          ))}
-                        </div>
+                                  </label>
+                                ))}
+                              </div>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     ) : (
                       <p className="text-xs text-muted-foreground">
-                        Admin invites receive the full panel permission catalog automatically.
+                        Admin invites receive the full panel permission catalog
+                        automatically.
                       </p>
                     )}
                   </form>

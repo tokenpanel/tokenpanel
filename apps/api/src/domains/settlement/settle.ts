@@ -29,7 +29,12 @@ import type {
   ProviderUsage,
 } from "../../providers/provider-usage.ts";
 import { normalizeProcessedTotalTokens } from "../../providers/provider-usage.ts";
-import { recordUsage } from "../../lib/rate-limits.ts";
+import {
+  recordUsage,
+  settleLimits,
+  serializeLimitReservation,
+  type LimitReservation,
+} from "../../lib/rate-limits.ts";
 import {
   compactGatewayRequestId,
   enqueueSettlementOutbox,
@@ -121,6 +126,8 @@ export type SettleUsageParams = {
   readonly rules: readonly RateLimitRule[];
   readonly occurredAt?: Date | undefined;
   readonly reservedMinor?: number | undefined;
+  /** Preflight rolling-limit holds; when set, counters adjust by actual − reserved. */
+  readonly limitReservation?: LimitReservation | null | undefined;
   /**
    * When true (default), guard failure surfaces on the error channel so
    * settleUsageOrOutbox can enqueue durable work.
@@ -327,20 +334,38 @@ export const settleUsage = (
         }
 
         if (billed && customerId !== null) {
-          yield* recordUsage({
-            organizationId: params.orgId,
-            customerId,
-            rules: [...params.rules],
-            usage: {
-              tokens: usageRecord.totalTokens,
-              requests: 1,
-              spendMinor: params.priceMinor,
-              currency: params.currency,
-              modelAliasId: params.model.aliasId,
-            },
-            occurredAt,
-            session,
-          });
+          const usagePayload = {
+            tokens: usageRecord.totalTokens,
+            requests: 1,
+            spendMinor: params.priceMinor,
+            currency: params.currency,
+            modelAliasId: params.model.aliasId,
+          };
+          if (
+            params.limitReservation &&
+            params.limitReservation.holds.length > 0
+          ) {
+            // Adjust preflight holds by (actual − reserved) on held buckets.
+            yield* settleLimits({
+              reservation: params.limitReservation,
+              organizationId: params.orgId,
+              customerId,
+              rules: [...params.rules],
+              usage: usagePayload,
+              occurredAt,
+              session,
+            });
+          } else {
+            // No prior hold (playground / legacy): full counter write.
+            yield* recordUsage({
+              organizationId: params.orgId,
+              customerId,
+              rules: [...params.rules],
+              usage: usagePayload,
+              occurredAt,
+              session,
+            });
+          }
         }
       }),
     );
@@ -385,6 +410,7 @@ function outboxReconContext(params: {
   occurredAt?: Date | undefined;
   cacheAccounting?: CacheAccountingMode | undefined;
   reservedMinor?: number | undefined;
+  limitReservation?: LimitReservation | null | undefined;
   extra?: Record<string, unknown> | undefined;
 }): Record<string, unknown> {
   const priceSchedule = params.entry.price ?? params.model.price;
@@ -397,6 +423,7 @@ function outboxReconContext(params: {
     params.usage && cacheAccounting
       ? { ...params.usage, cacheAccounting }
       : params.usage;
+  const limitHolds = serializeLimitReservation(params.limitReservation);
   return {
     actorKind: params.actor.actorKind,
     apiKeyId: params.actor.apiKeyId?.toHexString() ?? null,
@@ -438,6 +465,7 @@ function outboxReconContext(params: {
     ...(params.reservedMinor !== undefined && params.reservedMinor > 0
       ? { reservedMinor: params.reservedMinor }
       : {}),
+    ...(limitHolds !== undefined ? { limitHolds } : {}),
     ...(params.extra ?? {}),
   };
 }
@@ -454,6 +482,7 @@ export type SettleUsageOrOutboxParams = {
   readonly providerRequestId?: string | undefined;
   readonly gatewayRequestId?: string | undefined;
   readonly reservedMinor?: number | undefined;
+  readonly limitReservation?: LimitReservation | null | undefined;
   readonly status: number;
   readonly durationMs: number;
   readonly errorCode?: string | undefined;
@@ -526,6 +555,7 @@ export const settleUsageOrOutbox = (
 
     const protocolCacheAccounting = cacheAccountingForProtocol(params.protocol);
     const reservedMinor = Math.max(0, params.reservedMinor ?? 0);
+    const limitReservation = params.limitReservation ?? null;
 
     if (providerUsage.status === "missing") {
       const outboxId = yield* enqueueSettlementOutbox({
@@ -544,6 +574,7 @@ export const settleUsageOrOutbox = (
           occurredAt,
           cacheAccounting: protocolCacheAccounting,
           reservedMinor,
+          limitReservation,
           extra: { reason: providerUsage.reason },
         }),
       }).pipe(
@@ -599,6 +630,7 @@ export const settleUsageOrOutbox = (
       rules: params.rules,
       occurredAt,
       reservedMinor,
+      limitReservation,
       rethrowGuardFailure: true,
     }).pipe(Effect.either);
 
@@ -630,6 +662,7 @@ export const settleUsageOrOutbox = (
         occurredAt,
         cacheAccounting: usage.cacheAccounting,
         reservedMinor,
+        limitReservation,
         extra: {
           error: err instanceof Error ? err.message : String(err),
         },

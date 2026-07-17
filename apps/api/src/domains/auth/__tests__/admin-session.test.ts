@@ -10,6 +10,7 @@ import {
   logout,
   changePassword,
   login,
+  switchActiveOrganization,
 } from "../operations.ts";
 import { resolveAdminSession } from "../session.ts";
 import {
@@ -20,10 +21,15 @@ import {
   UserRepository,
   type UserRepositoryService,
 } from "../../ports/user-repository.ts";
+import {
+  OrganizationRepository,
+  type OrganizationRepositoryService,
+} from "../../ports/organization-repository.ts";
 import { CryptoTest } from "../../../runtime/layers/crypto.ts";
 import { ClockTest } from "../../../runtime/layers/clock.ts";
 import { AppConfig } from "../../../runtime/services/app-config.ts";
 import { JWT_DEFAULT_TTL_SECONDS } from "../../../config/security-policy.ts";
+import type { OrganizationDoc } from "@tokenpanel/db";
 
 const USER_ID = new ObjectId();
 const ORG_ID = new ObjectId();
@@ -61,6 +67,7 @@ function sessionStore() {
         const doc: AdminSessionDoc = {
           _id: id,
           userId: new ObjectId(record.userId),
+          organizationId: new ObjectId(record.organizationId),
           expiresAt: record.expiresAt,
           createdAt: now,
           updatedAt: now,
@@ -69,11 +76,18 @@ function sessionStore() {
         return doc;
       }),
     findById: (sessionId) => Effect.succeed(map.get(sessionId) ?? null),
-    touchExpiry: (sessionId, userId, expiresAt) =>
+    touchExpiry: (sessionId, userId, expiresAt, organizationId) =>
       Effect.sync(() => {
         const cur = map.get(sessionId);
         if (!cur || cur.userId.toHexString() !== userId) return null;
-        const next = { ...cur, expiresAt, updatedAt: new Date() };
+        const next: AdminSessionDoc = {
+          ...cur,
+          expiresAt,
+          updatedAt: new Date(),
+          ...(organizationId !== undefined
+            ? { organizationId: new ObjectId(organizationId) }
+            : {}),
+        };
         map.set(sessionId, next);
         return next;
       }),
@@ -290,9 +304,171 @@ test("login mints session-backed token", async () => {
     expect(map.size).toBe(1);
     const session = yield* resolveAdminSession(res.token);
     expect(session.user.username).toBe("alice");
+    expect(session.orgId.toHexString()).toBe(ORG_ID.toHexString());
+    const row = [...map.values()][0]!;
+    expect(row.organizationId.toHexString()).toBe(ORG_ID.toHexString());
   });
 
   await Effect.runPromise(
     program.pipe(Effect.provide(Layer.mergeAll(baseLayers(sessions), users))),
+  );
+});
+
+test("resolveAdminSession uses session org, not user.activeOrganizationId", async () => {
+  const ORG_B = new ObjectId();
+  const { map, layer: sessions } = sessionStore();
+  // User preference points at ORG_B, but session was issued for ORG_ID.
+  const user = activeUser({
+    memberships: [
+      { organizationId: ORG_ID, role: "admin", permissions: [] },
+      { organizationId: ORG_B, role: "member", permissions: [] },
+    ],
+    activeOrganizationId: ORG_B,
+  });
+  const users = Layer.succeed(UserRepository, {
+    findById: (id: string) =>
+      Effect.succeed(id === USER_ID.toHexString() ? user : null),
+    countUsers: neverCall,
+    findByUsername: neverCall,
+    findByEmail: neverCall,
+    findByUsernameOrEmail: neverCall,
+    emailTaken: neverCall,
+    insertUser: neverCall,
+    updateEmail: neverCall,
+    updatePasswordHash: neverCall,
+    setActiveOrganization: neverCall,
+    addMembership: neverCall,
+    findMembersOfOrg: neverCall,
+    pullMembershipAndRepoint: neverCall,
+  } as unknown as UserRepositoryService);
+
+  const program = Effect.gen(function* () {
+    const issued = yield* issueAdminToken({
+      userId: USER_ID.toHexString(),
+      orgId: ORG_ID.toHexString(),
+      role: "admin",
+    });
+    const session = yield* resolveAdminSession(issued.token);
+    expect(session.orgId.toHexString()).toBe(ORG_ID.toHexString());
+    expect(session.role).toBe("admin");
+    expect(map.get(issued.sessionId)?.organizationId.toHexString()).toBe(
+      ORG_ID.toHexString(),
+    );
+  });
+
+  await Effect.runPromise(
+    program.pipe(Effect.provide(Layer.mergeAll(baseLayers(sessions), users))),
+  );
+});
+
+test("org switch rebinds only the current session; other session stays put", async () => {
+  const ORG_B = new ObjectId();
+  const { map, layer: sessions } = sessionStore();
+  let activeOrg = ORG_ID;
+  const userDoc = (): UserDoc =>
+    activeUser({
+      memberships: [
+        { organizationId: ORG_ID, role: "admin", permissions: [] },
+        { organizationId: ORG_B, role: "member", permissions: [] },
+      ],
+      activeOrganizationId: activeOrg,
+    });
+
+  const users = Layer.succeed(UserRepository, {
+    findById: (id: string) =>
+      Effect.succeed(id === USER_ID.toHexString() ? userDoc() : null),
+    countUsers: neverCall,
+    findByUsername: neverCall,
+    findByEmail: neverCall,
+    findByUsernameOrEmail: neverCall,
+    emailTaken: neverCall,
+    insertUser: neverCall,
+    updateEmail: neverCall,
+    updatePasswordHash: neverCall,
+    setActiveOrganization: (_userId: string, organizationId: string) =>
+      Effect.sync(() => {
+        activeOrg = new ObjectId(organizationId);
+      }),
+    addMembership: neverCall,
+    findMembersOfOrg: neverCall,
+    pullMembershipAndRepoint: neverCall,
+  } as unknown as UserRepositoryService);
+
+  const orgDoc = (id: ObjectId): OrganizationDoc => {
+    const now = new Date();
+    return {
+      _id: id,
+      name: "org",
+      slug: "org",
+      ownerId: USER_ID,
+      defaultCurrency: "USD",
+      createdAt: now,
+      updatedAt: now,
+    };
+  };
+  const orgs = Layer.succeed(OrganizationRepository, {
+    findById: (id: string) =>
+      Effect.succeed(
+        id === ORG_B.toHexString()
+          ? orgDoc(ORG_B)
+          : id === ORG_ID.toHexString()
+            ? orgDoc(ORG_ID)
+            : null,
+      ),
+    findByIds: neverCall,
+    findBySlug: neverCall,
+    slugTaken: neverCall,
+    insert: neverCall,
+    update: neverCall,
+    delete: neverCall,
+    countBusinessData: neverCall,
+  } as unknown as OrganizationRepositoryService);
+
+  const program = Effect.gen(function* () {
+    const deviceA = yield* issueAdminToken({
+      userId: USER_ID.toHexString(),
+      orgId: ORG_ID.toHexString(),
+      role: "admin",
+    });
+    const deviceB = yield* issueAdminToken({
+      userId: USER_ID.toHexString(),
+      orgId: ORG_ID.toHexString(),
+      role: "admin",
+    });
+    expect(map.size).toBe(2);
+
+    // Device A switches to ORG_B.
+    const switched = yield* switchActiveOrganization({
+      userId: USER_ID.toHexString(),
+      targetOrganizationId: ORG_B.toHexString(),
+      sessionId: deviceA.sessionId,
+      memberships: userDoc().memberships,
+    });
+
+    const sessionA = yield* resolveAdminSession(switched.token);
+    expect(sessionA.orgId.toHexString()).toBe(ORG_B.toHexString());
+    expect(sessionA.role).toBe("member");
+    expect(map.get(deviceA.sessionId)?.organizationId.toHexString()).toBe(
+      ORG_B.toHexString(),
+    );
+
+    // Device B still bound to ORG_ID despite user preference moving to ORG_B.
+    expect(activeOrg.toHexString()).toBe(ORG_B.toHexString());
+    const sessionB = yield* resolveAdminSession(deviceB.token);
+    expect(sessionB.orgId.toHexString()).toBe(ORG_ID.toHexString());
+    expect(sessionB.role).toBe("admin");
+    expect(map.get(deviceB.sessionId)?.organizationId.toHexString()).toBe(
+      ORG_ID.toHexString(),
+    );
+
+    // Stale pre-switch token for device A (old JWT org claim) must fail.
+    const stale = yield* resolveAdminSession(deviceA.token).pipe(Effect.either);
+    expect(stale._tag).toBe("Left");
+  });
+
+  await Effect.runPromise(
+    program.pipe(
+      Effect.provide(Layer.mergeAll(baseLayers(sessions), users, orgs)),
+    ),
   );
 });

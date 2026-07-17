@@ -11,6 +11,10 @@
  * part of the map key, so attackers cannot grow the store via unique strings
  * or lock out a victim account from another IP.
  *
+ * Store hard-cap: `store.size` never exceeds `maxStoreSize`. When full, fully
+ * stale entries are dropped first; if still over, oldest entries are evicted
+ * (unlocked first, then any). Map insertion order approximates recency.
+ *
  * State is per-process (single Bun.serve instance). A restart resets counters —
  * acceptable for throttling; the constant-time hash comparison (crypto.ts) is
  * the durable protection against offline guessing. `now` is injectable so tests
@@ -64,8 +68,8 @@ export class FailureThrottle {
     if (e.failures.length === 0 && e.lockedUntil <= now) this.store.delete(key);
   }
 
-  private maybeGlobalPurge(now: number): void {
-    if (this.store.size <= this.maxStoreSize) return;
+  /** Drop entries with no in-window failures and no active lockout. */
+  private purgeStale(now: number): void {
     for (const [k, e] of this.store) {
       const fresh = e.failures.filter((t) => now - t < this.opts.windowMs);
       if (fresh.length === 0 && e.lockedUntil <= now) this.store.delete(k);
@@ -73,10 +77,49 @@ export class FailureThrottle {
     }
   }
 
+  /**
+   * Evict until `store.size <= targetSize`. Prefer unlocked (or expired-lock)
+   * entries in insertion order, then any remaining oldest keys.
+   */
+  private hardEvictUntil(targetSize: number, now: number): void {
+    if (targetSize < 0) targetSize = 0;
+    if (this.store.size <= targetSize) return;
+
+    for (const [k, e] of this.store) {
+      if (this.store.size <= targetSize) return;
+      if (e.lockedUntil <= now) this.store.delete(k);
+    }
+    for (const k of this.store.keys()) {
+      if (this.store.size <= targetSize) return;
+      this.store.delete(k);
+    }
+  }
+
+  /**
+   * Guarantee `store.size <= maxStoreSize`: stale purge, then hard eviction.
+   */
+  private enforceStoreCap(now: number): void {
+    if (this.store.size <= this.maxStoreSize) return;
+    this.purgeStale(now);
+    this.hardEvictUntil(this.maxStoreSize, now);
+  }
+
+  /**
+   * Free a slot before inserting a new key. No-op if the key already exists
+   * or the store is under capacity.
+   */
+  private ensureRoomForNewKey(now: number): void {
+    if (this.store.size < this.maxStoreSize) return;
+    this.purgeStale(now);
+    if (this.store.size < this.maxStoreSize) return;
+    // Leave one free slot for the incoming key (cap is exclusive of the new set).
+    this.hardEvictUntil(Math.max(0, this.maxStoreSize - 1), now);
+  }
+
   /** Call before processing a credential check. Returns allowed + retry hint. */
   check(key: string): ThrottleCheckResult {
     const now = this.now();
-    this.maybeGlobalPurge(now);
+    this.enforceStoreCap(now);
     this.purge(key, now);
     const e = this.store.get(key);
     if (e && e.lockedUntil > now) {
@@ -91,10 +134,11 @@ export class FailureThrottle {
   /** Call when a credential check FAILS. Locks out once maxAttempts is hit. */
   recordFailure(key: string): void {
     const now = this.now();
-    this.maybeGlobalPurge(now);
     this.purge(key, now);
     let e = this.store.get(key);
     if (!e) {
+      if (this.maxStoreSize <= 0) return;
+      this.ensureRoomForNewKey(now);
       e = { failures: [], lockedUntil: 0 };
       this.store.set(key, e);
     }
@@ -103,6 +147,8 @@ export class FailureThrottle {
       e.lockedUntil = now + this.opts.lockoutMs;
       e.failures = [];
     }
+    // Safety net if maxStoreSize was reduced or invariants slip.
+    this.enforceStoreCap(now);
   }
 
   /** Call when a credential check SUCCEEDS — clears the failure history. */
@@ -113,6 +159,11 @@ export class FailureThrottle {
   /** Test/reset hook. */
   clear(): void {
     this.store.clear();
+  }
+
+  /** Test hook: current number of tracked keys. */
+  size(): number {
+    return this.store.size;
   }
 }
 

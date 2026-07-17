@@ -60,10 +60,12 @@ function nameOf(err: unknown): string {
   return typeof m?.name === "string" ? m.name : "";
 }
 
-const TRANSIENT_LABELS = new Set([
-  "TransientTransactionError",
-  "UnknownTransactionCommitResult",
-]);
+/**
+ * Labels that mean the transaction body is safe to re-run after abort.
+ * UnknownTransactionCommitResult is intentionally excluded: commit may have
+ * already succeeded, so callers must retry commit only (see withMongoSession).
+ */
+const TRANSIENT_LABELS = new Set(["TransientTransactionError"]);
 
 const TIMEOUT_NAMES = new Set([
   "MongoNetworkTimeoutError",

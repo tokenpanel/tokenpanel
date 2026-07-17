@@ -109,7 +109,8 @@ export const PANEL_PERMISSION_DEFINITIONS = [
   {
     value: "invites:write",
     group: "Members",
-    description: "Create and revoke invites (role + permissions).",
+    description:
+      "Create and revoke invites (may only grant role/permissions the inviter holds).",
   },
   {
     value: "organization:write",
@@ -169,4 +170,26 @@ export function hasPanelPermission(
 ): boolean {
   if (role === "admin") return true;
   return (permissions ?? []).includes(required);
+}
+
+/**
+ * Whether an actor may grant a target role + permission set.
+ * Rule: every effective permission of the grant must be held by the actor.
+ * - Admin invite ⇒ full catalog ⇒ only admins (or holders of every atom).
+ * - Member invite ⇒ only permissions the actor already has.
+ */
+export function canGrantPanelAccess(
+  actorRole: "admin" | "member",
+  actorPermissions: readonly PanelPermission[] | undefined,
+  grantRole: "admin" | "member",
+  grantPermissions: readonly PanelPermission[] | undefined,
+): boolean {
+  const held = new Set(
+    effectivePanelPermissions(actorRole, actorPermissions),
+  );
+  const granted = effectivePanelPermissions(grantRole, grantPermissions);
+  for (const p of granted) {
+    if (!held.has(p)) return false;
+  }
+  return true;
 }

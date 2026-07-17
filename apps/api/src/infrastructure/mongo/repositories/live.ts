@@ -399,6 +399,7 @@ export const SessionRepositoryLive = Layer.effect(
           const doc: AdminSessionDoc = {
             _id: newObjectId(record.id),
             userId: toObjectId(record.userId),
+            organizationId: toObjectId(record.organizationId),
             expiresAt: record.expiresAt,
             createdAt: now,
             updatedAt: now,
@@ -420,15 +421,26 @@ export const SessionRepositoryLive = Layer.effect(
           );
           return yield* decodeAdminSession(raw);
         }),
-      touchExpiry: (sessionId, userId, expiresAt) =>
+      touchExpiry: (sessionId, userId, expiresAt, organizationId) =>
         Effect.gen(function* () {
+          const $set: {
+            expiresAt: Date;
+            updatedAt: Date;
+            organizationId?: ReturnType<typeof toObjectId>;
+          } = {
+            expiresAt,
+            updatedAt: clock.now(),
+          };
+          if (organizationId !== undefined) {
+            $set.organizationId = toObjectId(organizationId);
+          }
           const raw = yield* tryMongo(() =>
             db().adminSessions.findOneAndUpdate(
               {
                 _id: toObjectId(sessionId),
                 userId: toObjectId(userId),
               },
-              { $set: { expiresAt, updatedAt: clock.now() } },
+              { $set },
               { returnDocument: "after" },
             ),
           );
@@ -1196,9 +1208,55 @@ export const ModelRepositoryLive = Layer.effect(
             filter.providerId = toObjectId(providerId);
           }
           const raws = yield* tryMongo(() =>
-            db().modelCatalog.find(filter).toArray(),
+            db()
+              .modelCatalog.find(filter)
+              .sort({ upstreamModelId: 1 })
+              .toArray(),
           );
           return yield* decodeCatalog(raws);
+        }),
+      upsertCatalog: (organizationId, providerId, entries) =>
+        Effect.gen(function* () {
+          if (entries.length === 0) return;
+          const now = clock.now();
+          const org = toObjectId(organizationId);
+          const pid = toObjectId(providerId);
+          const ops = entries.map((m) => {
+            const setFields: Record<string, unknown> = {
+              displayName: m.displayName,
+              reasoning: m.reasoning ?? false,
+              toolCall: m.toolCall ?? false,
+              attachment: m.attachment ?? false,
+              limits: m.limits,
+              modalities: m.modalities,
+              raw: m.raw ?? {},
+              discoveredAt: now,
+              updatedAt: now,
+            };
+            if (m.structuredOutput !== undefined) {
+              setFields.structuredOutput = m.structuredOutput;
+            }
+            if (m.temperature !== undefined) {
+              setFields.temperature = m.temperature;
+            }
+            if (m.status !== undefined) setFields.status = m.status;
+            if (m.cost !== undefined) setFields.cost = m.cost;
+            return {
+              updateOne: {
+                filter: {
+                  organizationId: org,
+                  providerId: pid,
+                  upstreamModelId: m.upstreamModelId,
+                },
+                update: {
+                  $set: setFields,
+                  $setOnInsert: { createdAt: now },
+                },
+                upsert: true,
+              },
+            };
+          });
+          yield* tryMongo(() => db().modelCatalog.bulkWrite(ops));
         }),
     };
   }),
@@ -1246,6 +1304,9 @@ export const ProviderRepositoryLive = Layer.effect(
             providerOrg: record.providerOrg,
             headers: { ...record.headers },
             active: record.active,
+            ...(record.httpTimeoutMs !== undefined
+              ? { httpTimeoutMs: record.httpTimeoutMs }
+              : { httpTimeoutMs: null }),
             metadata: { ...record.metadata },
             createdAt: now,
             updatedAt: now,

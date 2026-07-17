@@ -25,7 +25,7 @@ test("limitDimension + limitScope enums", () => {
   expect(limitScope.safeParse("customer").success).toBe(true);
   expect(limitScope.safeParse("plan").success).toBe(true);
   expect(limitScope.safeParse("model").success).toBe(true);
-  expect(limitScope.safeParse("endpoint").success).toBe(true);
+  expect(limitScope.safeParse("endpoint").success).toBe(false);
   expect(limitScope.safeParse("org").success).toBe(false);
 });
 

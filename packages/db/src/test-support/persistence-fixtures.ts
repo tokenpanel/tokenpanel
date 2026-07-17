@@ -168,6 +168,7 @@ export function providerFixture(over: Partial<ProviderDoc> = {}): ProviderDoc {
     baseUrl: "https://api.openai.com/v1",
     providerOrg: null,
     headers: {},
+    httpTimeoutMs: null,
     metadata: {},
     active: true,
     createdAt: d(),

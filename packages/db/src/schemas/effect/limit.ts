@@ -30,7 +30,6 @@ export const LimitScope = Schema.Literal(
   "customer",
   "plan",
   "model",
-  "endpoint",
 );
 export type LimitScope = Schema.Schema.Type<typeof LimitScope>;
 

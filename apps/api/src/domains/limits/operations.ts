@@ -12,19 +12,25 @@ import {
   checkLimits,
   getEffectiveRules,
   recordUsage,
+  releaseLimits,
+  reserveLimits,
   resolveScopeTarget,
   ruleIncrement,
+  settleLimits,
   windowSecondsToHuman,
+  type LimitReservation,
   type RecordUsageParams,
   type ViolatedLimit,
 } from "../../lib/rate-limits.ts";
 import type { PlansRepo } from "../../infrastructure/mongo/repositories/plans.ts";
 import type { UsageRepo } from "../../infrastructure/mongo/repositories/usage.ts";
+import type { MongoDb } from "../../runtime/services/mongo-db.ts";
 
 export {
   windowSecondsToHuman,
   ruleIncrement,
   resolveScopeTarget,
+  type LimitReservation,
   type ViolatedLimit,
 };
 
@@ -60,8 +66,8 @@ export const evaluateRateLimits = (params: {
   readonly rules: readonly RateLimitRule[];
   readonly estimatedTokens?: number | undefined;
   readonly estimatedSpendMinor?: number | undefined;
+  readonly currency?: string | undefined;
   readonly modelAliasId?: string | undefined;
-  readonly scopeTarget?: string | undefined;
 }): Effect.Effect<RateLimitCheckResult, SystemError, Clock | UsageRepo> =>
   Effect.gen(function* () {
     const clock = yield* Clock;
@@ -70,8 +76,8 @@ export const evaluateRateLimits = (params: {
       rules: [...params.rules],
       estimatedTokens: params.estimatedTokens,
       estimatedSpendMinor: params.estimatedSpendMinor,
+      currency: params.currency,
       modelAliasId: params.modelAliasId,
-      scopeTarget: params.scopeTarget,
       nowMs: clock.nowMs(),
     }).pipe(Effect.mapError(mapIoError("Rate-limit check failed")));
     if (result.ok) return { ok: true as const };
@@ -85,8 +91,8 @@ export const enforceRateLimits = (params: {
   readonly customerId: ObjectId;
   readonly estimatedTokens?: number | undefined;
   readonly estimatedSpendMinor?: number | undefined;
+  readonly currency?: string | undefined;
   readonly modelAliasId?: string | undefined;
-  readonly scopeTarget?: string | undefined;
 }): Effect.Effect<
   { readonly ok: true; readonly rules: readonly RateLimitRule[] },
   LimitsError,
@@ -100,8 +106,8 @@ export const enforceRateLimits = (params: {
       rules,
       estimatedTokens: params.estimatedTokens,
       estimatedSpendMinor: params.estimatedSpendMinor,
+      currency: params.currency,
       modelAliasId: params.modelAliasId,
-      scopeTarget: params.scopeTarget,
     });
     if (!result.ok) {
       const v = result.violated[0];
@@ -142,7 +148,7 @@ export function computeRetryAfterSeconds(params: {
   );
 }
 
-/** Record usage counters (post-settle). */
+/** Record usage counters (post-settle, no prior reservation). */
 export const recordRateLimitUsage = (
   params: Omit<RecordUsageParams, "db">,
 ): Effect.Effect<void, SystemError, UsageRepo> =>
@@ -154,3 +160,63 @@ export const recordRateLimitUsage = (
     occurredAt: params.occurredAt,
     ...(params.session !== undefined ? { session: params.session } : {}),
   }).pipe(Effect.mapError(mapIoError("Rate-limit counter write failed")));
+
+/**
+ * Atomic admission reserve for rolling limits.
+ * Prefer this over evaluateRateLimits for request admission.
+ */
+export const reserveRateLimits = (params: {
+  readonly organizationId: ObjectId;
+  readonly customerId: ObjectId;
+  readonly rules: readonly RateLimitRule[];
+  readonly estimatedTokens?: number | undefined;
+  readonly estimatedSpendMinor?: number | undefined;
+  readonly currency?: string | undefined;
+  readonly modelAliasId?: string | undefined;
+  readonly dryRun?: boolean | undefined;
+}): Effect.Effect<
+  | { readonly ok: true; readonly reservation: LimitReservation }
+  | { readonly ok: false; readonly violated: readonly ViolatedLimit[] },
+  SystemError,
+  Clock | UsageRepo | MongoDb
+> =>
+  Effect.gen(function* () {
+    const clock = yield* Clock;
+    return yield* reserveLimits({
+      organizationId: params.organizationId,
+      customerId: params.customerId,
+      rules: params.rules,
+      estimatedTokens: params.estimatedTokens,
+      estimatedSpendMinor: params.estimatedSpendMinor,
+      currency: params.currency,
+      modelAliasId: params.modelAliasId,
+      nowMs: clock.nowMs(),
+      dryRun: params.dryRun,
+    }).pipe(Effect.mapError(mapIoError("Rate-limit reservation failed")));
+  });
+
+/** Best-effort release of a limit reservation. */
+export const releaseRateLimitReservation = (
+  reservation: LimitReservation | null | undefined,
+): Effect.Effect<void, never, UsageRepo> =>
+  releaseLimits(reservation).pipe(Effect.catchAll(() => Effect.void));
+
+/** Adjust counters after success: actual − reserved (or full record if no hold). */
+export const settleRateLimitUsage = (params: {
+  readonly reservation?: LimitReservation | null | undefined;
+  readonly organizationId: ObjectId;
+  readonly customerId: ObjectId;
+  readonly rules: readonly RateLimitRule[];
+  readonly usage: RecordUsageParams["usage"];
+  readonly occurredAt?: Date | undefined;
+  readonly session?: RecordUsageParams["session"];
+}): Effect.Effect<void, SystemError, UsageRepo> =>
+  settleLimits({
+    reservation: params.reservation,
+    organizationId: params.organizationId,
+    customerId: params.customerId,
+    rules: params.rules,
+    usage: params.usage,
+    occurredAt: params.occurredAt,
+    ...(params.session !== undefined ? { session: params.session } : {}),
+  }).pipe(Effect.mapError(mapIoError("Rate-limit settle failed")));

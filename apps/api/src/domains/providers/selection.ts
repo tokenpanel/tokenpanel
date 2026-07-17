@@ -414,6 +414,8 @@ async function prepareAttemptAsPromise(params: {
       e instanceof Error ? e.message : String(e),
     );
   }
+  // Pass per-provider timeout when set (including 0 = disable). When omitted,
+  // liveLoadProviderDeps injects the process global PROVIDER_HTTP_TIMEOUT_MS.
   const ctx = params.deps.buildAdapterContext({
     baseUrl: provider.baseUrl,
     apiKey,
@@ -425,6 +427,9 @@ async function prepareAttemptAsPromise(params: {
       : {}),
     ...(params.request.signal !== undefined
       ? { signal: params.request.signal }
+      : {}),
+    ...(provider.httpTimeoutMs !== undefined && provider.httpTimeoutMs !== null
+      ? { timeoutMs: provider.httpTimeoutMs }
       : {}),
   });
   return {

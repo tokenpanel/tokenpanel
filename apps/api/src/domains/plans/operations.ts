@@ -11,9 +11,14 @@ import type {
   BudgetDoc,
 } from "@tokenpanel/db";
 import {
+  findDuplicateRateLimitStream,
+  duplicateRateLimitStreamMessage,
+} from "@tokenpanel/contracts";
+import {
   ConflictError,
   InvalidStateError,
   NotFoundError,
+  ValidationError,
 } from "../../errors/families.ts";
 import type { HexId, RepoError } from "../ports/common.ts";
 import { PlanRepository } from "../ports/plan-repository.ts";
@@ -26,7 +31,26 @@ export type PlanDomainError =
   | ConflictError
   | InvalidStateError
   | NotFoundError
+  | ValidationError
   | RepoError;
+
+/** Fail when two active rules would share the same rolling counter stream. */
+function rejectDuplicateStreams(
+  rules: readonly RateLimitRule[],
+): Effect.Effect<void, ValidationError> {
+  const dup = findDuplicateRateLimitStream(rules);
+  if (!dup) return Effect.void;
+  return Effect.fail(
+    new ValidationError({
+      code: "validation_error",
+      message: duplicateRateLimitStreamMessage(dup),
+      mode: "default_400",
+      details: {
+        rateLimits: [duplicateRateLimitStreamMessage(dup)],
+      },
+    }),
+  );
+}
 
 /** Generate a short stable rule id (12 hex chars). */
 export function genRuleIdFromToken(hex: string): string {
@@ -79,6 +103,20 @@ export const getPlan = (input: {
     return doc;
   });
 
+/** Assign id + defaults so stored rules always match RateLimitRule. */
+function ruleFromInput(r: RateLimitRuleInput, id: string): RateLimitRule {
+  return {
+    id,
+    windowSeconds: r.windowSeconds,
+    dimension: r.dimension,
+    capValue: r.capValue,
+    scope: r.scope ?? "customer",
+    scopeTarget: r.scopeTarget ?? null,
+    currency: r.currency ?? null,
+    active: r.active ?? true,
+  };
+}
+
 export const createPlan = (input: {
   readonly organizationId: HexId;
   readonly name: string;
@@ -99,27 +137,13 @@ export const createPlan = (input: {
   Effect.gen(function* () {
     const plans = yield* PlanRepository;
     const crypto = yield* Crypto;
-    const rateLimits = normalizeRules(input.rateLimits ?? [], () =>
-      // sync-ish: Effect.gen can't call sync crypto without yield — pre-map below
-      "",
-    );
-    // Re-normalize with real ids
     const withIds: RateLimitRule[] = [];
     for (const r of input.rateLimits ?? []) {
       const id =
         r.id ?? genRuleIdFromToken(yield* crypto.randomToken(6));
-      withIds.push({
-        id,
-        windowSeconds: r.windowSeconds,
-        dimension: r.dimension,
-        capValue: r.capValue,
-        scope: r.scope ?? "customer",
-        scopeTarget: r.scopeTarget ?? null,
-        currency: r.currency ?? null,
-        active: r.active ?? true,
-      });
+      withIds.push(ruleFromInput(r, id));
     }
-    void rateLimits;
+    yield* rejectDuplicateStreams(withIds);
     return yield* plans.insertPlan({
       organizationId: input.organizationId,
       name: input.name,
@@ -164,25 +188,31 @@ export const updatePlan = (input: {
         }),
       );
     }
-    const $set: Record<string, unknown> = { ...input.patch };
-    if (input.rateLimits !== undefined) {
+
+    // Peel rateLimits out of the raw patch so we never persist optional-id inputs.
+    const { rateLimits: patchRules, ...restPatch } = input.patch;
+    const $set: Record<string, unknown> = { ...restPatch };
+    const rawRules = input.rateLimits ?? patchRules;
+    if (rawRules !== undefined) {
+      if (!Array.isArray(rawRules)) {
+        return yield* Effect.fail(
+          new InvalidStateError({
+            code: "invalid_state",
+            message: "rateLimits must be an array",
+            resource: "plan",
+          }),
+        );
+      }
       const withIds: RateLimitRule[] = [];
-      for (const r of input.rateLimits) {
+      for (const r of rawRules as RateLimitRuleInput[]) {
         const id =
           r.id ?? genRuleIdFromToken(yield* crypto.randomToken(6));
-        withIds.push({
-          id,
-          windowSeconds: r.windowSeconds,
-          dimension: r.dimension,
-          capValue: r.capValue,
-          scope: r.scope ?? "customer",
-          scopeTarget: r.scopeTarget ?? null,
-          currency: r.currency ?? null,
-          active: r.active ?? true,
-        });
+        withIds.push(ruleFromInput(r, id));
       }
+      yield* rejectDuplicateStreams(withIds);
       $set.rateLimits = withIds;
     }
+
     const updated = yield* plans.updatePlan(
       input.organizationId,
       input.planId,

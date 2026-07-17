@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import { ApiError, deleteJson, getJson, patchJson, postJson } from "../api/client.ts";
+import { hasPermission, useAuth } from "../auth/AuthContext.tsx";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -31,7 +32,18 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Loader2, Plug, RefreshCw, Plus, Pencil, Search, Trash2, ChevronDown, ChevronUp } from "lucide-react";
+import {
+  Loader2,
+  Plug,
+  RefreshCw,
+  Plus,
+  Pencil,
+  Search,
+  Trash2,
+  ChevronDown,
+  ChevronUp,
+  ShieldCheck,
+} from "lucide-react";
 import { PageHeader } from "@/components/PageHeader";
 import { EmptyState } from "@/components/EmptyState";
 import { FadeIn } from "@/components/anim";
@@ -48,6 +60,11 @@ interface Provider {
    * (`Record<headerName, true>`). Values are write-only.
    */
   headers: Record<string, true>;
+  /**
+   * Optional HTTP timeout override (ms). null/absent → process global
+   * PROVIDER_HTTP_TIMEOUT_MS. 0 → no app-level timeout for this provider.
+   */
+  httpTimeoutMs?: number | null;
   active: boolean;
   metadata: Record<string, unknown>;
   hasApiKey: boolean;
@@ -101,6 +118,8 @@ interface FormState {
   baseUrl: string;
   providerOrg: string;
   headers: string;
+  /** Empty = inherit global; "0" = disable; positive decimal ms string. */
+  httpTimeoutMs: string;
 }
 
 const EMPTY_FORM: FormState = {
@@ -110,6 +129,7 @@ const EMPTY_FORM: FormState = {
   baseUrl: "",
   providerOrg: "",
   headers: "",
+  httpTimeoutMs: "",
 };
 
 export function isUrl(value: string): boolean {
@@ -136,7 +156,37 @@ export function fromProvider(p: Provider): FormState {
     baseUrl: p.baseUrl,
     providerOrg: p.providerOrg ?? "",
     headers: "",
+    httpTimeoutMs:
+      p.httpTimeoutMs !== undefined && p.httpTimeoutMs !== null
+        ? String(p.httpTimeoutMs)
+        : "",
   };
+}
+
+/**
+ * Parse optional HTTP timeout field.
+ * empty → inherit (undefined on create, null on edit clear)
+ * "0" / positive int ≤ 3600000 → number
+ */
+export function parseHttpTimeoutMsInput(
+  raw: string,
+): { ok: true; value: number | undefined } | { ok: false; error: string } {
+  const trimmed = raw.trim();
+  if (trimmed === "") return { ok: true, value: undefined };
+  if (!/^\d+$/.test(trimmed)) {
+    return {
+      ok: false,
+      error: "HTTP timeout must be a non-negative integer (milliseconds).",
+    };
+  }
+  const n = Number(trimmed);
+  if (!Number.isSafeInteger(n) || n < 0 || n > 3_600_000) {
+    return {
+      ok: false,
+      error: "HTTP timeout must be between 0 and 3600000 ms (1 hour).",
+    };
+  }
+  return { ok: true, value: n };
 }
 
 function Field({
@@ -160,6 +210,11 @@ function Field({
 }
 
 export default function ProvidersPage(): React.ReactElement {
+  const { user } = useAuth();
+  // Mutations (create/edit/toggle/discover/delete) require providers:write.
+  // providers:read can list + view cached models only.
+  const canWrite = hasPermission(user, "providers:write");
+
   const [providers, setProviders] = useState<Provider[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -211,6 +266,7 @@ export default function ProvidersPage(): React.ReactElement {
   }
 
   function openCreate() {
+    if (!canWrite) return;
     setEditing(null);
     setForm({ ...EMPTY_FORM, sdkType: adapters[0] ?? "" });
     setFormError(null);
@@ -218,6 +274,7 @@ export default function ProvidersPage(): React.ReactElement {
   }
 
   function openEdit(p: Provider) {
+    if (!canWrite) return;
     setEditing(p);
     setForm(fromProvider(p));
     setFormError(null);
@@ -233,6 +290,7 @@ export default function ProvidersPage(): React.ReactElement {
   }
 
   async function onToggleActive(p: Provider) {
+    if (!canWrite) return;
     const next = !p.active;
     try {
       const updated = await patchJson<Provider>(`/admin/providers/${p._id}`, { active: next });
@@ -255,6 +313,7 @@ export default function ProvidersPage(): React.ReactElement {
   }
 
   async function onDiscover(p: Provider) {
+    if (!canWrite) return;
     setDiscoverFor(p);
     setDiscovering(true);
     try {
@@ -269,6 +328,7 @@ export default function ProvidersPage(): React.ReactElement {
   }
 
   async function onDelete(p: Provider) {
+    if (!canWrite) return;
     setDeleteError(null);
     try {
       await deleteJson<{ ok: boolean }>(`/admin/providers/${p._id}`);
@@ -291,6 +351,7 @@ export default function ProvidersPage(): React.ReactElement {
 
   async function onSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
+    if (!canWrite) return;
     setFormError(null);
 
     const name = form.name.trim();
@@ -311,6 +372,12 @@ export default function ProvidersPage(): React.ReactElement {
     }
     if (!editing && !form.apiKey) {
       setFormError("API key is required when creating a provider.");
+      return;
+    }
+
+    const timeoutParsed = parseHttpTimeoutMsInput(form.httpTimeoutMs);
+    if (!timeoutParsed.ok) {
+      setFormError(timeoutParsed.error);
       return;
     }
 
@@ -352,6 +419,13 @@ export default function ProvidersPage(): React.ReactElement {
       };
       if (parsedHeaders !== undefined) body.headers = parsedHeaders;
       if (form.apiKey) body.apiKey = form.apiKey;
+      // Create: omit when empty (inherit). Edit: null clears override to inherit.
+      if (editing) {
+        body.httpTimeoutMs =
+          timeoutParsed.value !== undefined ? timeoutParsed.value : null;
+      } else if (timeoutParsed.value !== undefined) {
+        body.httpTimeoutMs = timeoutParsed.value;
+      }
 
       if (editing) {
         const updated = await patchJson<Provider>(`/admin/providers/${editing._id}`, body);
@@ -381,10 +455,12 @@ export default function ProvidersPage(): React.ReactElement {
           <RefreshCw className={loading ? "size-4 animate-spin" : "size-4"} />
           Refresh
         </Button>
-        <Button size="sm" onClick={openCreate}>
-          <Plus className="size-4" />
-          Add Provider
-        </Button>
+        {canWrite ? (
+          <Button size="sm" onClick={openCreate}>
+            <Plus className="size-4" />
+            Add Provider
+          </Button>
+        ) : null}
       </PageHeader>
 
       {loadError ? (
@@ -393,13 +469,35 @@ export default function ProvidersPage(): React.ReactElement {
         </Alert>
       ) : null}
 
+      {!canWrite ? (
+        <Alert>
+          <ShieldCheck className="size-4" />
+          <AlertDescription>
+            You can view providers but need{" "}
+            <code className="font-mono text-xs">providers:write</code> to create, edit, toggle,
+            discover, or delete them.
+          </AlertDescription>
+        </Alert>
+      ) : null}
+
       <Card className="overflow-hidden p-0">
         {loading && providers.length === 0 ? null : providers.length === 0 ? (
           <EmptyState
             icon={<Plug className="size-5" />}
             title="No providers yet"
-            description="Add your first AI service provider to start discovering and configuring models."
-            action={<Button size="sm" onClick={openCreate}><Plus className="size-4" />Add Provider</Button>}
+            description={
+              canWrite
+                ? "Add your first AI service provider to start discovering and configuring models."
+                : "No providers configured yet. An admin with providers:write can add them."
+            }
+            action={
+              canWrite ? (
+                <Button size="sm" onClick={openCreate}>
+                  <Plus className="size-4" />
+                  Add Provider
+                </Button>
+              ) : undefined
+            }
           />
         ) : (
           <FadeIn>
@@ -419,12 +517,14 @@ export default function ProvidersPage(): React.ReactElement {
                   <ProviderRow
                     key={p._id}
                     provider={p}
+                    canWrite={canWrite}
                     discovering={discovering && discoverFor?._id === p._id}
                     catalog={catalogByProvider[p._id]}
                     catalogLoading={catalogLoadingFor === p._id}
                     onEdit={() => openEdit(p)}
                     onDiscover={() => void onDiscover(p)}
                     onDelete={() => {
+                      if (!canWrite) return;
                       setDeleteError(null);
                       setDeleting(p);
                     }}
@@ -438,7 +538,7 @@ export default function ProvidersPage(): React.ReactElement {
         )}
       </Card>
 
-      <Dialog open={modalOpen} onOpenChange={(o) => (o ? null : closeModal())}>
+      <Dialog open={canWrite && modalOpen} onOpenChange={(o) => (o ? null : closeModal())}>
         <DialogContent className="max-w-[540px] gap-0 p-0">
           <DialogHeader className="border-b border-border p-4">
             <DialogTitle>{editing ? "Edit Provider" : "Add Provider"}</DialogTitle>
@@ -517,6 +617,21 @@ export default function ProvidersPage(): React.ReactElement {
                 />
               </Field>
               <Field
+                id="prov-timeout"
+                label="HTTP timeout (ms, optional)"
+                hint="Leave empty to use the process default (PROVIDER_HTTP_TIMEOUT_MS, usually 120000). 0 disables the app-level timeout for this provider. Non-streaming: full request. Streaming: time-to-first-byte only."
+              >
+                <Input
+                  id="prov-timeout"
+                  type="text"
+                  inputMode="numeric"
+                  value={form.httpTimeoutMs}
+                  disabled={saving}
+                  onChange={(e) => updateField("httpTimeoutMs", e.target.value)}
+                  placeholder="e.g. 120000 (inherit if blank)"
+                />
+              </Field>
+              <Field
                 id="prov-headers"
                 label="Custom headers (optional JSON)"
                 hint={
@@ -565,7 +680,10 @@ export default function ProvidersPage(): React.ReactElement {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={deleting !== null} onOpenChange={(o) => (o ? null : (setDeleting(null), setDeleteError(null)))}>
+      <Dialog
+        open={canWrite && deleting !== null}
+        onOpenChange={(o) => (o ? null : (setDeleting(null), setDeleteError(null)))}
+      >
         <DialogContent className="max-w-[420px] gap-0 p-0">
           <DialogHeader className="border-b border-border p-4">
             <DialogTitle>Delete provider</DialogTitle>
@@ -610,6 +728,7 @@ export default function ProvidersPage(): React.ReactElement {
 
 interface ProviderRowProps {
   provider: Provider;
+  canWrite: boolean;
   discovering: boolean;
   catalog: ModelCatalog[] | undefined;
   catalogLoading: boolean;
@@ -622,6 +741,7 @@ interface ProviderRowProps {
 
 function ProviderRow({
   provider,
+  canWrite,
   discovering,
   catalog,
   catalogLoading,
@@ -662,31 +782,62 @@ function ProviderRow({
           </span>
         </TableCell>
         <TableCell>
-          <Switch checked={provider.active} onCheckedChange={onToggle} aria-label="Toggle provider active" />
+          {canWrite ? (
+            <Switch
+              checked={provider.active}
+              onCheckedChange={onToggle}
+              aria-label="Toggle provider active"
+            />
+          ) : (
+            <Badge variant={provider.active ? "success" : "secondary"}>
+              {provider.active ? "Active" : "Inactive"}
+            </Badge>
+          )}
         </TableCell>
         <TableCell className="text-right">
           <div className="inline-flex gap-1">
-            <Button variant="ghost" size="icon-sm" onClick={onEdit} aria-label="Edit">
-              <Pencil className="size-4" />
-            </Button>
-            <Button variant="ghost" size="sm" onClick={onDiscover} disabled={discovering}>
-              {discovering ? <Loader2 className="size-3.5 animate-spin" /> : <Search className="size-3.5" />}
-              {discovering ? "…" : "Discover"}
-            </Button>
+            {canWrite ? (
+              <>
+                <Button variant="ghost" size="icon-sm" onClick={onEdit} aria-label="Edit">
+                  <Pencil className="size-4" />
+                </Button>
+                <Button variant="ghost" size="sm" onClick={onDiscover} disabled={discovering}>
+                  {discovering ? (
+                    <Loader2 className="size-3.5 animate-spin" />
+                  ) : (
+                    <Search className="size-3.5" />
+                  )}
+                  {discovering ? "…" : "Discover"}
+                </Button>
+              </>
+            ) : null}
             <Button variant="ghost" size="sm" onClick={() => setExpanded((v) => !v)}>
               {expanded ? <ChevronUp className="size-3.5" /> : <ChevronDown className="size-3.5" />}
               {expanded ? "Hide" : "Models"}
             </Button>
-            <Button variant="ghost" size="icon-sm" className="text-destructive hover:text-destructive" onClick={onDelete} aria-label="Delete">
-              <Trash2 className="size-4" />
-            </Button>
+            {canWrite ? (
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                className="text-destructive hover:text-destructive"
+                onClick={onDelete}
+                aria-label="Delete"
+              >
+                <Trash2 className="size-4" />
+              </Button>
+            ) : null}
           </div>
         </TableCell>
       </TableRow>
       {expanded ? (
         <TableRow>
           <TableCell colSpan={6} className="p-0">
-            <ModelsPanel loading={catalogLoading} items={catalog} onRefresh={onDiscover} />
+            <ModelsPanel
+              loading={catalogLoading}
+              items={catalog}
+              canWrite={canWrite}
+              onRefresh={onDiscover}
+            />
           </TableCell>
         </TableRow>
       ) : null}
@@ -697,22 +848,34 @@ function ProviderRow({
 interface ModelsPanelProps {
   loading: boolean;
   items: ModelCatalog[] | undefined;
+  canWrite: boolean;
   onRefresh: () => void;
 }
 
-function ModelsPanel({ loading, items, onRefresh }: ModelsPanelProps): React.ReactElement {
+function ModelsPanel({
+  loading,
+  items,
+  canWrite,
+  onRefresh,
+}: ModelsPanelProps): React.ReactElement {
   return (
     <div className="flex flex-col border-t border-border bg-muted/20">
       <div className="flex items-center justify-between border-b border-border px-4 py-3 text-sm font-medium">
         <span>Cached Models</span>
         <span className="flex items-center gap-1.5 text-xs font-normal text-muted-foreground">
           {loading ? "Loading…" : items && items.length > 0 ? `${items.length} cached` : "None cached"}
-          <Button variant="ghost" size="sm" onClick={onRefresh}>Re-discover</Button>
+          {canWrite ? (
+            <Button variant="ghost" size="sm" onClick={onRefresh}>
+              Re-discover
+            </Button>
+          ) : null}
         </span>
       </div>
       {!loading && (!items || items.length === 0) ? (
         <div className="px-6 py-10 text-center text-sm text-muted-foreground">
-          No models cached. Click Discover to fetch from upstream.
+          {canWrite
+            ? "No models cached. Click Discover to fetch from upstream."
+            : "No models cached for this provider."}
         </div>
       ) : (
         <Table>

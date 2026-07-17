@@ -233,6 +233,16 @@ export const ProviderSdkType = Schema.String.pipe(
   ),
 );
 
+/**
+ * Per-provider HTTP timeout override (milliseconds).
+ * 0 = no app-level timeout for this provider.
+ * Max 1 hour (matches PROVIDER_HTTP_TIMEOUT_MS env cap).
+ * null / omitted on the doc = inherit process global default.
+ */
+export const ProviderHttpTimeoutMs = NonNegativeSafeInt.pipe(
+  Schema.lessThanOrEqualTo(3_600_000),
+);
+
 export const ProviderDoc = Schema.Struct({
   _id: ObjectIdFromSelf,
   organizationId: ObjectIdFromSelf,
@@ -243,6 +253,11 @@ export const ProviderDoc = Schema.Struct({
   providerOrg: exactNullish(maxString(120)),
   headers: ProviderHeadersDefaultEmpty,
   active: Schema.optionalWith(Schema.Boolean, { default: () => true }),
+  /**
+   * Optional HTTP timeout override (ms). null/absent → global
+   * PROVIDER_HTTP_TIMEOUT_MS. 0 → disable app timeout for this provider.
+   */
+  httpTimeoutMs: exactNullish(ProviderHttpTimeoutMs),
   metadata: ProviderMetadataDefaultEmpty,
   ...TimestampFields,
 });
@@ -254,6 +269,8 @@ export const ProviderCreateInput = Schema.Struct({
   baseUrl: UrlString,
   providerOrg: exactOptional(maxString(120)),
   headers: exactOptional(ProviderHeadersWrite),
+  /** Omit to inherit global default; 0 disables; positive overrides. */
+  httpTimeoutMs: exactOptional(ProviderHttpTimeoutMs),
   metadata: exactOptional(ProviderMetadataWrite),
 });
 
@@ -267,6 +284,8 @@ export const ProviderUpdateInput = Schema.Struct({
   providerOrg: exactNullish(maxString(120)),
   headers: exactOptional(ProviderHeadersWrite),
   active: exactOptional(Schema.Boolean),
+  /** null clears override (inherit global); 0 disables; positive overrides. */
+  httpTimeoutMs: exactNullish(ProviderHttpTimeoutMs),
   metadata: exactOptional(ProviderMetadataWrite),
 });
 

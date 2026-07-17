@@ -14,6 +14,8 @@ export type NewProviderRecord = {
   readonly providerOrg: string | null;
   readonly headers: Readonly<Record<string, string>>;
   readonly active: boolean;
+  /** null/omit → inherit global PROVIDER_HTTP_TIMEOUT_MS. */
+  readonly httpTimeoutMs?: number | null | undefined;
   readonly metadata: Readonly<Record<string, unknown>>;
 };
 

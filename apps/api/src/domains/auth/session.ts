@@ -37,9 +37,10 @@ export type SessionError =
 
 export type AdminSession = {
   readonly user: UserDoc;
+  /** Tenant for this session (from session row, not user.activeOrganizationId). */
   readonly orgId: UserDoc["activeOrganizationId"];
   readonly role: UserRole;
-  /** Stored membership grants for the active org (empty when admin). */
+  /** Stored membership grants for the session org (empty when admin). */
   readonly permissions: readonly string[];
   /** Allowlist session id (JWT `sid`). */
   readonly sessionId: string;
@@ -76,8 +77,9 @@ function unauthorized(
 }
 
 /**
- * Resolve admin JWT → allowlist session + active user + org membership role.
+ * Resolve admin JWT → allowlist session + user + session-scoped org membership.
  * Missing/revoked/expired session rows reject even if the JWT signature is valid.
+ * Tenant comes from the session row (per device), not user.activeOrganizationId.
  */
 export const resolveAdminSession = (
   bearerToken: string | null,
@@ -117,6 +119,12 @@ export const resolveAdminSession = (
       return yield* unauthorized("session_expired");
     }
 
+    // Session is source of truth for tenant. Reject JWT that still claims a
+    // different org (e.g. stale token after org switch on this session).
+    if (session.organizationId.toHexString() !== payload.orgId) {
+      return yield* unauthorized("session_org_mismatch");
+    }
+
     const users = yield* UserRepository;
     const user = yield* users.findById(payload.sub);
     if (!user) {
@@ -131,15 +139,16 @@ export const resolveAdminSession = (
         }),
       );
     }
+    const sessionOrgId = session.organizationId;
     const activeMembership = user.memberships.find((m) =>
-      m.organizationId.equals(user.activeOrganizationId),
+      m.organizationId.equals(sessionOrgId),
     );
     if (!activeMembership) {
-      return yield* unauthorized("no_active_org_membership");
+      return yield* unauthorized("no_session_org_membership");
     }
     return {
       user,
-      orgId: user.activeOrganizationId,
+      orgId: sessionOrgId,
       role: activeMembership.role,
       permissions: activeMembership.permissions ?? [],
       sessionId: session._id.toHexString(),

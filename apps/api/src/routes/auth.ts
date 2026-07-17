@@ -89,7 +89,12 @@ authRoutes.post("/logout", requireAuth, async (c) => {
 authRoutes.get("/me", requireAuth, async (c) => {
   const user = c.get("user");
   const role = c.get("role");
-  return c.json(toUserView(user, role));
+  const permissions = c.get("permissions");
+  const orgId = c.get("orgId");
+  // Session-scoped tenant + role/permissions from resolveAdminSession.
+  return c.json(
+    toUserView(user, role, permissions, orgId.toHexString()),
+  );
 });
 
 authRoutes.patch(
@@ -98,6 +103,7 @@ authRoutes.patch(
   sValidator("json", updateMeBody),
   async (c) => {
     const user = c.get("user");
+    const orgId = c.get("orgId");
     const body = c.req.valid("json");
     return runAdminEffect(
       c,
@@ -105,6 +111,7 @@ authRoutes.patch(
         userId: user._id.toHexString(),
         currentEmail: user.email,
         email: body.email,
+        activeOrganizationId: orgId.toHexString(),
       }),
       { operation: "updateMe" },
     );

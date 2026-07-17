@@ -6,6 +6,7 @@ import {
   panelPermissionSchema,
   effectivePanelPermissions,
   hasPanelPermission,
+  canGrantPanelAccess,
 } from "../panel-permissions.ts";
 
 test("permission definitions have no duplicates and mirror PANEL_PERMISSIONS", () => {
@@ -63,4 +64,52 @@ test("hasPanelPermission", () => {
   expect(
     hasPanelPermission("member", ["providers:read"], "providers:write"),
   ).toBe(false);
+});
+
+test("canGrantPanelAccess: admin may grant anything", () => {
+  expect(canGrantPanelAccess("admin", [], "admin", [])).toBe(true);
+  expect(
+    canGrantPanelAccess("admin", [], "member", ["providers:write"]),
+  ).toBe(true);
+  expect(canGrantPanelAccess("admin", [], "member", [])).toBe(true);
+});
+
+test("canGrantPanelAccess: member may only grant subset of own perms", () => {
+  const actor: readonly (typeof PANEL_PERMISSIONS)[number][] = [
+    "invites:write",
+    "invites:read",
+    "customers:read",
+  ];
+  expect(canGrantPanelAccess("member", actor, "member", [])).toBe(true);
+  expect(
+    canGrantPanelAccess("member", actor, "member", ["invites:write"]),
+  ).toBe(true);
+  expect(
+    canGrantPanelAccess("member", actor, "member", [
+      "invites:write",
+      "customers:read",
+    ]),
+  ).toBe(true);
+  // Escalation: permission actor does not hold.
+  expect(
+    canGrantPanelAccess("member", actor, "member", ["providers:write"]),
+  ).toBe(false);
+  expect(
+    canGrantPanelAccess("member", actor, "member", [
+      "invites:write",
+      "providers:read",
+    ]),
+  ).toBe(false);
+  // Admin role ⇒ full catalog; member cannot grant.
+  expect(canGrantPanelAccess("member", actor, "admin", [])).toBe(false);
+  expect(
+    canGrantPanelAccess("member", ["invites:write"], "admin", []),
+  ).toBe(false);
+});
+
+test("canGrantPanelAccess: member with full catalog can grant admin", () => {
+  // Edge case: effective permissions equal full catalog.
+  expect(
+    canGrantPanelAccess("member", PANEL_PERMISSIONS, "admin", []),
+  ).toBe(true);
 });

@@ -18,10 +18,11 @@ import { renderAdminError } from "../http/renderers/admin.ts";
 
 export type AuthVariables = {
   user: UserDoc;
+  /** Session-scoped tenant (from admin_sessions.organizationId). */
   orgId: ObjectId;
-  /** Role for the active org, resolved from the user's memberships. */
+  /** Role for the session org, resolved from the user's memberships. */
   role: UserRole;
-  /** Stored membership grants for the active org (empty when admin). */
+  /** Stored membership grants for the session org (empty when admin). */
   permissions: readonly PanelPermission[];
   /** Allowlist session id (JWT `sid`). */
   sessionId: string;

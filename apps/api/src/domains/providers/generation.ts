@@ -33,12 +33,15 @@ import type { TokenUsage } from "../../providers/provider-usage.ts";
 import { normalizeProcessedTotalTokens } from "../../providers/provider-usage.ts";
 import { newGatewayRequestId } from "../../services/settlement-outbox.ts";
 import type { SettlementActor } from "../settlement/settle.ts";
-import type { BalanceReservation } from "../billing/workflow.ts";
+import type {
+  BalanceReservation,
+  LimitReservation,
+} from "../billing/workflow.ts";
 import {
   computeCharges,
   cacheAccountingForProtocol,
 } from "../billing/charges.ts";
-import { releaseReservationWorkflow } from "../billing/workflow.ts";
+import { releaseAllPreflightHolds } from "../billing/workflow.ts";
 import {
   settleOrOutboxWorkflow,
   type SettlementResult,
@@ -104,6 +107,7 @@ export type StreamFinalizeInput = {
   readonly gatewayRequestId: string;
   readonly reservedMinor: number;
   readonly reservation: BalanceReservation | null;
+  readonly limitReservation?: LimitReservation | null | undefined;
   readonly rules: readonly RateLimitRule[];
   readonly startedAtMs: number;
   /** Force price (0 = free / unbilled). Omit to use computed charges. */
@@ -140,6 +144,7 @@ export type GenerationSessionParams = {
   readonly rules: readonly RateLimitRule[];
   readonly protocol: GenerationProtocol;
   readonly reservation: BalanceReservation | null;
+  readonly limitReservation?: LimitReservation | null | undefined;
   readonly reservedMinor?: number | undefined;
   readonly gatewayRequestId?: string | undefined;
   readonly startedAtMs?: number | undefined;
@@ -155,25 +160,25 @@ export type GenerationSessionParams = {
  * Unit tests should pass explicit `deps` instead.
  */
 export function liveLoadProviderDeps(): LoadProviderDeps {
-  let resolvedTimeoutMs: number | undefined;
+  let globalTimeoutMs: number | undefined;
 
-  async function providerTimeoutMs(): Promise<number> {
-    if (resolvedTimeoutMs !== undefined) return resolvedTimeoutMs;
+  async function loadGlobalTimeoutMs(): Promise<number> {
+    if (globalTimeoutMs !== undefined) return globalTimeoutMs;
     const { getAppRuntime } = await import("../../runtime/app-runtime.ts");
     const { AppConfig } = await import("../../runtime/services/app-config.ts");
-    resolvedTimeoutMs = await getAppRuntime().runPromise(
+    globalTimeoutMs = await getAppRuntime().runPromise(
       Effect.gen(function* () {
         const config = yield* AppConfig;
         return config.operational.providerHttpTimeoutMs;
       }),
     );
-    return resolvedTimeoutMs;
+    return globalTimeoutMs;
   }
 
   return defaultLoadProviderDeps({
     loadProvider: async (orgId, providerId) => {
-      // Resolve timeout on first provider load (same process lifetime).
-      await providerTimeoutMs();
+      // Warm global timeout on first provider load (same process lifetime).
+      await loadGlobalTimeoutMs();
       // Lazy import avoids circular init with runtime boot.
       const { getAppRuntime } = await import("../../runtime/app-runtime.ts");
       const provider = await getAppRuntime().runPromise(
@@ -191,13 +196,18 @@ export function liveLoadProviderDeps(): LoadProviderDeps {
       return provider;
     },
     getAdapter,
-    buildAdapterContext: (p) =>
-      buildAdapterContext({
+    buildAdapterContext: (p) => {
+      // Prefer explicit timeoutMs from prepareAttempt (per-provider override
+      // already resolved). When omitted, fall back to process global default.
+      const timeoutMs =
+        p.timeoutMs !== undefined
+          ? p.timeoutMs
+          : (globalTimeoutMs ?? 0);
+      return buildAdapterContext({
         ...p,
-        ...(resolvedTimeoutMs !== undefined && resolvedTimeoutMs > 0
-          ? { timeoutMs: resolvedTimeoutMs }
-          : {}),
-      }),
+        ...(timeoutMs > 0 ? { timeoutMs } : {}),
+      });
+    },
   });
 }
 
@@ -242,8 +252,13 @@ export const completeGeneration = (
     const signal = params.signal;
     const request = withSignal(params.request, signal);
 
+    const limitReservation = params.limitReservation ?? null;
+
     if (signal?.aborted) {
-      yield* releaseReservationWorkflow(params.reservation);
+      yield* releaseAllPreflightHolds({
+        reservation: params.reservation,
+        limitReservation,
+      });
       return yield* Effect.interrupt;
     }
 
@@ -300,6 +315,7 @@ export const completeGeneration = (
       providerRequestId: outcome.response.providerRequestId,
       gatewayRequestId,
       reservedMinor,
+      limitReservation,
       status: 200,
       durationMs,
       rules: params.rules,
@@ -318,9 +334,12 @@ export const completeGeneration = (
     };
   }).pipe(
     Effect.onExit((exit) => {
-      // Release hold only when we never reached a successful settle path.
+      // Release holds only when we never reached a successful settle path.
       if (Exit.isSuccess(exit)) return Effect.void;
-      return releaseReservationWorkflow(params.reservation);
+      return releaseAllPreflightHolds({
+        reservation: params.reservation,
+        limitReservation: params.limitReservation ?? null,
+      });
     }),
   );
 
@@ -354,6 +373,7 @@ export type StreamSession = {
       | "gatewayRequestId"
       | "reservedMinor"
       | "reservation"
+      | "limitReservation"
       | "rules"
       | "startedAtMs"
       | "priceMinorOverride"
@@ -378,6 +398,7 @@ export function openStreamGeneration(
   const gatewayRequestId = params.gatewayRequestId ?? newGatewayRequestId();
   const reservedMinor =
     params.reservedMinor ?? params.reservation?.reservedMinor ?? 0;
+  const limitReservation = params.limitReservation ?? null;
   const deps = params.deps ?? liveLoadProviderDeps();
   const request = withSignal(params.request, params.signal);
 
@@ -448,6 +469,7 @@ export function openStreamGeneration(
         gatewayRequestId,
         reservedMinor,
         reservation: params.reservation,
+        limitReservation,
         rules: params.rules,
         startedAtMs,
         priceMinorOverride: params.priceMinorOverride,
@@ -600,9 +622,12 @@ export async function finalizeStreamGeneration(
 
   // No provider attempt: pure release (pre-commit disconnect, early abort).
   if (!input.activeEntry || !input.activeProvider) {
-    const needsRelease =
+    const needsBalanceRelease =
       input.reservation != null && input.reservation.reservedMinor > 0;
-    if (needsRelease) {
+    const needsLimitRelease =
+      input.limitReservation != null &&
+      input.limitReservation.holds.length > 0;
+    if (needsBalanceRelease || needsLimitRelease) {
       if (!isAppRuntimeInstalled()) {
         throw new SystemError({
           code: "system_error",
@@ -612,7 +637,10 @@ export async function finalizeStreamGeneration(
         });
       }
       await getAppRuntime().runPromise(
-        releaseReservationWorkflow(input.reservation),
+        releaseAllPreflightHolds({
+          reservation: input.reservation,
+          limitReservation: input.limitReservation,
+        }),
       );
     }
     return {
@@ -677,6 +705,7 @@ export async function finalizeStreamGeneration(
         usageOutcome,
         gatewayRequestId: input.gatewayRequestId,
         reservedMinor: input.reservedMinor,
+        limitReservation: input.limitReservation,
         status: 200,
         durationMs,
         rules: [...input.rules],

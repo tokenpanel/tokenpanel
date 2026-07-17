@@ -1,12 +1,27 @@
 /**
  * Rate-limit / window policy (server-only).
  *
- * Policy version: 2026-07-15
+ * Policy version: 2026-07-17
  * Owner: domains/limits. Window presets are documentation + human labels;
  * stored rules use arbitrary windowSeconds within the max bound.
+ *
+ * Stream uniqueness (one rule per dimension+window+scope target+currency)
+ * lives in @tokenpanel/contracts and is enforced on plan write + at
+ * effective-rule resolution for legacy data.
  */
 
-export const LIMITS_POLICY_VERSION = "2026-07-15" as const;
+export {
+  rateLimitStreamScope,
+  rateLimitStreamKey,
+  findDuplicateRateLimitStream,
+  duplicateRateLimitStreamMessage,
+} from "@tokenpanel/contracts";
+export type {
+  RateLimitStreamFields,
+  DuplicateRateLimitStream,
+} from "@tokenpanel/contracts";
+
+export const LIMITS_POLICY_VERSION = "2026-07-17" as const;
 
 /** Max rate-limit window length accepted by schemas. Unit: seconds. */
 export const RATE_LIMIT_WINDOW_MAX_SECONDS = 31_536_000; // 365d

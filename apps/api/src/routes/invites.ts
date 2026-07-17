@@ -43,6 +43,8 @@ inviteRoutes.post(
   async (c) => {
     const user = c.get("user");
     const orgId = c.get("orgId");
+    const actorRole = c.get("role");
+    const actorPermissions = c.get("permissions");
     const body = c.req.valid("json");
     return runAdminEffect(
       c,
@@ -50,6 +52,8 @@ inviteRoutes.post(
         organizationId: orgId.toHexString(),
         invitedBy: user._id.toHexString(),
         email: body.email,
+        actorRole,
+        actorPermissions,
         ...(body.role !== undefined ? { role: body.role } : {}),
         ...(body.permissions !== undefined
           ? { permissions: body.permissions }

@@ -31,11 +31,12 @@ export type ApiOperationalConfig = Readonly<{
    */
   settlementReconcileInitialDelayMs: number;
   /**
-   * Application-level provider HTTP timeout.
-   * Env: PROVIDER_HTTP_TIMEOUT_MS. Default: 0.
+   * Application-level provider HTTP timeout (global default).
+   * Env: PROVIDER_HTTP_TIMEOUT_MS. Default: 120_000 (2 minutes).
    * 0 = no app-level timeout (only request AbortSignal / client disconnect).
    * Non-zero: enforced on listModels/chatComplete (full request) and on
    * streamChat TTFB/headers only (stream body is not timed out).
+   * Per-provider `httpTimeoutMs` overrides this when set.
    */
   providerHttpTimeoutMs: number;
   /**
@@ -61,7 +62,8 @@ export const DEFAULT_OPERATIONAL_CONFIG: ApiOperationalConfig = Object.freeze({
   settlementReconcileIntervalMs: 15_000,
   settlementReconcileBatchSizeCount: 20,
   settlementReconcileInitialDelayMs: 3_000,
-  providerHttpTimeoutMs: 0,
+  /** 2 min — protects hung upstreams; set 0 to disable; per-provider override available. */
+  providerHttpTimeoutMs: 120_000,
   catalogCacheTtlMs: 10 * 60 * 1000,
   workerConcurrencyCount: 1,
   shutdownTimeoutMs: 10_000,

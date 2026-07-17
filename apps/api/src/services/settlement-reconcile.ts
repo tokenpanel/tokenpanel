@@ -38,7 +38,10 @@ import {
   type ChargeSchedule,
   type SettlementActor,
 } from "../domains/settlement/settle.ts";
-import { getEffectiveRules } from "../lib/rate-limits.ts";
+import {
+  getEffectiveRules,
+  parseLimitReservation,
+} from "../lib/rate-limits.ts";
 import { syncLog } from "../infrastructure/telemetry/sync-log.ts";
 import type {
   CacheAccountingMode,
@@ -428,6 +431,15 @@ export const reconcileOutboxRow = (
         ? ctx.reservedMinor
         : 0;
 
+    const limitReservation =
+      actor.customerId !== null
+        ? parseLimitReservation({
+            organizationId: row.organizationId,
+            customerId: actor.customerId,
+            wire: ctx.limitHolds,
+          })
+        : null;
+
     const settleOutcome = yield* settleUsage({
       orgId: row.organizationId,
       actor,
@@ -447,6 +459,7 @@ export const reconcileOutboxRow = (
       rules,
       occurredAt,
       reservedMinor,
+      limitReservation,
       rethrowGuardFailure: true,
       skipGuardAudit: true,
     }).pipe(Effect.either);

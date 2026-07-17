@@ -31,6 +31,22 @@ export type NewModelRecord = {
   readonly metadata: Readonly<Record<string, string>>;
 };
 
+/** Fields written on provider model discovery upsert. */
+export type CatalogUpsertEntry = {
+  readonly upstreamModelId: string;
+  readonly displayName: string;
+  readonly reasoning?: boolean | undefined;
+  readonly toolCall?: boolean | undefined;
+  readonly structuredOutput?: boolean | undefined;
+  readonly temperature?: boolean | undefined;
+  readonly attachment?: boolean | undefined;
+  readonly limits: ModelCatalogDoc["limits"];
+  readonly modalities: ModelCatalogDoc["modalities"];
+  readonly status?: ModelCatalogDoc["status"] | undefined;
+  readonly cost?: ModelCatalogDoc["cost"] | undefined;
+  readonly raw?: Readonly<Record<string, unknown>> | undefined;
+};
+
 export type ModelRepositoryService = {
   readonly list: (
     organizationId: HexId,
@@ -67,6 +83,12 @@ export type ModelRepositoryService = {
     organizationId: HexId,
     providerId?: HexId,
   ) => Effect.Effect<readonly ModelCatalogDoc[], RepoError>;
+  /** Upsert discovered upstream models for a provider (org-scoped). */
+  readonly upsertCatalog: (
+    organizationId: HexId,
+    providerId: HexId,
+    entries: readonly CatalogUpsertEntry[],
+  ) => Effect.Effect<void, RepoError>;
 };
 
 export class ModelRepository extends Context.Tag("tokenpanel/ModelRepository")<

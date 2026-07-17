@@ -64,6 +64,7 @@ export {
   panelPermissionSchema,
   effectivePanelPermissions,
   hasPanelPermission,
+  canGrantPanelAccess,
 } from "./panel-permissions.ts";
 export type {
   PanelPermission,
@@ -98,3 +99,14 @@ export {
   subscriptionStatusSchema,
 } from "./plan.ts";
 export type { PlanInterval, SubscriptionStatus } from "./plan.ts";
+
+export {
+  rateLimitStreamScope,
+  rateLimitStreamKey,
+  findDuplicateRateLimitStream,
+  duplicateRateLimitStreamMessage,
+} from "./rate-limits.ts";
+export type {
+  RateLimitStreamFields,
+  DuplicateRateLimitStream,
+} from "./rate-limits.ts";

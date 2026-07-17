@@ -230,4 +230,19 @@ describe("parseApiRuntimeConfig", () => {
       parseApiRuntimeConfig(base({ TRUST_PROXY: "maybe" })),
     ).toThrow(ConfigValidationError);
   });
+
+  test("PROVIDER_HTTP_TIMEOUT_MS defaults to 120000; accepts 0 and custom", () => {
+    const def = parseApiRuntimeConfig(base());
+    expect(def.operational.providerHttpTimeoutMs).toBe(120_000);
+
+    const off = parseApiRuntimeConfig(
+      base({ PROVIDER_HTTP_TIMEOUT_MS: "0" }),
+    );
+    expect(off.operational.providerHttpTimeoutMs).toBe(0);
+
+    const custom = parseApiRuntimeConfig(
+      base({ PROVIDER_HTTP_TIMEOUT_MS: "300000" }),
+    );
+    expect(custom.operational.providerHttpTimeoutMs).toBe(300_000);
+  });
 });

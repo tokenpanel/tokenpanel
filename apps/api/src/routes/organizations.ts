@@ -36,9 +36,14 @@ export { deriveSlug };
 // List orgs the authenticated user belongs to, with their per-org role.
 organizationRoutes.get("/", async (c) => {
   const user = c.get("user");
-  return runAdminEffect(c, listOrganizationsForUser(user), {
-    operation: "listOrganizations",
-  });
+  const orgId = c.get("orgId");
+  return runAdminEffect(
+    c,
+    listOrganizationsForUser(user, orgId.toHexString()),
+    {
+      operation: "listOrganizations",
+    },
+  );
 });
 
 organizationRoutes.post(

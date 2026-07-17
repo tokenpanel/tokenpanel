@@ -8,6 +8,7 @@ import type { PanelPermission } from "@tokenpanel/contracts";
 import {
   hasPanelPermission,
   effectivePanelPermissions,
+  canGrantPanelAccess,
 } from "@tokenpanel/contracts";
 import {
   AuthenticationError,
@@ -122,7 +123,11 @@ export function principalHasPermission(
   );
 }
 
-export { effectivePanelPermissions, hasPanelPermission };
+export {
+  effectivePanelPermissions,
+  hasPanelPermission,
+  canGrantPanelAccess,
+};
 
 export type RequireScopeInput = {
   readonly principal: AuthzPrincipal;

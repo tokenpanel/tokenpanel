@@ -6,7 +6,10 @@
 import { Effect } from "effect";
 import type { UserRole } from "@tokenpanel/db";
 import type { PanelPermission } from "@tokenpanel/contracts";
-import { effectivePanelPermissions } from "@tokenpanel/contracts";
+import {
+  canGrantPanelAccess,
+  effectivePanelPermissions,
+} from "@tokenpanel/contracts";
 import {
   AuthenticationError,
   AuthorizationError,
@@ -69,8 +72,9 @@ function jwtSecret(
 
 /**
  * Mint or refresh an admin JWT backed by an allowlist session row.
- * - No `sessionId`: insert new session.
- * - With `sessionId`: refresh expiry if row exists for user; else insert new.
+ * Session row owns tenant context (`organizationId`); JWT mirrors it.
+ * - No `sessionId`: insert new session bound to `orgId`.
+ * - With `sessionId`: refresh expiry + rebind org if row exists; else insert.
  */
 export const issueAdminToken = (input: {
   readonly userId: string;
@@ -97,12 +101,14 @@ export const issueAdminToken = (input: {
         input.sessionId,
         input.userId,
         expiresAt,
+        input.orgId,
       );
       if (refreshed) {
         sessionId = refreshed._id.toHexString();
       } else {
         const created = yield* sessions.insert({
           userId: input.userId,
+          organizationId: input.orgId,
           expiresAt,
         });
         sessionId = created._id.toHexString();
@@ -110,6 +116,7 @@ export const issueAdminToken = (input: {
     } else {
       const created = yield* sessions.insert({
         userId: input.userId,
+        organizationId: input.orgId,
         expiresAt,
       });
       sessionId = created._id.toHexString();
@@ -370,6 +377,7 @@ export const updateMe = (
 ): Effect.Effect<UserView, AuthDomainError, UserRepository> =>
   Effect.gen(function* () {
     const users = yield* UserRepository;
+    const sessionOrg = input.activeOrganizationId;
     if (input.email !== input.currentEmail) {
       const taken = yield* users.emailTaken(input.email, input.userId);
       if (taken) {
@@ -392,7 +400,7 @@ export const updateMe = (
           }),
         );
       }
-      return toUserView(updated);
+      return toUserView(updated, undefined, undefined, sessionOrg);
     }
     const user = yield* users.findById(input.userId);
     if (!user) {
@@ -405,7 +413,7 @@ export const updateMe = (
         }),
       );
     }
-    return toUserView(user);
+    return toUserView(user, undefined, undefined, sessionOrg);
   });
 
 /** POST /password — verify current, set new hash, revoke all sessions. */
@@ -453,11 +461,30 @@ export const createInvite = (
     const clock = yield* Clock;
     const ttlHours = input.ttlHours ?? INVITE_DEFAULT_TTL_HOURS;
     const expiresAt = new Date(clock.nowMs() + ttlHours * 3600 * 1000);
-    const token = yield* crypto.randomToken(INVITE_TOKEN_BYTES);
-    const tokenHash = yield* crypto.hashToken(token);
     const role: UserRole = input.role ?? "member";
     const permissions =
       role === "admin" ? [] : [...(input.permissions ?? [])];
+
+    // Least privilege: inviter may only grant role/permissions they hold.
+    if (
+      !canGrantPanelAccess(
+        input.actorRole,
+        input.actorPermissions,
+        role,
+        permissions,
+      )
+    ) {
+      return yield* Effect.fail(
+        new AuthorizationError({
+          code: "forbidden",
+          message: "Cannot grant permissions you do not hold",
+          reason: "privilege_escalation",
+        }),
+      );
+    }
+
+    const token = yield* crypto.randomToken(INVITE_TOKEN_BYTES);
+    const tokenHash = yield* crypto.hashToken(token);
     const invite = yield* invites.insert({
       organizationId: input.organizationId,
       invitedBy: input.invitedBy,
@@ -705,13 +732,16 @@ export const acceptInvite = (
   });
 
 /**
- * Switch active organization membership for a user and issue a new JWT.
- * Reuses the current allowlist session when `sessionId` is provided.
+ * Switch organization for the current admin session only and re-issue JWT.
+ *
+ * - Session row `organizationId` is the request tenant (other devices unchanged).
+ * - `user.activeOrganizationId` is updated as last-used preference for new logins.
+ * - Requires `sessionId` so we never accidentally mint a second session on switch.
  */
 export const switchActiveOrganization = (input: {
   readonly userId: string;
   readonly targetOrganizationId: string;
-  readonly sessionId?: string | undefined;
+  readonly sessionId: string;
   readonly memberships: readonly {
     readonly organizationId: { toHexString: () => string };
     readonly role: UserRole;
@@ -751,6 +781,7 @@ export const switchActiveOrganization = (input: {
         }),
       );
     }
+    // Last-used preference for future logins only — not request tenant context.
     const users = yield* UserRepository;
     yield* users.setActiveOrganization(
       input.userId,

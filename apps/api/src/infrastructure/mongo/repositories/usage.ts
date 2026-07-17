@@ -106,7 +106,9 @@ export type UsageRepoService = {
   /**
    * Atomic upsert of one bucket per (dimension, window, scopeTarget).
    * Schema-decoded ownership of the rate-limit counter bulk write used by
-   * settlement (recordUsage). No raw collection access leaks to callers.
+   * settlement (recordUsage) and limit reservations. Positive increments
+   * upsert; negative increments floor at 0 (never invent negative usage).
+   * No raw collection access leaks to callers.
    */
   readonly bulkUpsertCounters: (params: {
     readonly organizationId: ObjectId;
@@ -289,30 +291,65 @@ export const UsageRepoLive: Layer.Layer<UsageRepo, never, MongoDb> =
         bulkUpsertCounters: (params) =>
           Effect.gen(function* () {
             if (params.entries.length === 0) return;
-            const ops = params.entries.map((e) => ({
-              updateOne: {
-                filter: {
-                  organizationId: params.organizationId,
-                  customerId: params.customerId,
-                  dimension: e.dimension,
-                  windowSeconds: e.windowSeconds,
-                  bucketStart: e.bucketStart,
-                  scopeTarget: e.scopeTarget,
-                },
-                update: {
-                  $setOnInsert: {
-                    organizationId: params.organizationId,
-                    customerId: params.customerId,
-                    dimension: e.dimension,
-                    windowSeconds: e.windowSeconds,
-                    bucketStart: e.bucketStart,
-                    scopeTarget: e.scopeTarget,
+            const now = new Date();
+            const ops = params.entries.map((e) => {
+              const filter = {
+                organizationId: params.organizationId,
+                customerId: params.customerId,
+                dimension: e.dimension,
+                windowSeconds: e.windowSeconds,
+                bucketStart: e.bucketStart,
+                scopeTarget: e.scopeTarget,
+              };
+              // Positive: upsert + $inc (reserve / record).
+              // Negative: pipeline floor at 0 (release surplus / cancel).
+              // Zero: no-op entry should be filtered by callers; treat as touch.
+              if (e.increment >= 0) {
+                return {
+                  updateOne: {
+                    filter,
+                    update: {
+                      $setOnInsert: {
+                        organizationId: params.organizationId,
+                        customerId: params.customerId,
+                        dimension: e.dimension,
+                        windowSeconds: e.windowSeconds,
+                        bucketStart: e.bucketStart,
+                        scopeTarget: e.scopeTarget,
+                        createdAt: now,
+                      },
+                      $inc: { count: e.increment },
+                      $set: { updatedAt: now },
+                    },
+                    upsert: true,
                   },
-                  $inc: { count: e.increment },
+                };
+              }
+              return {
+                updateOne: {
+                  filter,
+                  update: [
+                    {
+                      $set: {
+                        count: {
+                          $max: [
+                            0,
+                            {
+                              $add: [
+                                { $ifNull: ["$count", 0] },
+                                e.increment,
+                              ],
+                            },
+                          ],
+                        },
+                        updatedAt: now,
+                      },
+                    },
+                  ],
+                  upsert: false,
                 },
-                upsert: true,
-              },
-            }));
+              };
+            });
             yield* tryMongo(() =>
               counters().bulkWrite(
                 ops as never,

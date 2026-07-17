@@ -62,6 +62,34 @@ test("providerUpdateInput all optional but validates shapes", () => {
   expect(providerUpdateInput.safeParse({ active: "yes" }).success).toBe(false);
 });
 
+test("provider httpTimeoutMs: optional, 0..3600000, null clears on update", () => {
+  const b = {
+    name: "OpenAI",
+    sdkType: "openai-compatible",
+    apiKey: "sk-xxx",
+    baseUrl: "https://api.openai.com/v1",
+  };
+  expect(providerCreateInput.safeParse(b).success).toBe(true);
+  expect(
+    providerCreateInput.safeParse({ ...b, httpTimeoutMs: 120_000 }).success,
+  ).toBe(true);
+  expect(providerCreateInput.safeParse({ ...b, httpTimeoutMs: 0 }).success).toBe(
+    true,
+  );
+  expect(
+    providerCreateInput.safeParse({ ...b, httpTimeoutMs: 3_600_001 }).success,
+  ).toBe(false);
+  expect(
+    providerCreateInput.safeParse({ ...b, httpTimeoutMs: -1 }).success,
+  ).toBe(false);
+  expect(providerUpdateInput.safeParse({ httpTimeoutMs: null }).success).toBe(
+    true,
+  );
+  expect(
+    providerUpdateInput.safeParse({ httpTimeoutMs: 60_000 }).success,
+  ).toBe(true);
+});
+
 test("providerDoc defaults active true, headers {}", () => {
   const r = providerDoc.parse({
     _id: new ObjectId(),
@@ -76,6 +104,7 @@ test("providerDoc defaults active true, headers {}", () => {
   expect(r.active).toBe(true);
   expect(r.headers).toEqual({});
   expect(r.metadata).toEqual({});
+  expect(r.httpTimeoutMs).toBeUndefined();
 });
 
 test("modelEntryDoc applies priority+active defaults", () => {

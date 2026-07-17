@@ -10,12 +10,15 @@ import {
   createProvider,
   updateProvider,
   deleteProvider,
+  listProviderCatalog,
+  discoverProviderModels,
   maskProvider,
 } from "../domains/providers/operations.ts";
 import { runAdminEffect } from "../http/adapters/boundary.ts";
 import { sValidator } from "../http/validation/validator.ts";
-import { listAdapters } from "../providers/registry.ts";
+import { getAdapter, listAdapters } from "../providers/registry.ts";
 import { isAppError } from "../errors/families.ts";
+import { getApiRuntimeConfig } from "../config/state.ts";
 import { parseObjectIdParam } from "./route-utils.ts";
 
 export { maskProvider, parseObjectIdParam };
@@ -57,6 +60,7 @@ providerRoutes.post(
         baseUrl: body.baseUrl,
         providerOrg: body.providerOrg,
         headers: body.headers,
+        httpTimeoutMs: body.httpTimeoutMs,
         metadata: body.metadata,
         isKnownSdkType: (t) => known.has(t),
       }),
@@ -132,6 +136,51 @@ providerRoutes.delete(
           return null;
         },
       },
+    );
+  },
+);
+
+/** Cached model_catalog for a provider (Discover / Models panel + model entry picker). */
+providerRoutes.get(
+  "/:id/models",
+  requirePermission("providers:read"),
+  async (c) => {
+    const orgId = c.get("orgId");
+    const id = c.req.param("id");
+    if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
+    return runAdminEffect(
+      c,
+      listProviderCatalog({
+        organizationId: orgId.toHexString(),
+        providerId: id,
+      }),
+      { operation: "listProviderCatalog" },
+    );
+  },
+);
+
+/**
+ * Hit upstream listModels with provider credentials, upsert model_catalog.
+ * Requires providers:write (decrypts API key; drives paid/credentialed upstream).
+ */
+providerRoutes.post(
+  "/:id/discover-models",
+  requirePermission("providers:write"),
+  async (c) => {
+    const orgId = c.get("orgId");
+    const id = c.req.param("id");
+    if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
+    const globalTimeoutMs =
+      getApiRuntimeConfig().operational.providerHttpTimeoutMs;
+    return runAdminEffect(
+      c,
+      discoverProviderModels({
+        organizationId: orgId.toHexString(),
+        providerId: id,
+        getAdapter,
+        globalTimeoutMs,
+      }),
+      { operation: "discoverProviderModels" },
     );
   },
 );

@@ -85,11 +85,48 @@ test("validateDraft: spend_minor rule needs 3-letter currency", () => {
   expect(validateDraft(draft({ rateLimits: [r] }))).toBeNull();
 });
 
-test("validateDraft: model/endpoint scope requires scopeTarget", () => {
+test("validateDraft: model scope requires scopeTarget", () => {
   const r = { id: "r1", windowSeconds: "3600", dimension: "tokens", capValue: "100", scope: "model", scopeTarget: "", currency: "", active: true };
   expect(validateDraft(draft({ rateLimits: [r] }))).toBeTruthy();
   r.scopeTarget = "gpt";
   expect(validateDraft(draft({ rateLimits: [r] }))).toBeNull();
+});
+
+test("validateDraft: duplicate same-stream rate limits rejected; hour+week ok", () => {
+  const hour1 = {
+    id: "a",
+    windowSeconds: "3600",
+    dimension: "tokens",
+    capValue: "1000",
+    scope: "customer",
+    scopeTarget: "",
+    currency: "",
+    active: true,
+  };
+  const hour2 = {
+    id: "b",
+    windowSeconds: "3600",
+    dimension: "tokens",
+    capValue: "2000",
+    scope: "customer",
+    scopeTarget: "",
+    currency: "",
+    active: true,
+  };
+  const week = {
+    id: "c",
+    windowSeconds: "604800",
+    dimension: "tokens",
+    capValue: "50000",
+    scope: "customer",
+    scopeTarget: "",
+    currency: "",
+    active: true,
+  };
+  expect(validateDraft(draft({ rateLimits: [hour1, hour2] }))).toMatch(
+    /Duplicate rate limit stream/,
+  );
+  expect(validateDraft(draft({ rateLimits: [hour1, week] }))).toBeNull();
 });
 
 test("formatWindow: month-divisible → Xmo", () => {

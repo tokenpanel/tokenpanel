@@ -6,7 +6,8 @@ import type { MigrationDb } from "../../src/migrator/migration-db.ts";
  */
 export const id = "2026-07-13T20-00-00Z__settlement-idempotency";
 export const phase = "pre" as const;
-export const transactional = true as const;
+// createIndexes on existing collections cannot run inside a multi-doc transaction.
+export const transactional = false as const;
 
 export async function up(mdb: MigrationDb): Promise<void> {
   // Sparse unique: only docs with a string gatewayRequestId participate.

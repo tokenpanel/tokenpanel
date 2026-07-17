@@ -6,7 +6,8 @@ import type { MigrationDb } from "../../src/migrator/migration-db.ts";
  */
 export const id = "2026-07-13T18-00-00Z__settlement-outbox";
 export const phase = "pre" as const;
-export const transactional = true as const;
+// createIndexes cannot run in a multi-document transaction on (re)existing colls.
+export const transactional = false as const;
 
 export async function up(mdb: MigrationDb): Promise<void> {
   const coll = mdb.collection("settlement_outbox");

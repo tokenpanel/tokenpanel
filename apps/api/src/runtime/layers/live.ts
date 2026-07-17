@@ -25,6 +25,7 @@ import type { Telemetry } from "../services/telemetry.ts";
 import type { WorkerControl } from "../services/worker-control.ts";
 import type { UserRepository } from "../../domains/ports/user-repository.ts";
 import type { InviteRepository } from "../../domains/ports/invite-repository.ts";
+import type { SessionRepository } from "../../domains/ports/session-repository.ts";
 import type { OrganizationRepository } from "../../domains/ports/organization-repository.ts";
 import type { CustomerRepository } from "../../domains/ports/customer-repository.ts";
 import type { PlanRepository } from "../../domains/ports/plan-repository.ts";
@@ -60,6 +61,7 @@ export type CoreAppServices =
 export type DomainRepositoryServices =
   | UserRepository
   | InviteRepository
+  | SessionRepository
   | OrganizationRepository
   | CustomerRepository
   | PlanRepository

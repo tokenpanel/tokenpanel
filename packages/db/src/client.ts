@@ -75,6 +75,7 @@ export async function getDb(): Promise<TypedDb> {
     organizations: rawDb.collection(collections.organizations),
     users: rawDb.collection(collections.users),
     invites: rawDb.collection(collections.invites),
+    adminSessions: rawDb.collection(collections.adminSessions),
     customers: rawDb.collection(collections.customers),
     balanceAdjustments: rawDb.collection(collections.balanceAdjustments),
     providers: rawDb.collection(collections.providers),

@@ -26,6 +26,12 @@ export {
 } from "./invite-repository.ts";
 
 export {
+  SessionRepository,
+  type SessionRepositoryService,
+  type NewAdminSessionRecord,
+} from "./session-repository.ts";
+
+export {
   OrganizationRepository,
   type OrganizationRepositoryService,
   type NewOrganizationRecord,

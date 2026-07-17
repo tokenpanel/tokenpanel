@@ -17,11 +17,13 @@ import {
 } from "../../errors/families.ts";
 import type { RepoError } from "../ports/common.ts";
 import { UserRepository } from "../ports/user-repository.ts";
+import { SessionRepository } from "../ports/session-repository.ts";
 import { KeyRepository } from "../ports/key-repository.ts";
 import { CustomerRepository } from "../ports/customer-repository.ts";
 import { OrganizationRepository } from "../ports/organization-repository.ts";
 import { Crypto } from "../../runtime/services/crypto.ts";
 import { AppConfig } from "../../runtime/services/app-config.ts";
+import { Clock } from "../../runtime/services/clock.ts";
 import {
   API_KEY_LOOKUP_PREFIX_CHARS,
   CUSTOMER_KEY_PREFIX_LITERAL,
@@ -39,6 +41,8 @@ export type AdminSession = {
   readonly role: UserRole;
   /** Stored membership grants for the active org (empty when admin). */
   readonly permissions: readonly string[];
+  /** Allowlist session id (JWT `sid`). */
+  readonly sessionId: string;
 };
 
 export type ResolvedPublicPrincipal =
@@ -72,14 +76,15 @@ function unauthorized(
 }
 
 /**
- * Resolve admin JWT → active user + org membership role.
+ * Resolve admin JWT → allowlist session + active user + org membership role.
+ * Missing/revoked/expired session rows reject even if the JWT signature is valid.
  */
 export const resolveAdminSession = (
   bearerToken: string | null,
 ): Effect.Effect<
   AdminSession,
   SessionError,
-  UserRepository | Crypto | AppConfig
+  UserRepository | SessionRepository | Crypto | AppConfig | Clock
 > =>
   Effect.gen(function* () {
     if (!bearerToken) {
@@ -87,6 +92,7 @@ export const resolveAdminSession = (
     }
     const crypto = yield* Crypto;
     const config = yield* AppConfig;
+    const clock = yield* Clock;
     const payload = yield* crypto.verifyJwt(bearerToken, config.jwtSecret).pipe(
       Effect.mapError(
         (e) =>
@@ -98,6 +104,18 @@ export const resolveAdminSession = (
           }),
       ),
     );
+
+    const sessions = yield* SessionRepository;
+    const session = yield* sessions.findById(payload.sid);
+    if (!session) {
+      return yield* unauthorized("session_revoked");
+    }
+    if (session.userId.toHexString() !== payload.sub) {
+      return yield* unauthorized("session_user_mismatch");
+    }
+    if (session.expiresAt.getTime() <= clock.nowMs()) {
+      return yield* unauthorized("session_expired");
+    }
 
     const users = yield* UserRepository;
     const user = yield* users.findById(payload.sub);
@@ -124,6 +142,7 @@ export const resolveAdminSession = (
       orgId: user.activeOrganizationId,
       role: activeMembership.role,
       permissions: activeMembership.permissions ?? [],
+      sessionId: session._id.toHexString(),
     };
   });
 

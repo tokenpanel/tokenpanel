@@ -14,6 +14,7 @@ import type {
   ApiKeyDoc,
   ManagementApiKeyDoc,
   InviteDoc,
+  AdminSessionDoc,
   OrganizationDoc,
   ModelDoc,
   ProviderDoc,
@@ -27,6 +28,7 @@ import type {
 import {
   UserDoc as UserDocSchema,
   InviteDoc as InviteDocSchema,
+  AdminSessionDoc as AdminSessionDocSchema,
   OrganizationDoc as OrganizationDocSchema,
   CustomerDoc as CustomerDocSchema,
   BalanceAdjustmentDoc as BalanceAdjustmentDocSchema,
@@ -44,6 +46,7 @@ import { MongoDb } from "../../../runtime/services/mongo-db.ts";
 import { Clock } from "../../../runtime/services/clock.ts";
 import { UserRepository } from "../../../domains/ports/user-repository.ts";
 import { InviteRepository } from "../../../domains/ports/invite-repository.ts";
+import { SessionRepository } from "../../../domains/ports/session-repository.ts";
 import { OrganizationRepository } from "../../../domains/ports/organization-repository.ts";
 import { CustomerRepository } from "../../../domains/ports/customer-repository.ts";
 import { PlanRepository } from "../../../domains/ports/plan-repository.ts";
@@ -82,6 +85,11 @@ function decodeInvite(raw: unknown | null) {
 function decodeInvites(raws: readonly unknown[]) {
   return readMany(InviteDocSchema, collections.invites, raws).pipe(
     Effect.map((d) => asDoc(d as readonly InviteDoc[])),
+  );
+}
+function decodeAdminSession(raw: unknown | null) {
+  return readOne(AdminSessionDocSchema, collections.adminSessions, raw).pipe(
+    Effect.map((d) => asDoc(d as AdminSessionDoc | null)),
   );
 }
 function decodeOrg(raw: unknown | null) {
@@ -326,6 +334,80 @@ export const UserRepositoryLive = Layer.effect(
               },
             },
           );
+        }),
+    };
+  }),
+);
+
+export const SessionRepositoryLive = Layer.effect(
+  SessionRepository,
+  Effect.gen(function* () {
+    const mongo = yield* MongoDb;
+    const clock = yield* Clock;
+    const db = (): typeof mongo.db => mongo.db;
+    return {
+      insert: (record) =>
+        Effect.gen(function* () {
+          const now = clock.now();
+          const doc: AdminSessionDoc = {
+            _id: newObjectId(record.id),
+            userId: toObjectId(record.userId),
+            expiresAt: record.expiresAt,
+            createdAt: now,
+            updatedAt: now,
+          };
+          const validated = yield* writeOne(
+            AdminSessionDocSchema,
+            collections.adminSessions,
+            doc,
+          );
+          yield* tryMongo(() =>
+            db().adminSessions.insertOne(validated as AdminSessionDoc),
+          );
+          return asDoc(validated as AdminSessionDoc);
+        }),
+      findById: (sessionId) =>
+        Effect.gen(function* () {
+          const raw = yield* tryMongo(() =>
+            db().adminSessions.findOne({ _id: toObjectId(sessionId) }),
+          );
+          return yield* decodeAdminSession(raw);
+        }),
+      touchExpiry: (sessionId, userId, expiresAt) =>
+        Effect.gen(function* () {
+          const raw = yield* tryMongo(() =>
+            db().adminSessions.findOneAndUpdate(
+              {
+                _id: toObjectId(sessionId),
+                userId: toObjectId(userId),
+              },
+              { $set: { expiresAt, updatedAt: clock.now() } },
+              { returnDocument: "after" },
+            ),
+          );
+          return yield* decodeAdminSession(raw);
+        }),
+      deleteById: (sessionId) =>
+        tryMongo(async () => {
+          const res = await db().adminSessions.deleteOne({
+            _id: toObjectId(sessionId),
+          });
+          return res.deletedCount === 1;
+        }),
+      deleteByIdForUser: (sessionId, userId) =>
+        tryMongo(async () => {
+          const res = await db().adminSessions.deleteOne({
+            _id: toObjectId(sessionId),
+            userId: toObjectId(userId),
+          });
+          return res.deletedCount === 1;
+        }),
+      deleteAllForUser: (userId) =>
+        tryMongo(async () => {
+          const res = await db().adminSessions.deleteMany({
+            userId: toObjectId(userId),
+          });
+          return res.deletedCount;
         }),
     };
   }),
@@ -1595,6 +1677,7 @@ export const UsageRepositoryLive = Layer.effect(
 export const RepositoryLive = Layer.mergeAll(
   UserRepositoryLive,
   InviteRepositoryLive,
+  SessionRepositoryLive,
   OrganizationRepositoryLive,
   CustomerRepositoryLive,
   PlanRepositoryLive,

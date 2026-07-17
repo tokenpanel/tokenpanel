@@ -8,6 +8,7 @@ import { getRequestClientIp } from "../lib/client-ip.ts";
 import {
   needsSetup,
   login as loginOp,
+  logout as logoutOp,
   updateMe as updateMeOp,
   changePassword as changePasswordOp,
 } from "../domains/auth/operations.ts";
@@ -69,6 +70,19 @@ authRoutes.post("/login", sValidator("json", loginBody), async (c) => {
         return null;
       },
     },
+  );
+});
+
+authRoutes.post("/logout", requireAuth, async (c) => {
+  const user = c.get("user");
+  const sessionId = c.get("sessionId");
+  return runAdminEffect(
+    c,
+    logoutOp({
+      userId: user._id.toHexString(),
+      sessionId,
+    }),
+    { operation: "logout" },
   );
 });
 

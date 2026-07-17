@@ -23,6 +23,8 @@ export type AuthVariables = {
   role: UserRole;
   /** Stored membership grants for the active org (empty when admin). */
   permissions: readonly PanelPermission[];
+  /** Allowlist session id (JWT `sid`). */
+  sessionId: string;
 };
 
 type AuthMiddleware = MiddlewareHandler<{ Variables: AuthVariables }>;
@@ -74,6 +76,7 @@ export const requireAuth: AuthMiddleware = async (c, next) => {
         "permissions",
         session.permissions as readonly PanelPermission[],
       );
+      c.set("sessionId", session.sessionId);
     },
     mapError: (err) => {
       if (!isAppError(err)) return null;

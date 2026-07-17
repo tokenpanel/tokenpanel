@@ -8,6 +8,7 @@
  */
 export * from "./primitives.ts";
 export * from "./identity.ts";
+export * from "./session.ts";
 export * from "./organization.ts";
 export * from "./customer.ts";
 export * from "./apikey.ts";

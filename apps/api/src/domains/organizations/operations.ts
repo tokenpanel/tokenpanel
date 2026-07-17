@@ -14,10 +14,13 @@ import { OrganizationRepository } from "../ports/organization-repository.ts";
 import { UserRepository } from "../ports/user-repository.ts";
 import { InviteRepository } from "../ports/invite-repository.ts";
 import { KeyRepository } from "../ports/key-repository.ts";
+import { SessionRepository } from "../ports/session-repository.ts";
 import { Crypto } from "../../runtime/services/crypto.ts";
 import { AppConfig } from "../../runtime/services/app-config.ts";
+import { Clock } from "../../runtime/services/clock.ts";
 import { hasPanelPermission } from "@tokenpanel/contracts";
 import { roleForOrganization } from "../auth/authz.ts";
+import { issueAdminToken } from "../auth/operations.ts";
 
 export type OrgDomainError =
   | AuthorizationError
@@ -110,16 +113,21 @@ export const createOrganization = (input: {
   readonly name: string;
   readonly slug?: string | undefined;
   readonly defaultCurrency?: string | undefined;
+  /** Reuse current allowlist session when re-issuing JWT. */
+  readonly sessionId?: string | undefined;
 }): Effect.Effect<
   { organization: OrganizationView; token: string },
   OrgDomainError,
-  OrganizationRepository | UserRepository | Crypto | AppConfig
+  | OrganizationRepository
+  | UserRepository
+  | SessionRepository
+  | Crypto
+  | AppConfig
+  | Clock
 > =>
   Effect.gen(function* () {
     const orgs = yield* OrganizationRepository;
     const users = yield* UserRepository;
-    const crypto = yield* Crypto;
-    const config = yield* AppConfig;
 
     const baseSlug = input.slug ?? deriveSlug(input.name);
     const slug = yield* allocateUniqueSlug(baseSlug);
@@ -148,26 +156,15 @@ export const createOrganization = (input: {
       true,
     );
 
-    if (config.jwtSecret.length < 16) {
-      return yield* Effect.fail(
-        new ConfigurationError({
-          code: "server_misconfigured",
-          message: "JWT secret not configured",
-          variable: "JWT_SECRET",
-        }),
-      );
-    }
-    const token = yield* crypto.signJwt(
-      {
-        sub: input.userId,
-        orgId: org._id.toHexString(),
-        role: "admin",
-      },
-      config.jwtSecret,
-    );
+    const issued = yield* issueAdminToken({
+      userId: input.userId,
+      orgId: org._id.toHexString(),
+      role: "admin",
+      sessionId: input.sessionId,
+    });
     return {
       organization: toOrganizationView(org, "admin"),
-      token,
+      token: issued.token,
     };
   });
 

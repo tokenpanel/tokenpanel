@@ -168,7 +168,12 @@ export default function SettingsPage(): React.ReactElement {
     setPwMsg(null);
     try {
       await changePassword(curPw, newPw);
-      setPwMsg({ kind: "success", text: "Password changed." });
+      // changePassword revokes all sessions and clears local auth — user is
+      // sent to login via AuthProvider; keep message brief if UI still paints.
+      setPwMsg({
+        kind: "success",
+        text: "Password changed. Sign in again with the new password.",
+      });
       setCurPw("");
       setNewPw("");
       setConfirmPw("");

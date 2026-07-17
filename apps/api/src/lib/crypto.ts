@@ -73,6 +73,8 @@ export interface JwtPayload {
   sub: string;
   orgId: string;
   role: UserRole;
+  /** Admin session id (ObjectId hex) — must exist in admin_sessions. */
+  sid: string;
   exp: number;
 }
 
@@ -131,6 +133,7 @@ export function signJwt(
     sub: payload.sub,
     orgId: payload.orgId,
     role: payload.role,
+    sid: payload.sid,
     exp: payload.exp ?? now + ttlSeconds,
   };
   const headerEnc = b64UrlEncode(JSON.stringify(header));
@@ -180,6 +183,7 @@ export function verifyJwt(token: string, secret: string): JwtPayload {
     typeof (payload as { sub?: unknown }).sub !== "string" ||
     typeof (payload as { orgId?: unknown }).orgId !== "string" ||
     typeof (payload as { role?: unknown }).role !== "string" ||
+    typeof (payload as { sid?: unknown }).sid !== "string" ||
     typeof (payload as { exp?: unknown }).exp !== "number"
   ) {
     throw new JwtError("malformed payload");
@@ -189,7 +193,11 @@ export function verifyJwt(token: string, secret: string): JwtPayload {
   if (p.exp <= now) {
     throw new JwtError("expired");
   }
-  if (!ObjectId.isValid(p.sub) || !ObjectId.isValid(p.orgId)) {
+  if (
+    !ObjectId.isValid(p.sub) ||
+    !ObjectId.isValid(p.orgId) ||
+    !ObjectId.isValid(p.sid)
+  ) {
     throw new JwtError("bad subject");
   }
   return p;

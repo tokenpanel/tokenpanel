@@ -46,12 +46,14 @@ organizationRoutes.post(
   sValidator("json", organizationApiCreateInput),
   async (c) => {
     const user = c.get("user");
+    const sessionId = c.get("sessionId");
     const body = c.req.valid("json");
     return runAdminEffect(
       c,
       createOrganization({
         userId: user._id.toHexString(),
         name: body.name,
+        sessionId,
         ...(body.slug !== undefined ? { slug: body.slug } : {}),
         ...(body.defaultCurrency !== undefined
           ? { defaultCurrency: body.defaultCurrency }
@@ -177,12 +179,14 @@ organizationRoutes.post("/switch", async (c) => {
   if (!targetId || !ObjectId.isValid(targetId)) {
     return c.json({ error: "invalid_organization_id" }, 400);
   }
+  const sessionId = c.get("sessionId");
   return runAdminEffect(
     c,
     Effect.gen(function* () {
       const switched = yield* switchActiveOrganization({
         userId: user._id.toHexString(),
         targetOrganizationId: targetId,
+        sessionId,
         memberships: user.memberships,
       });
       const orgs = yield* OrganizationRepository;

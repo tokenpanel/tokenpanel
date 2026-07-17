@@ -18,6 +18,7 @@ import {
 import type { RepoError } from "../ports/common.ts";
 import { UserRepository } from "../ports/user-repository.ts";
 import { InviteRepository } from "../ports/invite-repository.ts";
+import { SessionRepository } from "../ports/session-repository.ts";
 import { OrganizationRepository } from "../ports/organization-repository.ts";
 import { Crypto } from "../../runtime/services/crypto.ts";
 import { Clock } from "../../runtime/services/clock.ts";
@@ -25,6 +26,7 @@ import { AppConfig } from "../../runtime/services/app-config.ts";
 import {
   INVITE_DEFAULT_TTL_HOURS,
   INVITE_TOKEN_BYTES,
+  JWT_DEFAULT_TTL_SECONDS,
 } from "../../config/security-policy.ts";
 import { toUserView } from "./view.ts";
 import type {
@@ -66,6 +68,78 @@ function jwtSecret(
 }
 
 /**
+ * Mint or refresh an admin JWT backed by an allowlist session row.
+ * - No `sessionId`: insert new session.
+ * - With `sessionId`: refresh expiry if row exists for user; else insert new.
+ */
+export const issueAdminToken = (input: {
+  readonly userId: string;
+  readonly orgId: string;
+  readonly role: UserRole;
+  readonly sessionId?: string | undefined;
+}): Effect.Effect<
+  { token: string; sessionId: string },
+  ConfigurationError | RepoError,
+  SessionRepository | Crypto | AppConfig | Clock
+> =>
+  Effect.gen(function* () {
+    const sessions = yield* SessionRepository;
+    const crypto = yield* Crypto;
+    const config = yield* AppConfig;
+    const clock = yield* Clock;
+    const secret = yield* jwtSecret(config.jwtSecret);
+    const ttlSeconds = JWT_DEFAULT_TTL_SECONDS;
+    const expiresAt = new Date(clock.nowMs() + ttlSeconds * 1000);
+
+    let sessionId: string;
+    if (input.sessionId !== undefined) {
+      const refreshed = yield* sessions.touchExpiry(
+        input.sessionId,
+        input.userId,
+        expiresAt,
+      );
+      if (refreshed) {
+        sessionId = refreshed._id.toHexString();
+      } else {
+        const created = yield* sessions.insert({
+          userId: input.userId,
+          expiresAt,
+        });
+        sessionId = created._id.toHexString();
+      }
+    } else {
+      const created = yield* sessions.insert({
+        userId: input.userId,
+        expiresAt,
+      });
+      sessionId = created._id.toHexString();
+    }
+
+    const token = yield* crypto.signJwt(
+      {
+        sub: input.userId,
+        orgId: input.orgId,
+        role: input.role,
+        sid: sessionId,
+      },
+      secret,
+      ttlSeconds,
+    );
+    return { token, sessionId };
+  });
+
+/** POST /logout — drop current allowlist session (single-device logout). */
+export const logout = (input: {
+  readonly userId: string;
+  readonly sessionId: string;
+}): Effect.Effect<{ ok: true }, AuthDomainError, SessionRepository> =>
+  Effect.gen(function* () {
+    const sessions = yield* SessionRepository;
+    yield* sessions.deleteByIdForUser(input.sessionId, input.userId);
+    return { ok: true as const };
+  });
+
+/**
  * Allocate a unique organization slug with bounded random suffix retries.
  */
 function allocateUniqueSlug(
@@ -104,11 +178,14 @@ export const needsSetup = (): Effect.Effect<
  */
 export const login = (
   input: LoginInput,
-): Effect.Effect<LoginResult, AuthDomainError, UserRepository | Crypto | AppConfig> =>
+): Effect.Effect<
+  LoginResult,
+  AuthDomainError,
+  UserRepository | SessionRepository | Crypto | AppConfig | Clock
+> =>
   Effect.gen(function* () {
     const users = yield* UserRepository;
     const crypto = yield* Crypto;
-    const config = yield* AppConfig;
 
     const user = yield* users.findByUsername(input.username);
     if (!user) {
@@ -139,16 +216,12 @@ export const login = (
     }
 
     const view = toUserView(user);
-    const secret = yield* jwtSecret(config.jwtSecret);
-    const token = yield* crypto.signJwt(
-      {
-        sub: user._id.toHexString(),
-        orgId: user.activeOrganizationId.toHexString(),
-        role: view.role,
-      },
-      secret,
-    );
-    return { token, user: view };
+    const issued = yield* issueAdminToken({
+      userId: user._id.toHexString(),
+      orgId: user.activeOrganizationId.toHexString(),
+      role: view.role,
+    });
+    return { token: issued.token, user: view };
   });
 
 /**
@@ -159,14 +232,18 @@ export const signup = (
 ): Effect.Effect<
   SignupResult,
   AuthDomainError,
-  UserRepository | OrganizationRepository | Crypto | Clock | AppConfig
+  | UserRepository
+  | OrganizationRepository
+  | SessionRepository
+  | Crypto
+  | Clock
+  | AppConfig
 > =>
   Effect.gen(function* () {
     const users = yield* UserRepository;
     const orgs = yield* OrganizationRepository;
     const crypto = yield* Crypto;
     const clock = yield* Clock;
-    const config = yield* AppConfig;
 
     const count = yield* users.countUsers();
     if (count !== 0) {
@@ -178,7 +255,6 @@ export const signup = (
       );
     }
 
-    const secret = yield* jwtSecret(config.jwtSecret);
     const slug = yield* allocateUniqueSlug("default");
     const passwordHash = yield* crypto.hashPassword(input.password);
 
@@ -240,17 +316,14 @@ export const signup = (
         ),
       );
 
-    const token = yield* crypto.signJwt(
-      {
-        sub: user._id.toHexString(),
-        orgId: org._id.toHexString(),
-        role: "admin",
-      },
-      secret,
-    );
+    const issued = yield* issueAdminToken({
+      userId: user._id.toHexString(),
+      orgId: org._id.toHexString(),
+      role: "admin",
+    });
 
     return {
-      token,
+      token: issued.token,
       user: toUserView(user, "admin"),
       organization: {
         id: org._id.toHexString(),
@@ -304,12 +377,17 @@ export const updateMe = (
     return toUserView(user);
   });
 
-/** POST /password — verify current, set new hash. */
+/** POST /password — verify current, set new hash, revoke all sessions. */
 export const changePassword = (
   input: ChangePasswordInput,
-): Effect.Effect<{ ok: true }, AuthDomainError, UserRepository | Crypto> =>
+): Effect.Effect<
+  { ok: true },
+  AuthDomainError,
+  UserRepository | SessionRepository | Crypto
+> =>
   Effect.gen(function* () {
     const users = yield* UserRepository;
+    const sessions = yield* SessionRepository;
     const crypto = yield* Crypto;
     const ok = yield* crypto.verifyPassword(
       input.currentPassword,
@@ -325,6 +403,8 @@ export const changePassword = (
     }
     const newHash = yield* crypto.hashPassword(input.newPassword);
     yield* users.updatePasswordHash(input.userId, newHash);
+    // Password change invalidates every device (including current browser).
+    yield* sessions.deleteAllForUser(input.userId);
     return { ok: true as const };
   });
 
@@ -430,14 +510,18 @@ export const acceptInvite = (
 ): Effect.Effect<
   AcceptInviteResult,
   AuthDomainError,
-  InviteRepository | UserRepository | Crypto | Clock | AppConfig
+  | InviteRepository
+  | UserRepository
+  | SessionRepository
+  | Crypto
+  | Clock
+  | AppConfig
 > =>
   Effect.gen(function* () {
     const invites = yield* InviteRepository;
     const users = yield* UserRepository;
     const crypto = yield* Crypto;
     const clock = yield* Clock;
-    const config = yield* AppConfig;
 
     const tokenHash = yield* crypto.hashToken(input.token);
     const invite = yield* invites.findPendingByTokenHash(tokenHash);
@@ -460,7 +544,6 @@ export const acceptInvite = (
       );
     }
 
-    const secret = yield* jwtSecret(config.jwtSecret);
     const orgId = invite.organizationId;
     const inviteRole = invite.role as UserRole;
     const existingUser = yield* users.findByEmail(invite.email);
@@ -571,14 +654,11 @@ export const acceptInvite = (
 
     yield* invites.markAccepted(invite._id.toHexString());
 
-    const token = yield* crypto.signJwt(
-      {
-        sub: userId,
-        orgId: orgId.toHexString(),
-        role: inviteRole,
-      },
-      secret,
-    );
+    const issued = yield* issueAdminToken({
+      userId,
+      orgId: orgId.toHexString(),
+      role: inviteRole,
+    });
 
     const user: UserView = {
       id: userId,
@@ -590,15 +670,17 @@ export const acceptInvite = (
       memberships,
       activeOrganizationId: orgId.toHexString(),
     };
-    return { token, user };
+    return { token: issued.token, user };
   });
 
 /**
  * Switch active organization membership for a user and issue a new JWT.
+ * Reuses the current allowlist session when `sessionId` is provided.
  */
 export const switchActiveOrganization = (input: {
   readonly userId: string;
   readonly targetOrganizationId: string;
+  readonly sessionId?: string | undefined;
   readonly memberships: readonly {
     readonly organizationId: { toHexString: () => string };
     readonly role: UserRole;
@@ -606,7 +688,12 @@ export const switchActiveOrganization = (input: {
 }): Effect.Effect<
   { token: string; role: UserRole; activeOrganizationId: string },
   AuthDomainError,
-  UserRepository | OrganizationRepository | Crypto | AppConfig
+  | UserRepository
+  | OrganizationRepository
+  | SessionRepository
+  | Crypto
+  | AppConfig
+  | Clock
 > =>
   Effect.gen(function* () {
     const membership = input.memberships.find(
@@ -638,19 +725,14 @@ export const switchActiveOrganization = (input: {
       input.userId,
       input.targetOrganizationId,
     );
-    const config = yield* AppConfig;
-    const crypto = yield* Crypto;
-    const secret = yield* jwtSecret(config.jwtSecret);
-    const token = yield* crypto.signJwt(
-      {
-        sub: input.userId,
-        orgId: input.targetOrganizationId,
-        role: membership.role,
-      },
-      secret,
-    );
+    const issued = yield* issueAdminToken({
+      userId: input.userId,
+      orgId: input.targetOrganizationId,
+      role: membership.role,
+      sessionId: input.sessionId,
+    });
     return {
-      token,
+      token: issued.token,
       role: membership.role,
       activeOrganizationId: input.targetOrganizationId,
     };

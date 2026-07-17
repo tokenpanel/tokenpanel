@@ -259,13 +259,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const changePassword = useCallback(
     async (currentPassword: string, newPassword: string) => {
+      // Server revokes all allowlist sessions (including this browser).
+      // Clear local token so the next request does not send a dead JWT.
       await postJson("/admin/auth/password", {
         currentPassword,
         newPassword,
         confirmNewPassword: newPassword,
       });
+      clearToken();
+      setUser(null);
+      void refreshStatus();
     },
-    [],
+    [refreshStatus],
   );
 
   const value = useMemo<AuthContextValue>(

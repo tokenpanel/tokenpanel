@@ -71,6 +71,7 @@ export {
 export {
   UserRepositoryLive,
   InviteRepositoryLive,
+  SessionRepositoryLive,
   OrganizationRepositoryLive,
   CustomerRepositoryLive,
   PlanRepositoryLive,

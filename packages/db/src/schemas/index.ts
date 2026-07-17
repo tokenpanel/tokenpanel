@@ -69,6 +69,10 @@ import type {
   SettlementOutboxDoc,
   SettlementOutboxStatus,
 } from "../schemas/settlement-outbox.ts";
+import type {
+  AdminSessionDoc,
+  AdminSessionCreateInput,
+} from "../schemas/session.ts";
 
 /**
  * Central registry of collection names and typed accessors.
@@ -78,6 +82,7 @@ export const collections = {
   organizations: "organizations",
   users: "users",
   invites: "invites",
+  adminSessions: "admin_sessions",
   customers: "customers",
   balanceAdjustments: "balance_adjustments",
   providers: "providers",
@@ -101,6 +106,7 @@ export interface TypedDb {
   organizations: Collection<OrganizationDoc>;
   users: Collection<UserDoc>;
   invites: Collection<InviteDoc>;
+  adminSessions: Collection<AdminSessionDoc>;
   customers: Collection<CustomerDoc>;
   balanceAdjustments: Collection<BalanceAdjustmentDoc>;
   providers: Collection<ProviderDoc>;
@@ -131,6 +137,8 @@ export type {
   MembershipInput,
   InviteDoc,
   InviteCreateInput,
+  AdminSessionDoc,
+  AdminSessionCreateInput,
   CustomerDoc,
   CustomerCreateInput,
   CustomerUpdateInput,

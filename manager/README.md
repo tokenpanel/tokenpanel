@@ -47,17 +47,17 @@ sudo bin/tokenpanel-setup
 
 ```bash
 tokenpanel status       # container state, version, disk usage
-tokenpanel start        # preflight + up + health check
+tokenpanel start        # preflight + up + health + post migrations
 tokenpanel stop         # stop all services
 tokenpanel restart      # stop + start
-tokenpanel update       # 6-phase safe update (tokenpanel-db3)
+tokenpanel update       # 6-phase safe update (pre → swap → post)
 tokenpanel backup       # write-quiet mongodump (stops api briefly for consistent snapshot)
 tokenpanel restore <f>  # restore from backup
-tokenpanel migrate      # run pending migrations
+tokenpanel migrate      # run pending migrations (default phase: pre)
 tokenpanel logs [-f]    # tail container logs
 tokenpanel enter [svc]  # exec shell into container
 tokenpanel doctor       # diagnostics
-tokenpanel rebuild      # rebuild current checkout + force-recreate (keeps data)
+tokenpanel rebuild      # rebuild image + recreate + post migrations (keeps data)
 tokenpanel destroy      # remove containers (keeps data)
 tokenpanel reset        # WIPE everything (strong confirm)
 tokenpanel version      # manager + app versions

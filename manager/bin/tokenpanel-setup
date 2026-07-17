@@ -560,6 +560,13 @@ build_current_checkout_image || die "docker build failed — check Dockerfile an
 step "5/5" "starting app..."
 docker compose -f "$APP_YML" up -d
 wait_for_health api 60 || die "api did not become healthy"
+# API boot applies pre/ only. Post/ (destructive rewrites, dropIndex, unique
+# upgrades) must run from the manager after the api is healthy — same as
+# `tokenpanel start` / update phase 6. Without this, first install leaves
+# pending post migrations (e.g. unique customer email index).
+source "${SCRIPT_DIR}/../lib/migrate.sh"
+step "5/5" "applying pending post-deploy migrations..."
+run_migrations "post" || die "post-migration failed after setup"
 
 # ── Install systemd ──
 step "systemd" "enabling boot-time start..."

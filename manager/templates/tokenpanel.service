@@ -1,6 +1,10 @@
 # TokenPanel systemd service.
 # Installed to /etc/systemd/system/tokenpanel.service by the wizard.
-# Paths are substituted by envsubst.
+# Paths are substituted by envsubst at install time.
+#
+# Delegates to the manager CLI (not raw docker compose) so boot/reboot runs
+# the same path as `tokenpanel start`: preflight → up → health → post migrations.
+# API boot still applies pre/ only; post/ is manager-owned (destructive).
 
 [Unit]
 Description=TokenPanel — AI usage tracking, access control, and admin panel
@@ -13,12 +17,19 @@ Wants=network-online.target
 Type=oneshot
 RemainAfterExit=yes
 WorkingDirectory=${INSTALL_DIR}
-
-ExecStart=/usr/bin/docker compose --env-file ${CONFIG_DIR}/.env -f ${CONFIG_DIR}/app.yml up -d --remove-orphans
-ExecStop=/usr/bin/docker compose --env-file ${CONFIG_DIR}/.env -f ${CONFIG_DIR}/app.yml stop
-ExecReload=/usr/bin/docker compose --env-file ${CONFIG_DIR}/.env -f ${CONFIG_DIR}/app.yml restart
-
+# Non-default installs: bake paths so the CLI resolves config/data correctly
+# even when TOKENPANEL_* is not in the systemd manager environment.
+Environment=TOKENPANEL_INSTALL_DIR=${INSTALL_DIR}
+Environment=TOKENPANEL_CONFIG_DIR=${CONFIG_DIR}
+# Minimal PATH is too small for bare `docker` / `docker compose` used by the CLI.
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+# Health wait (60s) + post migrations can exceed the default oneshot start timeout.
+TimeoutStartSec=300
 TimeoutStopSec=120
+
+ExecStart=${INSTALL_DIR}/manager/bin/tokenpanel start
+ExecStop=${INSTALL_DIR}/manager/bin/tokenpanel stop
+ExecReload=${INSTALL_DIR}/manager/bin/tokenpanel restart
 
 Restart=on-failure
 RestartSec=10

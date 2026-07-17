@@ -9,15 +9,24 @@
 # Tracking: packages/db migrator writes each applied id+checksum into the
 # `_migrations` collection. Re-running pre or post is safe — already-applied
 # files are skipped; edited-after-apply files abort with a checksum error.
-# There is no RUN_POST_MIGRATIONS env gate: post always runs in Phase 6 / on
-# start; a release with no pending post files simply reports 0 applied.
+# There is no RUN_POST_MIGRATIONS env gate: post always runs after the api is
+# healthy on every bring-up path that is supposed to leave a fully-migrated
+# schema. Call sites (all idempotent via `_migrations`):
+#   - tokenpanel update        Phase 6 (after swap)
+#   - tokenpanel start         after health
+#   - tokenpanel rebuild       after force-recreate + health
+#   - tokenpanel-setup         after first-start health
+#   - systemd ExecStart        → tokenpanel start (not raw compose)
+# A release with no pending post files simply reports 0 applied / N skipped.
+# API process boot runs pre/ only — never post/ (restarts must not re-run
+# destructive work).
 #
 # Two entry points:
 #   run_migrations <phase>
 #       exec into the currently-running api container. Used for post-deploy
-#       migrations (Phase 6, after the swap), first-start post apply, and the
-#       standalone `tokenpanel migrate` command — in all cases the live
-#       container already runs the image whose migration files we want.
+#       migrations (all call sites above) and the standalone `tokenpanel
+#       migrate` command — in all cases the live container already runs the
+#       image whose migration files we want.
 #   run_migrations_image <phase> <image_tag>
 #       spawn a one-shot container from a *specific* pre-built image
 #       (tokenpanel/app:<tag>) on the same compose network/env, without

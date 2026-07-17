@@ -46,14 +46,14 @@ Usage: tokenpanel <command> [args]
 
 Lifecycle:
   status       Show container state, version, pending migrations, disk usage
-  start        Start all services (preflight + health check)
+  start        Start all services (preflight + health + post migrations)
   stop         Stop all services
   restart      Restart all services
-  rebuild      Force-recreate containers (keeps data)
+  rebuild      Rebuild image, recreate containers, apply post migrations
 
 Updates:
   update       Update to latest stable (backup → build → migrate → swap)
-  migrate      Run pending migrations without updating image
+  migrate      Run pending migrations without updating image (default: pre)
 
 Backup:
   backup       Create a mongodump backup
@@ -267,6 +267,12 @@ cmd_rebuild() {
   step "rebuild" "force-recreating containers (keeping data)..."
   docker compose -f "$APP_YML" up -d --force-recreate --remove-orphans
   wait_for_health api 60 || die "api did not become healthy"
+  # Same post-deploy step as cmd_start: API boot only runs pre/. Rebuild can
+  # ship new post/ files with the new image; apply them now so the live schema
+  # matches the rebuilt code. Already-applied ids are skipped (idempotent).
+  source "${SCRIPT_DIR}/../lib/migrate.sh"
+  step "rebuild" "applying pending post-deploy migrations..."
+  run_migrations "post" || die "post-migration failed after rebuild"
   ok "rebuilt"
 }
 
@@ -415,6 +421,15 @@ cmd_update() {
   ok "post-deploy migrations applied"
 
   cleanup_old_images
+
+  # Refresh the systemd unit from the template so boot/reboot use
+  # `tokenpanel start` (health + post migrations), not raw compose up.
+  # Safe to re-run: rewrites unit, daemon-reload, enable. Skip if systemd
+  # is unavailable (non-systemd hosts still use the CLI).
+  if command -v systemctl >/dev/null 2>&1; then
+    source "${SCRIPT_DIR}/../lib/systemd.sh"
+    install_systemd_service || warn "could not refresh systemd unit — boot may still use raw compose; re-run tokenpanel-setup or install the unit manually"
+  fi
 
   echo
   ok "══════════════════════════════════════"

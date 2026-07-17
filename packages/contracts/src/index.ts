@@ -64,6 +64,7 @@ export {
   panelPermissionSchema,
   effectivePanelPermissions,
   hasPanelPermission,
+  writeCompanionOf,
   canGrantPanelAccess,
 } from "./panel-permissions.ts";
 export type {
@@ -74,10 +75,10 @@ export type {
 export {
   TOKENS_PER_MILLION_COUNT,
   currencyCodeSchema,
-  moneyMinorSchema,
+  moneyUnitsSchema,
   moneySchema,
 } from "./money.ts";
-export type { CurrencyCode, Money, MoneyMinor } from "./money.ts";
+export type { CurrencyCode, Money, MoneyUnits } from "./money.ts";
 
 export {
   CUSTOMER_STATUSES,

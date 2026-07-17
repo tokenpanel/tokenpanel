@@ -112,8 +112,8 @@ export default function SettingsPage(): React.ReactElement {
   const { user, updateEmail, changePassword } = useAuth();
   const isAdmin = user?.role === "admin";
   const canWriteInvites = hasPermission(user, "invites:write");
-  const canReadInvites =
-    hasPermission(user, "invites:read") || canWriteInvites;
+  // write implies read via hasPanelPermission (contracts).
+  const canReadInvites = hasPermission(user, "invites:read");
 
   /** Permissions this actor may attach to an invite (own effective set). */
   const grantablePermissions = useMemo((): ReadonlySet<PanelPermission> => {
@@ -500,7 +500,7 @@ export default function SettingsPage(): React.ReactElement {
         </TabsContent>
 
         <TabsContent value="invites">
-          {canReadInvites || canWriteInvites ? (
+          {canReadInvites ? (
             <div className="flex flex-col gap-4">
               {createdToken ? (
                 <Alert variant="info">

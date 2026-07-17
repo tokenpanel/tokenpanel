@@ -18,8 +18,8 @@ function baseForm(over: Partial<FormState> = {}): FormState {
     inputModalities: "text",
     outputModalities: "text",
     status: "none",
-    inputMinor: "0",
-    outputMinor: "0",
+    inputUnits: "0",
+    outputUnits: "0",
     currency: "USD",
     marginBps: "0",
     firstProviderId: "p1",
@@ -45,8 +45,8 @@ function mkModel(over: Partial<FetchedModel> = {}): FetchedModel {
     modalities: { input: ["text", "image"], output: ["text"] },
     status: "beta",
     cost: {
-      inputMinorPerMillion: 300,
-      outputMinorPerMillion: 1500,
+      inputUnitsPerMillion: 300,
+      outputUnitsPerMillion: 1500,
     },
     ...over,
   } as FetchedModel;
@@ -73,8 +73,8 @@ test("formFromFetched: maps all fields, keeps currency/marginBps/firstProviderId
   expect(f.inputModalities).toBe("text, image");
   expect(f.outputModalities).toBe("text");
   expect(f.status).toBe("beta");
-  expect(f.inputMinor).toBe("300");
-  expect(f.outputMinor).toBe("1500");
+  expect(f.inputUnits).toBe("300");
+  expect(f.outputUnits).toBe("1500");
   expect(f.firstUpstreamModelId).toBe("openai/gpt-5");
   // preserved from base
   expect(f.currency).toBe("EUR");
@@ -85,9 +85,9 @@ test("formFromFetched: maps all fields, keeps currency/marginBps/firstProviderId
 test("formFromFetched: no cost → keeps base price", () => {
   const m = mkModel();
   delete m.cost;
-  const f = formFromFetched(m, baseForm({ inputMinor: "5", outputMinor: "9" }));
-  expect(f.inputMinor).toBe("5");
-  expect(f.outputMinor).toBe("9");
+  const f = formFromFetched(m, baseForm({ inputUnits: "5", outputUnits: "9" }));
+  expect(f.inputUnits).toBe("5");
+  expect(f.outputUnits).toBe("9");
 });
 
 test("formFromFetched: missing optional caps default false, status undefined -> none", () => {

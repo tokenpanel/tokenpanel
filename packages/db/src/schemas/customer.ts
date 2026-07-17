@@ -13,7 +13,7 @@ import {
   BalanceAdjustmentCreateInput as BalanceAdjustmentCreateInputSchema,
   CustomerStatus,
   BalanceAdjustmentReason,
-  MoneyMinor,
+  MoneyUnits,
 } from "./effect/customer.ts";
 import { withParseApi } from "./parse.ts";
 import type { MutableDeep } from "./mutable.ts";
@@ -29,7 +29,7 @@ export const balanceAdjustmentCreateInput = withParseApi(
 );
 export const customerStatus = withParseApi(CustomerStatus);
 export const balanceAdjustmentReason = withParseApi(BalanceAdjustmentReason);
-export const _balanceMoneyMinor = withParseApi(MoneyMinor);
+export const _balanceMoneyUnits = withParseApi(MoneyUnits);
 
 export type CustomerDoc = MutableDeep<
   import("effect").Schema.Schema.Type<typeof CustomerDocSchema>

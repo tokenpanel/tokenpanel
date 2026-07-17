@@ -284,9 +284,9 @@ publicAnthropic.post("/v1/messages", async (c) => {
           protocol: "anthropic",
           reservation: p.reservation,
           limitReservation: p.limitReservation,
-          reservedMinor: p.reservation?.reservedMinor ?? 0,
+          reservedUnits: p.reservation?.reservedUnits ?? 0,
           startedAtMs: Date.now(),
-          priceMinorOverride:
+          priceUnitsOverride:
             p.ctx.kind === "management_internal" ? 0 : undefined,
           signal: abortSignal,
         });
@@ -319,10 +319,10 @@ publicAnthropic.post("/v1/messages", async (c) => {
 
   const { ctx, request, model, rules, reservation, limitReservation } =
     prepExit.value;
-  const reservedMinor = reservation?.reservedMinor ?? 0;
+  const reservedUnits = reservation?.reservedUnits ?? 0;
   const actor = actorForChatContext(ctx);
   const start = Date.now();
-  const priceMinorOverride =
+  const priceUnitsOverride =
     ctx.kind === "management_internal" ? 0 : undefined;
 
   c.header("Content-Type", "text/event-stream");
@@ -340,9 +340,9 @@ publicAnthropic.post("/v1/messages", async (c) => {
     protocol: "anthropic",
     reservation,
     limitReservation,
-    reservedMinor,
+    reservedUnits,
     startedAtMs: start,
-    priceMinorOverride,
+    priceUnitsOverride,
     signal: abortSignal,
   });
 

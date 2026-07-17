@@ -13,8 +13,8 @@ export type AnalyticsSummary = {
       currency: string;
       requests: number;
       tokens: number;
-      costMinor: number;
-      priceMinor: number;
+      costUnits: number;
+      priceUnits: number;
     }>;
   };
   topCustomers: Array<{
@@ -23,8 +23,8 @@ export type AnalyticsSummary = {
     currency: string;
     requests: number;
     tokens: number;
-    costMinor: number;
-    priceMinor: number;
+    costUnits: number;
+    priceUnits: number;
   }>;
 };
 

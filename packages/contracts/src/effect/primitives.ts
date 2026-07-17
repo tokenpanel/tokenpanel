@@ -67,13 +67,17 @@ export const CurrencyCode = Schema.String.pipe(
 
 export type CurrencyCode = Schema.Schema.Type<typeof CurrencyCode>;
 
-/** Non-negative integer minor units (cents, etc.). */
-export const MoneyMinor = SafeInt.pipe(Schema.nonNegative());
+/**
+ * Non-negative integer currency units (never floats).
+ * Scale is ISO 4217 exponent for the currency code on Money:
+ * 1 unit = 10^(-exp) of the major unit (USD exp=2 → $0.01, JPY exp=0 → ¥1).
+ */
+export const MoneyUnits = SafeInt.pipe(Schema.nonNegative());
 
-export type MoneyMinor = Schema.Schema.Type<typeof MoneyMinor>;
+export type MoneyUnits = Schema.Schema.Type<typeof MoneyUnits>;
 
 export const Money = Schema.Struct({
-  amountMinor: MoneyMinor,
+  amountUnits: MoneyUnits,
   currency: CurrencyCode,
 });
 

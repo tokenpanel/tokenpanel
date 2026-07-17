@@ -312,9 +312,9 @@ publicOpenAI.post("/v1/chat/completions", async (c) => {
           protocol: "openai",
           reservation: p.reservation,
           limitReservation: p.limitReservation,
-          reservedMinor: p.reservation?.reservedMinor ?? 0,
+          reservedUnits: p.reservation?.reservedUnits ?? 0,
           startedAtMs: Date.now(),
-          priceMinorOverride:
+          priceUnitsOverride:
             p.ctx.kind === "management_internal" ? 0 : undefined,
           signal: abortSignal,
         });
@@ -347,10 +347,10 @@ publicOpenAI.post("/v1/chat/completions", async (c) => {
 
   const { ctx, request, model, rules, reservation, limitReservation } =
     prepExit.value;
-  const reservedMinor = reservation?.reservedMinor ?? 0;
+  const reservedUnits = reservation?.reservedUnits ?? 0;
   const actor = actorForChatContext(ctx);
   const start = Date.now();
-  const priceMinorOverride =
+  const priceUnitsOverride =
     ctx.kind === "management_internal" ? 0 : undefined;
 
   c.header("Content-Type", "text/event-stream");
@@ -370,9 +370,9 @@ publicOpenAI.post("/v1/chat/completions", async (c) => {
     protocol: "openai",
     reservation,
     limitReservation,
-    reservedMinor,
+    reservedUnits,
     startedAtMs: start,
-    priceMinorOverride,
+    priceUnitsOverride,
     signal: abortSignal,
   });
 

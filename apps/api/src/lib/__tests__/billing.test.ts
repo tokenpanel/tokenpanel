@@ -42,8 +42,8 @@ function model(over: Partial<ModelDoc> = {}): ModelDoc {
     modalities: { input: ["text"], output: ["text"] },
     status: undefined,
     price: {
-      inputMinorPerMillion: 300,
-      outputMinorPerMillion: 600,
+      inputUnitsPerMillion: 300,
+      outputUnitsPerMillion: 600,
     },
     marginBps: 0,
     currency: "USD",
@@ -58,9 +58,9 @@ function model(over: Partial<ModelDoc> = {}): ModelDoc {
 test("applyTokenSchedule: non-reasoning output + reasoning tier", () => {
   const amount = applyTokenSchedule(
     {
-      inputMinorPerMillion: 1_000_000,
-      outputMinorPerMillion: 2_000_000,
-      reasoningMinorPerMillion: 4_000_000,
+      inputUnitsPerMillion: 1_000_000,
+      outputUnitsPerMillion: 2_000_000,
+      reasoningUnitsPerMillion: 4_000_000,
     },
     {
       promptTokens: 1,
@@ -80,10 +80,10 @@ test("computeCharges: basic input+output, ceil per bucket", () => {
     model: m,
     usage: { promptTokens: 1000, completionTokens: 500, totalTokens: 1500 },
   });
-  expect(c.priceMinor).toBe(
+  expect(c.priceUnits).toBe(
     Math.ceil((1000 * 300) / 1_000_000) + Math.ceil((500 * 600) / 1_000_000),
   );
-  expect(c.costMinor).toBe(0);
+  expect(c.costUnits).toBe(0);
   expect(c.currency).toBe("USD");
 });
 
@@ -91,8 +91,8 @@ test("computeCharges: price uses entry override when present", () => {
   const m = model();
   const e = entry({
     price: {
-      inputMinorPerMillion: 1000,
-      outputMinorPerMillion: 2000,
+      inputUnitsPerMillion: 1000,
+      outputUnitsPerMillion: 2000,
     },
   });
   const c = computeCharges({
@@ -100,7 +100,7 @@ test("computeCharges: price uses entry override when present", () => {
     model: m,
     usage: { promptTokens: 1000, completionTokens: 500, totalTokens: 1500 },
   });
-  expect(c.priceMinor).toBe(
+  expect(c.priceUnits).toBe(
     Math.ceil((1000 * 1000) / 1_000_000) + Math.ceil((500 * 2000) / 1_000_000),
   );
 });
@@ -109,8 +109,8 @@ test("computeCharges: cost uses entry.cost when present", () => {
   const m = model();
   const e = entry({
     cost: {
-      inputMinorPerMillion: 100,
-      outputMinorPerMillion: 200,
+      inputUnitsPerMillion: 100,
+      outputUnitsPerMillion: 200,
     },
   });
   const c = computeCharges({
@@ -118,7 +118,7 @@ test("computeCharges: cost uses entry.cost when present", () => {
     model: m,
     usage: { promptTokens: 1000, completionTokens: 500, totalTokens: 1500 },
   });
-  expect(c.costMinor).toBe(
+  expect(c.costUnits).toBe(
     Math.ceil((1000 * 100) / 1_000_000) + Math.ceil((500 * 200) / 1_000_000),
   );
 });
@@ -129,17 +129,17 @@ test("computeCharges: cost = 0 when no entry.cost schedule", () => {
     model: model(),
     usage: { promptTokens: 1000, completionTokens: 500, totalTokens: 1500 },
   });
-  expect(c.costMinor).toBe(0);
+  expect(c.costUnits).toBe(0);
 });
 
 test("computeCharges: reasoning is inside completion — no double charge", () => {
   const m = model({
     price: {
-      inputMinorPerMillion: 300,
-      outputMinorPerMillion: 600,
-      reasoningMinorPerMillion: 900,
-      cacheReadMinorPerMillion: 30,
-      cacheWriteMinorPerMillion: 40,
+      inputUnitsPerMillion: 300,
+      outputUnitsPerMillion: 600,
+      reasoningUnitsPerMillion: 900,
+      cacheReadUnitsPerMillion: 30,
+      cacheWriteUnitsPerMillion: 40,
     },
   });
   // completion=500 includes reasoning=200 → bill 300@output + 200@reasoning.
@@ -157,7 +157,7 @@ test("computeCharges: reasoning is inside completion — no double charge", () =
       cacheAccounting: "subset",
     },
   });
-  expect(c.priceMinor).toBe(
+  expect(c.priceUnits).toBe(
     Math.ceil((850 * 300) / 1_000_000) + // uncached prompt
       Math.ceil((300 * 600) / 1_000_000) + // non-reasoning output only
       Math.ceil((200 * 900) / 1_000_000) +
@@ -170,9 +170,9 @@ test("computeCharges: OpenAI subset cache — uncached+cache tier not double-bil
   // Reproduction: full prompt@input + cache@tier = 1050; correct subset = 550.
   const m = model({
     price: {
-      inputMinorPerMillion: 1_000_000,
-      outputMinorPerMillion: 0,
-      cacheReadMinorPerMillion: 100_000,
+      inputUnitsPerMillion: 1_000_000,
+      outputUnitsPerMillion: 0,
+      cacheReadUnitsPerMillion: 100_000,
     },
   });
   const c = computeCharges({
@@ -187,17 +187,17 @@ test("computeCharges: OpenAI subset cache — uncached+cache tier not double-bil
     },
   });
   // 500 uncached * 1 + 500 cached * 0.1 = 500 + 50 = 550
-  expect(c.priceMinor).toBe(550);
-  expect(c.priceMinor).not.toBe(1050);
+  expect(c.priceUnits).toBe(550);
+  expect(c.priceUnits).not.toBe(1050);
 });
 
 test("computeCharges: Anthropic additive cache even when cache < input", () => {
   // Amount heuristic would peel to 550; Anthropic requires 1000+500 = 1050.
   const m = model({
     price: {
-      inputMinorPerMillion: 1_000_000,
-      outputMinorPerMillion: 0,
-      cacheReadMinorPerMillion: 100_000,
+      inputUnitsPerMillion: 1_000_000,
+      outputUnitsPerMillion: 0,
+      cacheReadUnitsPerMillion: 100_000,
     },
   });
   const c = computeCharges({
@@ -212,15 +212,15 @@ test("computeCharges: Anthropic additive cache even when cache < input", () => {
     },
   });
   // 1000*1 + 500*0.1 = 1000 + 50 = 1050
-  expect(c.priceMinor).toBe(1050);
+  expect(c.priceUnits).toBe(1050);
 });
 
 test("computeCharges: protocol override stamps additive without usage field", () => {
   const m = model({
     price: {
-      inputMinorPerMillion: 1_000_000,
-      outputMinorPerMillion: 0,
-      cacheReadMinorPerMillion: 100_000,
+      inputUnitsPerMillion: 1_000_000,
+      outputUnitsPerMillion: 0,
+      cacheReadUnitsPerMillion: 100_000,
     },
   });
   const c = computeCharges({
@@ -235,15 +235,15 @@ test("computeCharges: protocol override stamps additive without usage field", ()
     },
     cacheAccounting: "additive",
   });
-  expect(c.priceMinor).toBe(1050);
+  expect(c.priceUnits).toBe(1050);
 });
 
 test("computeCharges: no reasoning rate falls back to full completion at output", () => {
   const m = model({
     price: {
-      inputMinorPerMillion: 300,
-      outputMinorPerMillion: 600,
-      // no reasoningMinorPerMillion
+      inputUnitsPerMillion: 300,
+      outputUnitsPerMillion: 600,
+      // no reasoningUnitsPerMillion
     },
   });
   const c = computeCharges({
@@ -257,7 +257,7 @@ test("computeCharges: no reasoning rate falls back to full completion at output"
     },
   });
   // reasoning rate defaults to output rate → full completion charged once.
-  expect(c.priceMinor).toBe(
+  expect(c.priceUnits).toBe(
     Math.ceil((1000 * 300) / 1_000_000) + Math.ceil((500 * 600) / 1_000_000),
   );
 });
@@ -265,9 +265,9 @@ test("computeCharges: no reasoning rate falls back to full completion at output"
 test("computeCharges: reasoning > completion clamps (never negative non-reasoning)", () => {
   const m = model({
     price: {
-      inputMinorPerMillion: 0,
-      outputMinorPerMillion: 1000,
-      reasoningMinorPerMillion: 2000,
+      inputUnitsPerMillion: 0,
+      outputUnitsPerMillion: 1000,
+      reasoningUnitsPerMillion: 2000,
     },
   });
   const c = computeCharges({
@@ -280,7 +280,7 @@ test("computeCharges: reasoning > completion clamps (never negative non-reasonin
       totalTokens: 100,
     },
   });
-  expect(c.priceMinor).toBe(Math.ceil((100 * 2000) / 1_000_000));
+  expect(c.priceUnits).toBe(Math.ceil((100 * 2000) / 1_000_000));
 });
 
 test("computeCharges: zero tokens → zero charges", () => {
@@ -289,13 +289,13 @@ test("computeCharges: zero tokens → zero charges", () => {
     model: model(),
     usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
   });
-  expect(c.priceMinor).toBe(0);
-  expect(c.costMinor).toBe(0);
+  expect(c.priceUnits).toBe(0);
+  expect(c.costUnits).toBe(0);
 });
 
 test("computeCharges: missing optional price fields contribute 0", () => {
   const m = model({
-    price: { inputMinorPerMillion: 300, outputMinorPerMillion: 600 },
+    price: { inputUnitsPerMillion: 300, outputUnitsPerMillion: 600 },
   });
   const c = computeCharges({
     entry: entry(),
@@ -309,7 +309,7 @@ test("computeCharges: missing optional price fields contribute 0", () => {
       totalTokens: 1850,
     },
   });
-  expect(c.priceMinor).toBe(
+  expect(c.priceUnits).toBe(
     Math.ceil((1000 * 300) / 1_000_000) + Math.ceil((500 * 600) / 1_000_000),
   );
 });
@@ -386,34 +386,34 @@ test("estimatePromptTokens: empty content still returns at least 1", () => {
 test("worstCaseActiveEntryPrice: floor = model.price when no entry overrides", () => {
   const m = model();
   const p = worstCaseActiveEntryPrice(m);
-  expect(p.inputMinorPerMillion).toBe(m.price.inputMinorPerMillion);
-  expect(p.outputMinorPerMillion).toBe(m.price.outputMinorPerMillion);
+  expect(p.inputUnitsPerMillion).toBe(m.price.inputUnitsPerMillion);
+  expect(p.outputUnitsPerMillion).toBe(m.price.outputUnitsPerMillion);
 });
 
 test("worstCaseActiveEntryPrice: picks max across active entry overrides", () => {
   const m = model({
-    price: { inputMinorPerMillion: 300, outputMinorPerMillion: 600 },
+    price: { inputUnitsPerMillion: 300, outputUnitsPerMillion: 600 },
     entries: [
-      entry({ id: "e1", priority: 0, price: { inputMinorPerMillion: 1000, outputMinorPerMillion: 2000 } }),
-      entry({ id: "e2", priority: 1, price: { inputMinorPerMillion: 500, outputMinorPerMillion: 9000 } }),
+      entry({ id: "e1", priority: 0, price: { inputUnitsPerMillion: 1000, outputUnitsPerMillion: 2000 } }),
+      entry({ id: "e2", priority: 1, price: { inputUnitsPerMillion: 500, outputUnitsPerMillion: 9000 } }),
     ],
   });
   const p = worstCaseActiveEntryPrice(m);
-  expect(p.inputMinorPerMillion).toBe(1000);
-  expect(p.outputMinorPerMillion).toBe(9000);
+  expect(p.inputUnitsPerMillion).toBe(1000);
+  expect(p.outputUnitsPerMillion).toBe(9000);
 });
 
 test("worstCaseActiveEntryPrice: ignores inactive entries", () => {
   const m = model({
-    price: { inputMinorPerMillion: 300, outputMinorPerMillion: 600 },
+    price: { inputUnitsPerMillion: 300, outputUnitsPerMillion: 600 },
     entries: [
       entry({ id: "e1", priority: 0 }),
-      entry({ id: "e2", priority: 1, active: false, price: { inputMinorPerMillion: 9999, outputMinorPerMillion: 9999 } }),
+      entry({ id: "e2", priority: 1, active: false, price: { inputUnitsPerMillion: 9999, outputUnitsPerMillion: 9999 } }),
     ],
   });
   const p = worstCaseActiveEntryPrice(m);
-  expect(p.inputMinorPerMillion).toBe(300);
-  expect(p.outputMinorPerMillion).toBe(600);
+  expect(p.inputUnitsPerMillion).toBe(300);
+  expect(p.outputUnitsPerMillion).toBe(600);
 });
 
 test("resolveCompletionCap: explicit max_tokens wins", () => {

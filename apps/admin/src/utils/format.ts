@@ -1,6 +1,7 @@
 /**
- * ISO 4217 minor-unit exponents for currencies we format.
- * amountMinor is always integer minor units (JPY yen=1, USD cent=1, KWD fils=1).
+ * ISO 4217 decimal exponents for display/scale.
+ * amountUnits is always an integer: 1 unit = 10^(-exp) of the major unit
+ * (USD: $0.01, JPY: ¥1, KWD: 0.001 KWD).
  *
  * Sources: ISO 4217 + common payment-processor tables (Stripe zero-decimal list).
  * Unknown codes default to 2 (ISO majority) — not a signal of validity.
@@ -49,12 +50,12 @@ export function currencyExponent(currency: string): number {
 }
 
 /**
- * Format minor units as display money. Always includes the ISO currency code so
+ * Format units as display money. Always includes the ISO currency code so
  * dollar-symbol currencies (USD/AUD/CAD/…) are never ambiguous in multi-currency UIs.
  */
-export function formatMoney(amountMinor: number, currency: string): string {
-  const sign = amountMinor < 0 ? "-" : "";
-  const abs = Math.abs(amountMinor);
+export function formatMoney(amountUnits: number, currency: string): string {
+  const sign = amountUnits < 0 ? "-" : "";
+  const abs = Math.abs(amountUnits);
   const code = currency.toUpperCase();
   const exp = currencyExponent(code);
   const divisor = 10 ** exp;

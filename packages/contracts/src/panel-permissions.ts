@@ -110,7 +110,7 @@ export const PANEL_PERMISSION_DEFINITIONS = [
     value: "invites:write",
     group: "Members",
     description:
-      "Create and revoke invites (may only grant role/permissions the inviter holds).",
+      "Create and revoke invites; includes listing them (write implies read).",
   },
   {
     value: "organization:write",
@@ -163,13 +163,42 @@ export function effectivePanelPermissions(
   return permissions ?? [];
 }
 
+/**
+ * Companion write atom for a `:read` permission, if one exists in the catalog.
+ * e.g. `invites:read` → `invites:write`. Returns null when there is no write
+ * pair (`dashboard:read`, `usage:read`, …) or the required value is not `:read`.
+ */
+export function writeCompanionOf(
+  required: PanelPermission,
+): PanelPermission | null {
+  if (!required.endsWith(":read")) return null;
+  const write = `${required.slice(0, -":read".length)}:write`;
+  return (PANEL_PERMISSIONS as readonly string[]).includes(write)
+    ? (write as PanelPermission)
+    : null;
+}
+
+/**
+ * Whether a membership holds `required`.
+ * Admins hold the full catalog. Members need an explicit grant.
+ *
+ * **Write implies read:** holding `resource:write` also satisfies checks for
+ * `resource:read` when both atoms exist in the catalog. This keeps list/view
+ * gates working for write-only grants (invite managers, balance operators, …)
+ * without forcing admins to mint the read atom separately. Grant composition
+ * (`canGrantPanelAccess` / `effectivePanelPermissions`) still uses stored
+ * atoms only — write does not auto-expand into a grantable read atom.
+ */
 export function hasPanelPermission(
   role: "admin" | "member",
   permissions: readonly PanelPermission[] | undefined,
   required: PanelPermission,
 ): boolean {
   if (role === "admin") return true;
-  return (permissions ?? []).includes(required);
+  const held = permissions ?? [];
+  if (held.includes(required)) return true;
+  const write = writeCompanionOf(required);
+  return write !== null && held.includes(write);
 }
 
 /**

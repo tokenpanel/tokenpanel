@@ -1,8 +1,13 @@
 /**
  * Effect Schema decode at Mongo repository boundaries (tasks 7.3–7.4).
  * Corrupt/legacy docs → PersistenceDataError; never trusted casts.
+ *
+ * Read path always runs {@link normalizeLegacyMoneyFields} first so documents
+ * still carrying pre-rename *Minor keys decode under *Units schemas during
+ * the swap→post migration window (and as a permanent no-op after post/).
  */
 import { Effect, Either, ParseResult, Schema } from "effect";
+import { normalizeLegacyMoneyFields } from "@tokenpanel/db";
 import {
   PersistenceDataError,
   SAFE_MESSAGES,
@@ -42,7 +47,8 @@ export function decodeDocument<A, I>(
   collection: string,
 ): Effect.Effect<A, PersistenceDataError> {
   return Effect.suspend(() => {
-    const result = Schema.decodeUnknownEither(schema)(value);
+    const normalized = normalizeLegacyMoneyFields(value);
+    const result = Schema.decodeUnknownEither(schema)(normalized);
     if (Either.isRight(result)) {
       return Effect.succeed(result.right);
     }

@@ -4,19 +4,19 @@
 import type { Schema } from "effect";
 import {
   CurrencyCode,
-  MoneyMinor,
+  MoneyUnits,
   Money,
 } from "./primitives.ts";
 
 export {
   CurrencyCode,
-  MoneyMinor,
+  MoneyUnits,
   Money,
   CurrencyCode as currencyCodeSchema,
-  MoneyMinor as moneyMinorSchema,
+  MoneyUnits as moneyUnitsSchema,
   Money as moneySchema,
 };
 
 export type CurrencyCodeType = Schema.Schema.Type<typeof CurrencyCode>;
-export type MoneyMinorType = Schema.Schema.Type<typeof MoneyMinor>;
+export type MoneyUnitsType = Schema.Schema.Type<typeof MoneyUnits>;
 export type MoneyType = Schema.Schema.Type<typeof Money>;

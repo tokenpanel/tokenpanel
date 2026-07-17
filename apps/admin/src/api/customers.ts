@@ -32,7 +32,7 @@ export type CustomerListResponse = {
 
 export type BalanceAdjustment = {
   _id: string;
-  amountMinor: number;
+  amountUnits: number;
   currency: string;
   reason: BalanceAdjustmentReason;
   note?: string | null;
@@ -61,15 +61,15 @@ export type UsageByModel = {
   model: string;
   requests: number;
   tokens: number;
-  costMinor: number;
-  priceMinor: number;
+  costUnits: number;
+  priceUnits: number;
 };
 
 export type CustomerUsageResponse = {
   totalRequests: number;
   totalTokens: number;
-  totalCostMinor: number;
-  totalPriceMinor: number;
+  totalCostUnits: number;
+  totalPriceUnits: number;
   currency: string;
   byModel: UsageByModel[];
 };

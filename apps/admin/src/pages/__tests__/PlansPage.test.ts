@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { toApiRule, validateDraft, formatWindow, formatAmountMinor } from "../PlansPage.tsx";
+import { toApiRule, validateDraft, formatWindow, formatAmountUnits } from "../PlansPage.tsx";
 
 function draft(over: Record<string, unknown> = {}) {
   return {
@@ -17,8 +17,8 @@ function draft(over: Record<string, unknown> = {}) {
   } as never;
 }
 
-test("toApiRule: currency uppercase for spend_minor, undefined for others", () => {
-  const r1 = toApiRule({ id: "x", windowSeconds: "3600", dimension: "spend_minor", capValue: "100", scope: "customer", scopeTarget: "", currency: "usd", active: true } as never);
+test("toApiRule: currency uppercase for spend_units, undefined for others", () => {
+  const r1 = toApiRule({ id: "x", windowSeconds: "3600", dimension: "spend_units", capValue: "100", scope: "customer", scopeTarget: "", currency: "usd", active: true } as never);
   expect(r1.currency).toBe("USD");
   const r2 = toApiRule({ id: "x", windowSeconds: "3600", dimension: "tokens", capValue: "100", scope: "customer", scopeTarget: "", currency: "USD", active: true } as never);
   expect(r2.currency).toBeUndefined();
@@ -78,8 +78,8 @@ test("validateDraft: rule cap not positive → error", () => {
   expect(validateDraft(draft({ rateLimits: [r] }))).toBeTruthy();
 });
 
-test("validateDraft: spend_minor rule needs 3-letter currency", () => {
-  const r = { id: "r1", windowSeconds: "3600", dimension: "spend_minor", capValue: "100", scope: "customer", scopeTarget: "", currency: "US", active: true };
+test("validateDraft: spend_units rule needs 3-letter currency", () => {
+  const r = { id: "r1", windowSeconds: "3600", dimension: "spend_units", capValue: "100", scope: "customer", scopeTarget: "", currency: "US", active: true };
   expect(validateDraft(draft({ rateLimits: [r] }))).toBeTruthy();
   r.currency = "USD";
   expect(validateDraft(draft({ rateLimits: [r] }))).toBeNull();
@@ -150,14 +150,14 @@ test("formatWindow: fallback seconds", () => {
   expect(formatWindow(7260)).toBe("7260s");
 });
 
-test("formatAmountMinor: uses ISO-aware formatMoney (USD cents)", () => {
-  expect(formatAmountMinor(1000, "USD")).toBe("$10.00 USD");
-  expect(formatAmountMinor(0, "USD")).toBe("$0.00 USD");
-  expect(formatAmountMinor(12345, "USD")).toBe("$123.45 USD");
-  expect(formatAmountMinor(5, "USD")).toBe("$0.05 USD");
+test("formatAmountUnits: uses ISO-aware formatMoney (USD cents)", () => {
+  expect(formatAmountUnits(1000, "USD")).toBe("$10.00 USD");
+  expect(formatAmountUnits(0, "USD")).toBe("$0.00 USD");
+  expect(formatAmountUnits(12345, "USD")).toBe("$123.45 USD");
+  expect(formatAmountUnits(5, "USD")).toBe("$0.05 USD");
 });
 
-test("formatAmountMinor: zero-decimal JPY / BIF not divided by 100", () => {
-  expect(formatAmountMinor(1234, "JPY")).toBe("\u00a51234 JPY");
-  expect(formatAmountMinor(500, "BIF")).toBe("500 BIF");
+test("formatAmountUnits: zero-decimal JPY / BIF not divided by 100", () => {
+  expect(formatAmountUnits(1234, "JPY")).toBe("\u00a51234 JPY");
+  expect(formatAmountUnits(500, "BIF")).toBe("500 BIF");
 });

@@ -222,7 +222,12 @@ export const UsageRepoLive: Layer.Layer<UsageRepo, never, MongoDb> =
             const filter: Record<string, unknown> = {
               organizationId,
               customerId,
-              dimension,
+              // spend_units dual-read: legacy counters may still say spend_minor
+              // until post/ remaps (swap→post window).
+              dimension:
+                dimension === "spend_units"
+                  ? { $in: ["spend_units", "spend_minor"] }
+                  : dimension,
               windowSeconds,
               bucketStart,
             };
@@ -275,7 +280,10 @@ export const UsageRepoLive: Layer.Layer<UsageRepo, never, MongoDb> =
           Effect.gen(function* () {
             const mongoFilter: Record<string, unknown> = {
               customerId: filter.customerId,
-              dimension: filter.dimension,
+              dimension:
+                filter.dimension === "spend_units"
+                  ? { $in: ["spend_units", "spend_minor"] }
+                  : filter.dimension,
               windowSeconds: filter.windowSeconds,
               bucketStart: { $gte: filter.windowStart },
               scopeTarget: filter.scopeTarget,
@@ -296,7 +304,12 @@ export const UsageRepoLive: Layer.Layer<UsageRepo, never, MongoDb> =
               const filter = {
                 organizationId: params.organizationId,
                 customerId: params.customerId,
-                dimension: e.dimension,
+                // Match legacy spend_minor rows so we $inc the existing counter
+                // instead of creating a parallel spend_units stream mid-window.
+                dimension:
+                  e.dimension === "spend_units"
+                    ? { $in: ["spend_units", "spend_minor"] }
+                    : e.dimension,
                 windowSeconds: e.windowSeconds,
                 bucketStart: e.bucketStart,
                 scopeTarget: e.scopeTarget,

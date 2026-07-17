@@ -2,7 +2,7 @@ import { test, expect } from "bun:test";
 import { mapModel } from "../../catalog-sources/models-dev.ts";
 import { listSources, getSource, listModels, clearCache } from "../../catalog-sources/registry.ts";
 
-test("mapModel: full model → maps all fields, cost usd*100 -> minor", () => {
+test("mapModel: full model → maps all fields, cost usd*100 -> units", () => {
   const m = mapModel("vercel", {
     id: "anthropic/claude-3-haiku",
     name: "Claude Haiku 3",
@@ -31,10 +31,10 @@ test("mapModel: full model → maps all fields, cost usd*100 -> minor", () => {
   expect(m.status).toBe("deprecated");
   expect(m.cost).toBeDefined();
   if (m.cost) {
-    expect(m.cost.inputMinorPerMillion).toBe(25);
-    expect(m.cost.outputMinorPerMillion).toBe(125);
-    expect(m.cost.cacheReadMinorPerMillion).toBe(3);
-    expect(m.cost.cacheWriteMinorPerMillion).toBe(30);
+    expect(m.cost.inputUnitsPerMillion).toBe(25);
+    expect(m.cost.outputUnitsPerMillion).toBe(125);
+    expect(m.cost.cacheReadUnitsPerMillion).toBe(3);
+    expect(m.cost.cacheWriteUnitsPerMillion).toBe(30);
   }
 });
 
@@ -52,9 +52,9 @@ test("mapModel: no cost → cost undefined", () => {
   expect(m?.cost).toBeUndefined();
 });
 
-test("mapModel: partial cost (only input+output) → no optional minors", () => {
+test("mapModel: partial cost (only input+output) → no optional unit rates", () => {
   const m = mapModel("p", { id: "foo/bar", cost: { input: 1, output: 2 } });
-  expect(m?.cost).toEqual({ inputMinorPerMillion: 100, outputMinorPerMillion: 200 });
+  expect(m?.cost).toEqual({ inputUnitsPerMillion: 100, outputUnitsPerMillion: 200 });
 });
 
 test("mapModel: unknown status → undefined (no ga invention)", () => {

@@ -6,6 +6,7 @@ import {
   isValidIp,
   UNKNOWN_CLIENT_IP,
   DEFAULT_TRUSTED_PROXY_CIDRS,
+  CLOUDFLARE_IP_CIDRS,
 } from "../client-ip.ts";
 
 describe("normalizeIp / isValidIp", () => {
@@ -106,7 +107,25 @@ describe("resolveClientIp", () => {
     expect(ip).toBe("198.51.100.30");
   });
 
-  test("trustCloudflare prefers CF-Connecting-IP over XFF", () => {
+  test("trustCloudflare + Cloudflare peer: prefers CF-Connecting-IP over XFF", () => {
+    // 104.16.0.1 is inside Cloudflare's 104.16.0.0/13 anycast range.
+    const ip = resolveClientIp({
+      peerAddress: "104.16.0.1",
+      headers: headers({
+        "cf-connecting-ip": "203.0.113.50",
+        "x-forwarded-for": "198.51.100.1",
+        "x-real-ip": "198.51.100.2",
+      }),
+      trustProxy: true,
+      trustedProxies: DEFAULT_TRUSTED_PROXY_CIDRS,
+      trustCloudflare: true,
+    });
+    expect(ip).toBe("203.0.113.50");
+  });
+
+  test("trustCloudflare + private reverse proxy: ignores spoofed CF-Connecting-IP", () => {
+    // Caddy (or any private peer) must not make client-supplied CF-Connecting-IP
+    // authoritative — fall through to sanitized X-Real-IP.
     const ip = resolveClientIp({
       peerAddress: "172.18.0.2",
       headers: headers({
@@ -118,7 +137,25 @@ describe("resolveClientIp", () => {
       trustedProxies: DEFAULT_TRUSTED_PROXY_CIDRS,
       trustCloudflare: true,
     });
-    expect(ip).toBe("203.0.113.50");
+    expect(ip).toBe("198.51.100.2");
+  });
+
+  test("trustCloudflare + Cloudflare peer works without CF ranges in TRUSTED_PROXIES", () => {
+    const ip = resolveClientIp({
+      peerAddress: "162.158.0.1",
+      headers: headers({ "cf-connecting-ip": "198.51.100.99" }),
+      trustProxy: true,
+      trustedProxies: [], // private defaults only — CF public IP not listed
+      trustCloudflare: true,
+    });
+    expect(ip).toBe("198.51.100.99");
+  });
+
+  test("CLOUDFLARE_IP_CIDRS covers known edge samples", () => {
+    expect(ipMatchesTrusted("104.16.0.1", CLOUDFLARE_IP_CIDRS)).toBe(true);
+    expect(ipMatchesTrusted("162.158.0.1", CLOUDFLARE_IP_CIDRS)).toBe(true);
+    expect(ipMatchesTrusted("172.18.0.2", CLOUDFLARE_IP_CIDRS)).toBe(false);
+    expect(ipMatchesTrusted("8.8.8.8", CLOUDFLARE_IP_CIDRS)).toBe(false);
   });
 
   test("untrusted peer: ignore headers even if trustProxy", () => {

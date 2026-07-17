@@ -40,7 +40,7 @@ export const historyQuery = withParseApi(HistoryQuery);
 export const usageDateRangeQuery = withParseApi(UsageDateRangeQuery);
 
 const BalanceAdjustBody = Schema.Struct({
-  amountMinor: SafeInt,
+  amountUnits: SafeInt,
   currency: CurrencyCode,
   reason: exactOptional(
     Schema.Literal("topup", "adjustment", "refund"),
@@ -164,7 +164,7 @@ app.post(
       adjustCustomerBalance({
         organizationId: orgId.toHexString(),
         customerId: id,
-        amountMinor: body.amountMinor,
+        amountUnits: body.amountUnits,
         currency: body.currency,
         reason: body.reason,
         note: body.note,

@@ -10,7 +10,7 @@ test("genRuleId: 12-char hex (timestamp+machine slice, process-stable)", () => {
   expect(id2).toHaveLength(12);
 });
 
-test("normalizeRules: applies id/scope/scopeTarget/currency/active defaults", () => {
+test("normalizeRules: applies id/scope/scopeTarget/active defaults", () => {
   const input: RateLimitRuleInput[] = [
     { windowSeconds: 3600, dimension: "tokens", capValue: 1000 },
   ];
@@ -19,8 +19,8 @@ test("normalizeRules: applies id/scope/scopeTarget/currency/active defaults", ()
   expect(out[0]?.id).toHaveLength(12);
   expect(out[0]?.scope).toBe("customer");
   expect(out[0]?.scopeTarget).toBeNull();
-  expect(out[0]?.currency).toBeNull();
   expect(out[0]?.active).toBe(true);
+  expect(out[0]).not.toHaveProperty("currency");
 });
 
 test("normalizeRules: preserves provided overrides", () => {
@@ -28,22 +28,20 @@ test("normalizeRules: preserves provided overrides", () => {
     {
       id: "fixed",
       windowSeconds: 18000,
-      dimension: "spend_minor",
+      dimension: "spend_units",
       capValue: 500,
       scope: "model",
       scopeTarget: "gpt",
-      currency: "USD",
       active: false,
     },
   ]);
   expect(out[0]).toMatchObject({
     id: "fixed",
     windowSeconds: 18000,
-    dimension: "spend_minor",
+    dimension: "spend_units",
     capValue: 500,
     scope: "model",
     scopeTarget: "gpt",
-    currency: "USD",
     active: false,
   });
 });

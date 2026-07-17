@@ -116,7 +116,7 @@ function resolveEntry(params: {
   }
 
   const frozenPrice =
-    typeof ctx.priceMinor === "number" && Number.isFinite(ctx.priceMinor);
+    typeof ctx.priceUnits === "number" && Number.isFinite(ctx.priceUnits);
   const frozenUpstream =
     upstreamModelId ??
     (typeof ctx.upstreamModelId === "string" ? ctx.upstreamModelId : undefined);
@@ -145,16 +145,16 @@ function reconstructFrozenAttribution(params: {
     params;
   const now = row.createdAt;
   const price = {
-    inputMinorPerMillion: priceSchedule.inputMinorPerMillion ?? 0,
-    outputMinorPerMillion: priceSchedule.outputMinorPerMillion ?? 0,
-    ...(priceSchedule.reasoningMinorPerMillion !== undefined
-      ? { reasoningMinorPerMillion: priceSchedule.reasoningMinorPerMillion }
+    inputUnitsPerMillion: priceSchedule.inputUnitsPerMillion ?? 0,
+    outputUnitsPerMillion: priceSchedule.outputUnitsPerMillion ?? 0,
+    ...(priceSchedule.reasoningUnitsPerMillion !== undefined
+      ? { reasoningUnitsPerMillion: priceSchedule.reasoningUnitsPerMillion }
       : {}),
-    ...(priceSchedule.cacheReadMinorPerMillion !== undefined
-      ? { cacheReadMinorPerMillion: priceSchedule.cacheReadMinorPerMillion }
+    ...(priceSchedule.cacheReadUnitsPerMillion !== undefined
+      ? { cacheReadUnitsPerMillion: priceSchedule.cacheReadUnitsPerMillion }
       : {}),
-    ...(priceSchedule.cacheWriteMinorPerMillion !== undefined
-      ? { cacheWriteMinorPerMillion: priceSchedule.cacheWriteMinorPerMillion }
+    ...(priceSchedule.cacheWriteUnitsPerMillion !== undefined
+      ? { cacheWriteUnitsPerMillion: priceSchedule.cacheWriteUnitsPerMillion }
       : {}),
   };
   const entry: ModelEntryDoc = {
@@ -280,13 +280,13 @@ export const reconcileOutboxRow = (
       row.upstreamModelId ??
       (typeof ctx.upstreamModelId === "string" ? ctx.upstreamModelId : undefined);
 
-    const priceMinor =
-      typeof ctx.priceMinor === "number" && Number.isFinite(ctx.priceMinor)
-        ? Math.floor(ctx.priceMinor)
+    const priceUnits =
+      typeof ctx.priceUnits === "number" && Number.isFinite(ctx.priceUnits)
+        ? Math.floor(ctx.priceUnits)
         : undefined;
-    const costMinorFrozen =
-      typeof ctx.costMinor === "number" && Number.isFinite(ctx.costMinor)
-        ? Math.floor(ctx.costMinor)
+    const costUnitsFrozen =
+      typeof ctx.costUnits === "number" && Number.isFinite(ctx.costUnits)
+        ? Math.floor(ctx.costUnits)
         : undefined;
     const frozenSchedule = ctx.priceSchedule as ChargeSchedule | undefined;
 
@@ -310,7 +310,7 @@ export const reconcileOutboxRow = (
     }
 
     const canReconstruct =
-      (priceMinor !== undefined || frozenSchedule !== undefined) &&
+      (priceUnits !== undefined || frozenSchedule !== undefined) &&
       !!upstreamModelId;
 
     if ((!model || !provider || !entry) && canReconstruct && upstreamModelId) {
@@ -322,7 +322,7 @@ export const reconcileOutboxRow = (
         frozenSchedule ??
         entry?.price ??
         model?.price ??
-        { inputMinorPerMillion: 0, outputMinorPerMillion: 0 };
+        { inputUnitsPerMillion: 0, outputUnitsPerMillion: 0 };
       const stubs = reconstructFrozenAttribution({
         row,
         ctx,
@@ -383,17 +383,17 @@ export const reconcileOutboxRow = (
       cacheAccounting: frozenMode,
     };
 
-    let finalPrice = priceMinor;
-    let finalCost = costMinorFrozen ?? 0;
+    let finalPrice = priceUnits;
+    let finalCost = costUnitsFrozen ?? 0;
     if (finalPrice === undefined) {
       const priceSchedule = frozenSchedule ?? entry.price ?? model.price;
       finalPrice = applyTokenSchedule(priceSchedule, usageWithMode, {
         cacheAccounting: frozenMode,
       });
-      if (ctx.priceMinorOverride === 0) finalPrice = 0;
+      if (ctx.priceUnitsOverride === 0) finalPrice = 0;
     }
     if (
-      costMinorFrozen === undefined &&
+      costUnitsFrozen === undefined &&
       ctx.costSchedule &&
       typeof ctx.costSchedule === "object"
     ) {
@@ -424,11 +424,11 @@ export const reconcileOutboxRow = (
       occurredAt = row.createdAt;
     }
 
-    const reservedMinor =
-      typeof ctx.reservedMinor === "number" &&
-      Number.isSafeInteger(ctx.reservedMinor) &&
-      ctx.reservedMinor > 0
-        ? ctx.reservedMinor
+    const reservedUnits =
+      typeof ctx.reservedUnits === "number" &&
+      Number.isSafeInteger(ctx.reservedUnits) &&
+      ctx.reservedUnits > 0
+        ? ctx.reservedUnits
         : 0;
 
     const limitReservation =
@@ -448,8 +448,8 @@ export const reconcileOutboxRow = (
       provider,
       protocol,
       usage: usageWithMode,
-      costMinor: finalCost,
-      priceMinor: finalPrice,
+      costUnits: finalCost,
+      priceUnits: finalPrice,
       currency,
       providerRequestId: row.providerRequestId,
       gatewayRequestId: row.gatewayRequestId,
@@ -458,7 +458,7 @@ export const reconcileOutboxRow = (
       errorCode: typeof ctx.errorCode === "string" ? ctx.errorCode : undefined,
       rules,
       occurredAt,
-      reservedMinor,
+      reservedUnits,
       limitReservation,
       rethrowGuardFailure: true,
       skipGuardAudit: true,

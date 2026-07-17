@@ -159,8 +159,8 @@ function extraFor(err: AppError): Record<string, unknown> | undefined {
   }
   if (err._tag === "InsufficientBalanceError") {
     const extra: Record<string, unknown> = {};
-    if (err.balanceMinor !== undefined) extra.balanceMinor = err.balanceMinor;
-    if (err.requiredMinor !== undefined) extra.requiredMinor = err.requiredMinor;
+    if (err.balanceUnits !== undefined) extra.balanceUnits = err.balanceUnits;
+    if (err.requiredUnits !== undefined) extra.requiredUnits = err.requiredUnits;
     if (err.currency !== undefined) extra.currency = err.currency;
     return Object.keys(extra).length > 0 ? extra : undefined;
   }

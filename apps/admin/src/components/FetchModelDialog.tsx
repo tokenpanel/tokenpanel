@@ -45,7 +45,7 @@ interface SearchEntry {
 
 function formatPrice(m: FetchedModel): string {
   return m.cost
-    ? `$${(m.cost.inputMinorPerMillion / 100).toFixed(2)} / $${(m.cost.outputMinorPerMillion / 100).toFixed(2)}`
+    ? `$${(m.cost.inputUnitsPerMillion / 100).toFixed(2)} / $${(m.cost.outputUnitsPerMillion / 100).toFixed(2)}`
     : "no price";
 }
 

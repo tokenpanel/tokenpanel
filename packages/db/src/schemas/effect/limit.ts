@@ -22,7 +22,7 @@ import {
 export const LimitDimension = Schema.Literal(
   "tokens",
   "requests",
-  "spend_minor",
+  "spend_units",
 );
 export type LimitDimension = Schema.Schema.Type<typeof LimitDimension>;
 
@@ -45,7 +45,6 @@ export const RateLimitRule = Schema.Struct({
     default: () => "customer" as const,
   }),
   scopeTarget: exactNullish(maxString(120)),
-  currency: exactNullish(CurrencyCode),
   active: Schema.optionalWith(Schema.Boolean, { default: () => true }),
 });
 
@@ -59,7 +58,6 @@ export const RateLimitRuleInput = Schema.Struct({
   capValue: Schema.Number.pipe(Schema.positive()),
   scope: exactOptional(LimitScope),
   scopeTarget: exactNullish(maxString(120)),
-  currency: exactNullish(CurrencyCode),
   active: exactOptional(Schema.Boolean),
 });
 
@@ -77,7 +75,7 @@ export const SubscriptionPlanDoc = Schema.Struct({
   interval: PlanInterval,
   intervalCount: Schema.optionalWith(PositiveSafeInt, { default: () => 1 }),
   includedCredit: Schema.optionalWith(Money, {
-    default: () => ({ amountMinor: 0, currency: "USD" }),
+    default: () => ({ amountUnits: 0, currency: "USD" }),
   }),
   includedTokens: Schema.optionalWith(NonNegativeSafeInt, {
     default: () => 0,
@@ -203,7 +201,7 @@ export const BudgetDoc = Schema.Struct({
   customerId: ObjectIdFromSelf,
   periodStart: DateFromSelf,
   periodEnd: DateFromSelf,
-  amountMinor: NonNegativeSafeInt,
+  amountUnits: NonNegativeSafeInt,
   currency: CurrencyCode,
   alertThresholds: Schema.optionalWith(
     Schema.Array(SafeInt.pipe(Schema.between(0, 100))),
@@ -216,7 +214,7 @@ export const BudgetCreateInput = Schema.Struct({
   customerId: ObjectIdFromString,
   periodStart: DateFromUnknown,
   periodEnd: DateFromUnknown,
-  amountMinor: NonNegativeSafeInt,
+  amountUnits: NonNegativeSafeInt,
   currency: CurrencyCode,
   alertThresholds: exactOptional(
     Schema.Array(SafeInt.pipe(Schema.between(0, 100))),
@@ -226,7 +224,7 @@ export const BudgetCreateInput = Schema.Struct({
 export const BudgetUpdateInput = Schema.Struct({
   periodStart: exactOptional(DateFromSelf),
   periodEnd: exactOptional(DateFromSelf),
-  amountMinor: exactOptional(NonNegativeSafeInt),
+  amountUnits: exactOptional(NonNegativeSafeInt),
   currency: exactOptional(CurrencyCode),
   alertThresholds: exactOptional(
     Schema.Array(SafeInt.pipe(Schema.between(0, 100))),

@@ -49,7 +49,7 @@ test("rateLimitStreamKey: different windows or dimensions are distinct", () => {
   expect(hour).not.toBe(reqs);
 });
 
-test("rateLimitStreamKey: model targets differ; currency differs for spend", () => {
+test("rateLimitStreamKey: model targets differ; spend has no currency axis", () => {
   const m1 = rateLimitStreamKey({
     dimension: "tokens",
     windowSeconds: 3600,
@@ -64,27 +64,18 @@ test("rateLimitStreamKey: model targets differ; currency differs for spend", () 
   });
   expect(m1).not.toBe(m2);
 
-  const usd = rateLimitStreamKey({
-    dimension: "spend_minor",
+  // Org is single-currency: spend streams ignore any legacy currency field.
+  const spendA = rateLimitStreamKey({
+    dimension: "spend_units",
     windowSeconds: 3600,
     scope: "customer",
-    currency: "usd",
   });
-  const eur = rateLimitStreamKey({
-    dimension: "spend_minor",
+  const spendB = rateLimitStreamKey({
+    dimension: "spend_units",
     windowSeconds: 3600,
     scope: "customer",
-    currency: "EUR",
   });
-  expect(usd).not.toBe(eur);
-  expect(usd).toBe(
-    rateLimitStreamKey({
-      dimension: "spend_minor",
-      windowSeconds: 3600,
-      scope: "customer",
-      currency: "USD",
-    }),
-  );
+  expect(spendA).toBe(spendB);
 });
 
 test("findDuplicateRateLimitStream: hour+week ok; two hours fail", () => {

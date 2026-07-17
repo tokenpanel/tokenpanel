@@ -13,7 +13,7 @@ export type DashboardSummary = {
     _id: string;
     name: string;
     email: string | null;
-    balance: { amountMinor: number; currency: string; reservedMinor?: number };
+    balance: { amountUnits: number; currency: string; reservedUnits?: number };
     status: string;
     createdAt?: string;
   }>;

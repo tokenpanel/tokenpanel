@@ -6,6 +6,7 @@ import {
   panelPermissionSchema,
   effectivePanelPermissions,
   hasPanelPermission,
+  writeCompanionOf,
   canGrantPanelAccess,
 } from "../panel-permissions.ts";
 
@@ -64,6 +65,78 @@ test("hasPanelPermission", () => {
   expect(
     hasPanelPermission("member", ["providers:read"], "providers:write"),
   ).toBe(false);
+});
+
+test("writeCompanionOf maps read→write only when pair exists", () => {
+  expect(writeCompanionOf("invites:read")).toBe("invites:write");
+  expect(writeCompanionOf("providers:read")).toBe("providers:write");
+  expect(writeCompanionOf("dashboard:read")).toBeNull();
+  expect(writeCompanionOf("usage:read")).toBeNull();
+  expect(writeCompanionOf("invites:write")).toBeNull();
+  expect(writeCompanionOf("playground:write")).toBeNull();
+});
+
+test("hasPanelPermission: write implies paired read", () => {
+  // write-only grant satisfies read check for the same resource
+  expect(
+    hasPanelPermission("member", ["invites:write"], "invites:read"),
+  ).toBe(true);
+  expect(
+    hasPanelPermission("member", ["balances:write"], "balances:read"),
+  ).toBe(true);
+  expect(
+    hasPanelPermission(
+      "member",
+      ["customer_keys:write"],
+      "customer_keys:read",
+    ),
+  ).toBe(true);
+  expect(
+    hasPanelPermission(
+      "member",
+      ["management_keys:write"],
+      "management_keys:read",
+    ),
+  ).toBe(true);
+  expect(
+    hasPanelPermission("member", ["providers:write"], "providers:read"),
+  ).toBe(true);
+  // write does not imply a different resource's read
+  expect(
+    hasPanelPermission("member", ["invites:write"], "customers:read"),
+  ).toBe(false);
+  // read still does not imply write
+  expect(
+    hasPanelPermission("member", ["invites:read"], "invites:write"),
+  ).toBe(false);
+  // read-only catalog atoms have no write companion
+  expect(
+    hasPanelPermission("member", ["dashboard:read"], "dashboard:read"),
+  ).toBe(true);
+  expect(
+    hasPanelPermission("member", [], "dashboard:read"),
+  ).toBe(false);
+});
+
+test("canGrantPanelAccess: write does not expand grantable read atoms", () => {
+  // Holding write lets the actor *use* read ops, but grant composition is
+  // still the stored set — cannot bestow invites:read from write alone.
+  expect(
+    canGrantPanelAccess(
+      "member",
+      ["invites:write"],
+      "member",
+      ["invites:read"],
+    ),
+  ).toBe(false);
+  expect(
+    canGrantPanelAccess(
+      "member",
+      ["invites:write"],
+      "member",
+      ["invites:write"],
+    ),
+  ).toBe(true);
 });
 
 test("canGrantPanelAccess: admin may grant anything", () => {

@@ -8,6 +8,7 @@ import {
   PANEL_READ_PERMISSIONS,
   effectivePanelPermissions,
   hasPanelPermission,
+  writeCompanionOf,
   canGrantPanelAccess,
   type PanelPermission,
   type PanelPermissionDefinition,
@@ -19,6 +20,7 @@ export {
   PANEL_READ_PERMISSIONS,
   effectivePanelPermissions,
   hasPanelPermission,
+  writeCompanionOf,
   canGrantPanelAccess,
 };
 export type { PanelPermission, PanelPermissionDefinition };

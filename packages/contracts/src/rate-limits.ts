@@ -2,9 +2,12 @@
  * Rate-limit rule stream identity (browser-safe product policy).
  *
  * A plan or customer rule set may define at most one active stream for a given
- * (dimension, window, scope target, currency). Different windows (hour + week)
- * or different targets (model A vs model B) are allowed; two "tokens / 1h"
+ * (dimension, window, scope target). Different windows (hour + week) or
+ * different targets (model A vs model B) are allowed; two "tokens / 1h"
  * customer-scope rules are not.
+ *
+ * Spend caps are in org default currency units — currency is not part of
+ * stream identity (org is single-currency).
  *
  * Policy version: 2026-07-17
  */
@@ -15,7 +18,6 @@ export type RateLimitStreamFields = {
   readonly dimension: string;
   readonly scope?: string | null | undefined;
   readonly scopeTarget?: string | null | undefined;
-  readonly currency?: string | null | undefined;
 };
 
 /**
@@ -40,11 +42,7 @@ export function rateLimitStreamKey(rule: RateLimitStreamFields): string {
     scope === "customer"
       ? ""
       : (rule.scopeTarget ?? "").trim().toLowerCase();
-  const currency =
-    rule.dimension === "spend_minor"
-      ? (rule.currency ?? "").trim().toUpperCase()
-      : "";
-  return `${rule.dimension}\0${rule.windowSeconds}\0${scope}\0${target}\0${currency}`;
+  return `${rule.dimension}\0${rule.windowSeconds}\0${scope}\0${target}`;
 }
 
 export type DuplicateRateLimitStream = {
@@ -90,7 +88,7 @@ export function duplicateRateLimitStreamMessage(
 ): string {
   return (
     `Duplicate rate limit stream: only one rule allowed per ` +
-    `${dup.dimension} / ${dup.windowSeconds}s window (and scope/currency). ` +
+    `${dup.dimension} / ${dup.windowSeconds}s window (and scope). ` +
     `Use different windows (e.g. hour + week) or different model targets.`
   );
 }

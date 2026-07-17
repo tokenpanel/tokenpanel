@@ -35,7 +35,7 @@ turbo.json                       task pipeline (build/dev/lint/typecheck/clean)
 - Cross-package imports use `workspace:*` in `package.json` and path aliases in `tsconfig.json` (`@tokenpanel/db`, `@tokenpanel/contracts`).
 - **`@tokenpanel/contracts`**: pure TypeScript/Effect Schema product contracts (model modality/status/metadata policy, management scopes). No env, I/O, Node, Mongo, or UI. Admin may import it; never import `@tokenpanel/db` into admin. Migrations must not import live contracts (keep frozen snapshots).
 - DB schemas live in `packages/db/src/schemas/*.ts`. Each domain exports `…Doc` (stored shape, with `_id`, `createdAt`, `updatedAt`) and `…CreateInput` (input shape, ObjectId as string → coerced). Use `getDb()` to get a `TypedDb` whose collections are already typed; never call `db.collection("string")` directly outside `packages/db`. Call `configureDb({ uri, databaseName })` before `getDb()` from executables (API boot, migrator CLI).
-- Money is stored as integer minor units (`amountMinor`) + ISO currency code, never floats.
+- Money is stored as integer units (`amountUnits`) + ISO currency code, never floats.
 - Env: Bun auto-loads `.env`; no dotenv import. API parses once via `parseApiRuntimeConfig` (`apps/api/src/config/runtime.ts`). Required: `JWT_SECRET`, `MONGODB_URI`; optional `MONGODB_DB` (default `tokenpanel`), `PORT`, `CORS_ORIGINS`, `NODE_ENV`. See `.env.example`.
 - API fail-fast: server exits if config invalid or MongoDB is unreachable on boot.
 - **Migrations**: ordered, timestamped migration files in `packages/db/migrations/{pre,post}/`.
@@ -53,6 +53,23 @@ turbo.json                       task pipeline (build/dev/lint/typecheck/clean)
   (TTL 5 min, 60 s heartbeat). Commands: `bun run db:new-migration`,
   `bun run db:migrate -- --phase=pre|post`, `bun run db:status` (from `packages/db`);
   operator: `tokenpanel migrate pre|post`, `tokenpanel update`.
+
+  **IMMUTABLE once created and pushed (hard rule):**
+  - Never edit, reformat, rename, or delete any file under
+    `packages/db/migrations/pre/` or `packages/db/migrations/post/` after it has
+    been committed/pushed. That includes comments, whitespace, `transactional`,
+    and `up`/`down` bodies. SHA-256 of the whole file is stored on apply; any
+    byte change fails boot with "already applied with a different checksum".
+  - Need a fix or follow-up schema change? Create a **new** migration with a
+    newer timestamp (`bun run db:new-migration`). Do not amend the old file.
+  - Bug found before first push/apply anywhere: rewrite is OK only if the file
+    was never applied to any shared/dev DB that teammates keep. Prefer new
+    migration if unsure.
+  - Local recovery after accidental edit: either restore original file contents,
+    or (dev only, after confirming schema effects already match) update the
+    matching `_migrations.checksum` to the current file SHA-256, or
+    `bun run docker:reset` to wipe and re-apply. Never "fix" checksums in
+    production — ship a new migration instead.
 
 ### Common commands
 

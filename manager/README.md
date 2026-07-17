@@ -18,6 +18,7 @@ manager/
     preflight.sh         # disk / docker / mongo checks
     health.sh            # health-check polling
     backup.sh            # mongodump wrapper (tokenpanel-wuv)
+    lock.sh              # cross-command flock (update/backup/restore/…)
     migrate.sh           # migration runner wrapper
     build.sh             # docker build on host (shared by setup/update/rebuild)
     rollback.sh          # container swap + rollback (tokenpanel-db3)

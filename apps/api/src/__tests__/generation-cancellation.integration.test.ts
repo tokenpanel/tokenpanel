@@ -79,8 +79,8 @@ async function installRuntime(): Promise<void> {
 }
 
 async function seedOrgCustomer(
-  balanceMinor: number,
-  reservedMinor: number,
+  balanceUnits: number,
+  reservedUnits: number,
 ): Promise<{ orgId: ObjectId; customerId: ObjectId }> {
   const orgId = new ObjectId();
   const customerId = new ObjectId();
@@ -100,7 +100,7 @@ async function seedOrgCustomer(
     externalId: "cc",
     name: "cc",
     email: null,
-    balance: { amountMinor: balanceMinor, currency: "USD", reservedMinor },
+    balance: { amountUnits: balanceUnits, currency: "USD", reservedUnits },
     status: "active",
     metadata: {},
     createdAt: new Date(),
@@ -135,7 +135,7 @@ function modelStub(orgId: ObjectId): {
     upstreamModelId: "gpt-4o",
     priority: 0,
     active: true,
-    price: { inputMinorPerMillion: 0, outputMinorPerMillion: 0 },
+    price: { inputUnitsPerMillion: 0, outputUnitsPerMillion: 0 },
   } as unknown as ModelEntryDoc;
   const model: ModelDoc = {
     _id: new ObjectId(),
@@ -149,7 +149,7 @@ function modelStub(orgId: ObjectId): {
     attachment: false,
     limits: { context: 128000 },
     modalities: { input: ["text"], output: ["text"] },
-    price: { inputMinorPerMillion: 0, outputMinorPerMillion: 0 },
+    price: { inputUnitsPerMillion: 0, outputUnitsPerMillion: 0 },
     marginBps: 0,
     currency: "USD",
     active: true,
@@ -160,16 +160,16 @@ function modelStub(orgId: ObjectId): {
   return { model, entry, provider };
 }
 
-async function reservedMinorOf(customerId: ObjectId): Promise<number> {
+async function reservedUnitsOf(customerId: ObjectId): Promise<number> {
   const db = await getDb();
   const c = await db.customers.findOne({ _id: customerId });
-  return (c?.balance as { reservedMinor?: number } | null)?.reservedMinor ?? 0;
+  return (c?.balance as { reservedUnits?: number } | null)?.reservedUnits ?? 0;
 }
 
-async function amountMinorOf(customerId: ObjectId): Promise<number> {
+async function amountUnitsOf(customerId: ObjectId): Promise<number> {
   const db = await getDb();
   const c = await db.customers.findOne({ _id: customerId });
-  return (c?.balance as { amountMinor?: number } | null)?.amountMinor ?? 0;
+  return (c?.balance as { amountUnits?: number } | null)?.amountUnits ?? 0;
 }
 
 beforeEach(async () => {
@@ -195,7 +195,7 @@ describe("generation cancellation (live replica set)", () => {
   test("pre-commit disconnect releases the held reservation", async () => {
     if (!connected) return;
     const { orgId, customerId } = await seedOrgCustomer(10_000, 500);
-    expect(await reservedMinorOf(customerId)).toBe(500);
+    expect(await reservedUnitsOf(customerId)).toBe(500);
 
     const { model } = modelStub(orgId);
     const preCommitInterrupted = transitionStream(
@@ -215,8 +215,8 @@ describe("generation cancellation (live replica set)", () => {
       model,
       protocol: "openai",
       gatewayRequestId: "gw_cancel_pre",
-      reservedMinor: 500,
-      reservation: { reservedMinor: 500, customerId, organizationId: orgId },
+      reservedUnits: 500,
+      reservation: { reservedUnits: 500, customerId, organizationId: orgId },
       rules: [],
       startedAtMs: Date.now(),
       lifecycle: preCommitInterrupted,
@@ -227,8 +227,8 @@ describe("generation cancellation (live replica set)", () => {
 
     expect(result.action).toBe("released");
     // Hold fully returned; cash balance untouched.
-    expect(await reservedMinorOf(customerId)).toBe(0);
-    expect(await amountMinorOf(customerId)).toBe(10_000);
+    expect(await reservedUnitsOf(customerId)).toBe(0);
+    expect(await amountUnitsOf(customerId)).toBe(10_000);
   });
 
   test("post-commit disconnect with reported usage settles (debit + release hold)", async () => {
@@ -259,21 +259,21 @@ describe("generation cancellation (live replica set)", () => {
       model,
       protocol: "openai",
       gatewayRequestId: "gw_cancel_post",
-      reservedMinor: 500,
-      reservation: { reservedMinor: 500, customerId, organizationId: orgId },
+      reservedUnits: 500,
+      reservation: { reservedUnits: 500, customerId, organizationId: orgId },
       rules: [],
       startedAtMs: Date.now(),
       lifecycle: s,
       activeEntry: entry,
       activeProvider: provider,
       usage,
-      priceMinorOverride: 300,
+      priceUnitsOverride: 300,
     });
 
     // Post-commit with reported usage → settle path (not free-bill, not leaked).
     expect(result.action).toBe("settled");
-    expect(await reservedMinorOf(customerId)).toBe(0);
-    expect(await amountMinorOf(customerId)).toBe(9700); // 10000 - 300 price
+    expect(await reservedUnitsOf(customerId)).toBe(0);
+    expect(await amountUnitsOf(customerId)).toBe(9700); // 10000 - 300 price
 
     const db = await getDb();
     const usageRows = await db.usageRecords

@@ -1,5 +1,5 @@
 export interface Money {
-  amountMinor: number;
+  amountUnits: number;
   currency: string;
 }
 
@@ -118,15 +118,15 @@ export interface UsageByModel {
   model: string;
   requests: number;
   tokens: number;
-  costMinor: number;
-  priceMinor: number;
+  costUnits: number;
+  priceUnits: number;
 }
 
 export interface CustomerUsageResponse {
   totalRequests: number;
   totalTokens: number;
-  totalCostMinor: number;
-  totalPriceMinor: number;
+  totalCostUnits: number;
+  totalPriceUnits: number;
   currency: string;
   byModel: UsageByModel[];
 }

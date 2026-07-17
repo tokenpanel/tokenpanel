@@ -9,7 +9,7 @@
 export {
   TOKENS_PER_MILLION_COUNT,
   currencyCodeSchema,
-  moneyMinorSchema,
+  moneyUnitsSchema,
   moneySchema,
 } from "./money.ts";
 export type { CurrencyCode, Money } from "./money.ts";

@@ -12,6 +12,7 @@ import {
 } from "../../errors/families.ts";
 import type { HexId, PageQuery, PageResult, RepoError } from "../ports/common.ts";
 import { CustomerRepository } from "../ports/customer-repository.ts";
+import { OrganizationRepository } from "../ports/organization-repository.ts";
 import { normalizePageQuery } from "../pagination/range.ts";
 import type { ValidationError } from "../../errors/families.ts";
 
@@ -28,7 +29,7 @@ export type CreateCustomerInput = {
   readonly externalId?: string | undefined;
   readonly email?: string | undefined;
   readonly startingBalance?:
-    | { readonly amountMinor: number; readonly currency: string }
+    | { readonly amountUnits: number; readonly currency: string }
     | undefined;
   readonly metadata?: Readonly<Record<string, unknown>> | undefined;
   /** Optional ledger note for non-zero opening balance (management provenance). */
@@ -87,12 +88,21 @@ export const getCustomer = (input: {
 
 export const createCustomer = (
   input: CreateCustomerInput,
-): Effect.Effect<CustomerDoc, CustomerDomainError, CustomerRepository> =>
+): Effect.Effect<
+  CustomerDoc,
+  CustomerDomainError,
+  CustomerRepository | OrganizationRepository
+> =>
   Effect.gen(function* () {
     const customers = yield* CustomerRepository;
-    const starting = input.startingBalance ?? {
-      amountMinor: 0,
-      currency: "USD",
+    // Org is single-currency: always stamp opening balance with org currency.
+    let orgCurrency = "USD";
+    const orgs = yield* OrganizationRepository;
+    const org = yield* orgs.findById(input.organizationId);
+    if (org) orgCurrency = org.defaultCurrency;
+    const starting = {
+      amountUnits: input.startingBalance?.amountUnits ?? 0,
+      currency: orgCurrency,
     };
     const conflictFields: {
       externalId?: string | undefined;
@@ -128,15 +138,15 @@ export const createCustomer = (
           name: input.name,
           email: input.email ?? null,
           balance: {
-            amountMinor: starting.amountMinor,
+            amountUnits: starting.amountUnits,
             currency: starting.currency,
-            reservedMinor: 0,
+            reservedUnits: 0,
           },
           status: "active",
           metadata: input.metadata ?? {},
         },
         input.openingNote ??
-          (starting.amountMinor !== 0 ? "opening balance" : null),
+          (starting.amountUnits !== 0 ? "opening balance" : null),
       )
       .pipe(
         Effect.mapError((e) =>
@@ -241,8 +251,9 @@ export const closeCustomer = (input: {
 export const adjustCustomerBalance = (input: {
   readonly organizationId: HexId;
   readonly customerId: HexId;
-  readonly amountMinor: number;
-  readonly currency: string;
+  readonly amountUnits: number;
+  /** Ignored for write — org/customer balance currency is used. Kept for API shape. */
+  readonly currency?: string | undefined;
   readonly reason?: "topup" | "adjustment" | "refund" | undefined;
   readonly note?: string | null | undefined;
 }): Effect.Effect<
@@ -267,30 +278,19 @@ export const adjustCustomerBalance = (input: {
       );
     }
 
-    let setCurrency = false;
-    if (customer.balance.currency !== input.currency) {
-      if (customer.balance.amountMinor !== 0) {
-        return yield* Effect.fail(
-          new InsufficientBalanceError({
-            code: "currency_mismatch",
-            message: "Currency mismatch with existing balance",
-            balanceCurrency: customer.balance.currency,
-            currency: input.currency,
-          }),
-        );
-      }
-      setCurrency = true;
-    }
+    // Single-currency org: always adjust in the customer's existing currency
+    // (aligned with org via create/convert). Client-sent currency is ignored.
+    const currency = customer.balance.currency;
 
     const result = yield* customers.adjustBalance({
       organizationId: input.organizationId,
       customerId: input.customerId,
-      amountMinor: input.amountMinor,
-      currency: input.currency,
+      amountUnits: input.amountUnits,
+      currency,
       reason: input.reason ?? "topup",
       note: input.note ?? null,
       expectedBalanceCurrency: customer.balance.currency,
-      setCurrency,
+      setCurrency: false,
     });
     if (!result) {
       return yield* Effect.fail(

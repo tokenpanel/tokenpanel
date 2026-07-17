@@ -14,7 +14,7 @@ function customer(over: Partial<CustomerDoc> = {}): CustomerDoc {
     externalId: null,
     name: "alice",
     email: "alice@example.com",
-    balance: { amountMinor: 10000, reservedMinor: 0, currency: "USD" },
+    balance: { amountUnits: 10000, reservedUnits: 0, currency: "USD" },
     status: "active",
     metadata: {},
     createdAt: new Date(),
@@ -25,18 +25,18 @@ function customer(over: Partial<CustomerDoc> = {}): CustomerDoc {
 
 test("maybeRedactCustomer: returns full doc when caller has balances:read", () => {
   const c = customer({
-    balance: { amountMinor: 5000, reservedMinor: 0, currency: "USD" },
+    balance: { amountUnits: 5000, reservedUnits: 0, currency: "USD" },
   });
   const out = maybeRedactCustomer(c, true);
   expect("balance" in out).toBe(true);
   if ("balance" in out) {
-    expect(out.balance.amountMinor).toBe(5000);
+    expect(out.balance.amountUnits).toBe(5000);
   }
 });
 
 test("maybeRedactCustomer: strips balance when caller lacks balances:read", () => {
   const c = customer({
-    balance: { amountMinor: 5000, reservedMinor: 0, currency: "USD" },
+    balance: { amountUnits: 5000, reservedUnits: 0, currency: "USD" },
   });
   const out = maybeRedactCustomer(c, false);
   expect("balance" in out).toBe(false);
@@ -105,7 +105,7 @@ function modelDoc(over: Partial<ModelDoc> = {}): ModelDoc {
     limits: { context: 128000 },
     modalities: { input: ["text"], output: ["text"] },
     status: undefined,
-    price: { inputMinorPerMillion: 300, outputMinorPerMillion: 600 },
+    price: { inputUnitsPerMillion: 300, outputUnitsPerMillion: 600 },
     marginBps: 0,
     currency: "USD",
     active: true,
@@ -133,7 +133,7 @@ test("toModelCapability: omits entries, marginBps, ids, timestamps", () => {
   expect("createdAt" in out).toBe(false);
   expect("updatedAt" in out).toBe(false);
   expect(out.price).toEqual({
-    inputMinorPerMillion: 300,
-    outputMinorPerMillion: 600,
+    inputUnitsPerMillion: 300,
+    outputUnitsPerMillion: 600,
   });
 });

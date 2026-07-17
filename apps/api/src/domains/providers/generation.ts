@@ -72,8 +72,8 @@ export type GenerationProtocol = "openai" | "anthropic";
 export type GenerationError = AppError;
 
 export type GenerationCharges = {
-  readonly costMinor: number;
-  readonly priceMinor: number;
+  readonly costUnits: number;
+  readonly priceUnits: number;
   readonly currency: string;
 };
 
@@ -105,13 +105,13 @@ export type StreamFinalizeInput = {
   readonly model: ModelDoc;
   readonly protocol: GenerationProtocol;
   readonly gatewayRequestId: string;
-  readonly reservedMinor: number;
+  readonly reservedUnits: number;
   readonly reservation: BalanceReservation | null;
   readonly limitReservation?: LimitReservation | null | undefined;
   readonly rules: readonly RateLimitRule[];
   readonly startedAtMs: number;
   /** Force price (0 = free / unbilled). Omit to use computed charges. */
-  readonly priceMinorOverride?: number | undefined;
+  readonly priceUnitsOverride?: number | undefined;
   readonly lifecycle: StreamLifecycleState;
   readonly activeEntry: ModelEntryDoc | null;
   readonly activeProvider: ProviderDoc | null;
@@ -145,11 +145,11 @@ export type GenerationSessionParams = {
   readonly protocol: GenerationProtocol;
   readonly reservation: BalanceReservation | null;
   readonly limitReservation?: LimitReservation | null | undefined;
-  readonly reservedMinor?: number | undefined;
+  readonly reservedUnits?: number | undefined;
   readonly gatewayRequestId?: string | undefined;
   readonly startedAtMs?: number | undefined;
   /** Force price (0 for management_internal / unbilled playground). */
-  readonly priceMinorOverride?: number | undefined;
+  readonly priceUnitsOverride?: number | undefined;
   readonly signal?: AbortSignal | undefined;
   readonly deps?: LoadProviderDeps | undefined;
 };
@@ -246,8 +246,8 @@ export const completeGeneration = (
   Effect.gen(function* () {
     const startedAtMs = params.startedAtMs ?? Date.now();
     const gatewayRequestId = params.gatewayRequestId ?? newGatewayRequestId();
-    const reservedMinor =
-      params.reservedMinor ?? params.reservation?.reservedMinor ?? 0;
+    const reservedUnits =
+      params.reservedUnits ?? params.reservation?.reservedUnits ?? 0;
     const deps = params.deps ?? liveLoadProviderDeps();
     const signal = params.signal;
     const request = withSignal(params.request, signal);
@@ -294,13 +294,13 @@ export const completeGeneration = (
       model: params.model,
       usage: outcome.response.usage,
     });
-    const priceMinor =
-      params.priceMinorOverride !== undefined
-        ? params.priceMinorOverride
-        : baseCharges.priceMinor;
+    const priceUnits =
+      params.priceUnitsOverride !== undefined
+        ? params.priceUnitsOverride
+        : baseCharges.priceUnits;
     const charges: GenerationCharges = {
-      costMinor: baseCharges.costMinor,
-      priceMinor,
+      costUnits: baseCharges.costUnits,
+      priceUnits,
       currency: baseCharges.currency,
     };
 
@@ -314,12 +314,12 @@ export const completeGeneration = (
       usageOutcome,
       providerRequestId: outcome.response.providerRequestId,
       gatewayRequestId,
-      reservedMinor,
+      reservedUnits,
       limitReservation,
       status: 200,
       durationMs,
       rules: params.rules,
-      priceMinorOverride: priceMinor,
+      priceUnitsOverride: priceUnits,
       occurredAt: new Date(startedAtMs),
     });
 
@@ -371,12 +371,12 @@ export type StreamSession = {
       | "model"
       | "protocol"
       | "gatewayRequestId"
-      | "reservedMinor"
+      | "reservedUnits"
       | "reservation"
       | "limitReservation"
       | "rules"
       | "startedAtMs"
-      | "priceMinorOverride"
+      | "priceUnitsOverride"
       | "lifecycle"
     > & {
       readonly activeEntry: ModelEntryDoc | null;
@@ -396,8 +396,8 @@ export function openStreamGeneration(
 ): StreamSession {
   const startedAtMs = params.startedAtMs ?? Date.now();
   const gatewayRequestId = params.gatewayRequestId ?? newGatewayRequestId();
-  const reservedMinor =
-    params.reservedMinor ?? params.reservation?.reservedMinor ?? 0;
+  const reservedUnits =
+    params.reservedUnits ?? params.reservation?.reservedUnits ?? 0;
   const limitReservation = params.limitReservation ?? null;
   const deps = params.deps ?? liveLoadProviderDeps();
   const request = withSignal(params.request, params.signal);
@@ -467,12 +467,12 @@ export function openStreamGeneration(
         model: params.model,
         protocol: params.protocol,
         gatewayRequestId,
-        reservedMinor,
+        reservedUnits,
         reservation: params.reservation,
         limitReservation,
         rules: params.rules,
         startedAtMs,
-        priceMinorOverride: params.priceMinorOverride,
+        priceUnitsOverride: params.priceUnitsOverride,
         lifecycle,
         activeEntry: input.activeEntry,
         activeProvider: input.activeProvider,
@@ -623,7 +623,7 @@ export async function finalizeStreamGeneration(
   // No provider attempt: pure release (pre-commit disconnect, early abort).
   if (!input.activeEntry || !input.activeProvider) {
     const needsBalanceRelease =
-      input.reservation != null && input.reservation.reservedMinor > 0;
+      input.reservation != null && input.reservation.reservedUnits > 0;
     const needsLimitRelease =
       input.limitReservation != null &&
       input.limitReservation.holds.length > 0;
@@ -661,7 +661,7 @@ export async function finalizeStreamGeneration(
   }
   const runtime = getAppRuntime();
 
-  // Provider attempted: settle/outbox. Reserved minor released inside settle.
+  // Provider attempted: settle/outbox. Reserved units released inside settle.
   void requiresSettlementConsideration(lifecycle);
   const { hasAuthoritativeUsage, usageOutcome } = streamUsageAuthority(
     input.usage,
@@ -683,13 +683,13 @@ export async function finalizeStreamGeneration(
     usage: tokenUsage,
     cacheAccounting: input.usage.cacheAccounting,
   });
-  const priceMinor =
-    input.priceMinorOverride !== undefined
-      ? input.priceMinorOverride
-      : baseCharges.priceMinor;
+  const priceUnits =
+    input.priceUnitsOverride !== undefined
+      ? input.priceUnitsOverride
+      : baseCharges.priceUnits;
   const charges: GenerationCharges = {
-    costMinor: baseCharges.costMinor,
-    priceMinor,
+    costUnits: baseCharges.costUnits,
+    priceUnits,
     currency: baseCharges.currency,
   };
 
@@ -704,12 +704,12 @@ export async function finalizeStreamGeneration(
         protocol: input.protocol,
         usageOutcome,
         gatewayRequestId: input.gatewayRequestId,
-        reservedMinor: input.reservedMinor,
+        reservedUnits: input.reservedUnits,
         limitReservation: input.limitReservation,
         status: 200,
         durationMs,
         rules: [...input.rules],
-        priceMinorOverride: priceMinor,
+        priceUnitsOverride: priceUnits,
         occurredAt: new Date(input.startedAtMs),
       }),
     );

@@ -15,11 +15,11 @@ export type NewPlanRecord = {
   readonly organizationId: HexId;
   readonly name: string;
   readonly description: string | null;
-  readonly price: { readonly amountMinor: number; readonly currency: string };
+  readonly price: { readonly amountUnits: number; readonly currency: string };
   readonly interval: string;
   readonly intervalCount: number;
   readonly includedCredit: {
-    readonly amountMinor: number;
+    readonly amountUnits: number;
     readonly currency: string;
   };
   readonly includedTokens: number;

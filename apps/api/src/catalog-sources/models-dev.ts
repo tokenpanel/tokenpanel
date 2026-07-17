@@ -11,7 +11,7 @@ import type { CatalogSource, FetchedModel, FetchedModelStatus } from "./types.ts
  * cost, which is what the Add Model form needs.
  *
  * Pricing on models.dev is USD per million tokens (float). We convert to
- * integer minor units per million (cents) by rounding `usd * 100`, matching
+ * integer units per million (cents) by rounding `usd * 100`, matching
  * the form's "300 = $3.00/M" convention.
  */
 
@@ -56,7 +56,7 @@ function num(v: unknown): number | undefined {
   return typeof v === "number" && Number.isFinite(v) ? v : undefined;
 }
 
-function toMinor(usd: number | undefined): number | undefined {
+function toUnits(usd: number | undefined): number | undefined {
   if (usd === undefined) return undefined;
   return Math.round(usd * 100);
 }
@@ -80,17 +80,17 @@ export function mapModel(subProviderId: string, m: ModelsDevModel): FetchedModel
   const input = num(m.limit?.input);
   const output = num(m.limit?.output);
   const cost = m.cost;
-  const inMinor = toMinor(cost?.input);
-  const outMinor = toMinor(cost?.output);
-  const fetchedCost = inMinor !== undefined && outMinor !== undefined
+  const inUnits = toUnits(cost?.input);
+  const outUnits = toUnits(cost?.output);
+  const fetchedCost = inUnits !== undefined && outUnits !== undefined
     ? {
-        inputMinorPerMillion: inMinor,
-        outputMinorPerMillion: outMinor,
-        ...(toMinor(cost?.reasoning) !== undefined ? { reasoningMinorPerMillion: toMinor(cost?.reasoning) } : {}),
-        ...(toMinor(cost?.cache_read) !== undefined ? { cacheReadMinorPerMillion: toMinor(cost?.cache_read) } : {}),
-        ...(toMinor(cost?.cache_write) !== undefined ? { cacheWriteMinorPerMillion: toMinor(cost?.cache_write) } : {}),
-        ...(toMinor(cost?.input_audio) !== undefined ? { inputAudioMinorPerMillion: toMinor(cost?.input_audio) } : {}),
-        ...(toMinor(cost?.output_audio) !== undefined ? { outputAudioMinorPerMillion: toMinor(cost?.output_audio) } : {}),
+        inputUnitsPerMillion: inUnits,
+        outputUnitsPerMillion: outUnits,
+        ...(toUnits(cost?.reasoning) !== undefined ? { reasoningUnitsPerMillion: toUnits(cost?.reasoning) } : {}),
+        ...(toUnits(cost?.cache_read) !== undefined ? { cacheReadUnitsPerMillion: toUnits(cost?.cache_read) } : {}),
+        ...(toUnits(cost?.cache_write) !== undefined ? { cacheWriteUnitsPerMillion: toUnits(cost?.cache_write) } : {}),
+        ...(toUnits(cost?.input_audio) !== undefined ? { inputAudioUnitsPerMillion: toUnits(cost?.input_audio) } : {}),
+        ...(toUnits(cost?.output_audio) !== undefined ? { outputAudioUnitsPerMillion: toUnits(cost?.output_audio) } : {}),
       }
     : undefined;
   return {

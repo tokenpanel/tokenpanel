@@ -11,7 +11,7 @@ export type StreamPanelState = {
     upstreamModelId: string;
     sdkType: string;
   } | null;
-  cost: { costMinor: number; priceMinor: number; currency: string } | null;
+  cost: { costUnits: number; priceUnits: number; currency: string } | null;
   billed: boolean;
   usage: {
     promptTokens: number;
@@ -29,7 +29,7 @@ export function applyEventToState(
   if (obj === "playground.meta") return cur;
   if (obj === "playground.cost") {
     const cost = evt.cost as
-      | { costMinor: number; priceMinor: number; currency: string }
+      | { costUnits: number; priceUnits: number; currency: string }
       | undefined;
     const provider = evt.provider as StreamPanelState["provider"] | undefined;
     const billed = evt.billed as boolean | undefined;
@@ -92,18 +92,18 @@ export function round(n: number, dp: number): number {
   return Math.round(n * f) / f;
 }
 
-export function formatMinor(minor: number, currency: string): string {
+export function formatUnits(units: number, currency: string): string {
   // High-precision estimate display still respects ISO exponent (not /100).
   const exp = currencyExponent(currency);
-  const major = minor / 10 ** exp;
+  const major = units / 10 ** exp;
   return `${currency.toUpperCase()} ${major.toFixed(Math.max(exp, 4))}`;
 }
 
 export function formatBalance(b: {
-  amountMinor: number;
+  amountUnits: number;
   currency: string;
 }): string {
-  return formatMoney(b.amountMinor, b.currency);
+  return formatMoney(b.amountUnits, b.currency);
 }
 
 export async function safeErr(res: Response): Promise<string> {

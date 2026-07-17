@@ -529,11 +529,11 @@ function ModelEditor({
 
         <SectionTitle>Pricing &amp; status</SectionTitle>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-          <FormField id="m-ipm" label="Input price (minor/M)" help="Per million tokens in minor units (300 = $3.00/M).">
-            <Input id="m-ipm" type="number" min={0} value={form.inputMinor} onChange={(e) => setField(setForm, "inputMinor", e.target.value)} required disabled={saving} />
+          <FormField id="m-ipm" label="Input price (units/M)" help="Integer units per million tokens (USD: 300 = $3.00/M; 1 unit = $0.01).">
+            <Input id="m-ipm" type="number" min={0} value={form.inputUnits} onChange={(e) => setField(setForm, "inputUnits", e.target.value)} required disabled={saving} />
           </FormField>
-          <FormField id="m-opm" label="Output price (minor/M)" help="Per million tokens in minor units.">
-            <Input id="m-opm" type="number" min={0} value={form.outputMinor} onChange={(e) => setField(setForm, "outputMinor", e.target.value)} required disabled={saving} />
+          <FormField id="m-opm" label="Output price (units/M)" help="Integer units per million tokens (same scale as input).">
+            <Input id="m-opm" type="number" min={0} value={form.outputUnits} onChange={(e) => setField(setForm, "outputUnits", e.target.value)} required disabled={saving} />
           </FormField>
           <FormField id="m-status" label="Status">
             <Select value={form.status} onValueChange={(v) => setField(setForm, "status", v as StatusFilter)} disabled={saving}>
@@ -1131,8 +1131,8 @@ function FallbackChain({
                       </div>
                       {expanded.has(entry.id) ? <EntryCostPrice entry={entry} /> : null}
                       <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
-                        <span>cost: {entry.cost ? `${entry.cost.inputMinorPerMillion}/${entry.cost.outputMinorPerMillion}` : "default"}</span>
-                        <span>price: {entry.price ? `${entry.price.inputMinorPerMillion}/${entry.price.outputMinorPerMillion}` : "default"}</span>
+                        <span>cost: {entry.cost ? `${entry.cost.inputUnitsPerMillion}/${entry.cost.outputUnitsPerMillion}` : "default"}</span>
+                        <span>price: {entry.price ? `${entry.price.inputUnitsPerMillion}/${entry.price.outputUnitsPerMillion}` : "default"}</span>
                       </div>
                     </div>
                   </div>
@@ -1161,17 +1161,17 @@ function EntryCostPrice({ entry }: { entry: ModelEntry }): React.ReactElement {
   return (
     <div className="grid grid-cols-1 gap-2.5 pt-1 sm:grid-cols-2">
       <div>
-        <div className="text-[11px] text-muted-foreground">Cost override (minor/M):</div>
+        <div className="text-[11px] text-muted-foreground">Cost override (units/M):</div>
         <div className="font-mono text-xs">
-          input={entry.cost?.inputMinorPerMillion ?? "—"}
-          {"  "}output={entry.cost?.outputMinorPerMillion ?? "—"}
+          input={entry.cost?.inputUnitsPerMillion ?? "—"}
+          {"  "}output={entry.cost?.outputUnitsPerMillion ?? "—"}
         </div>
       </div>
       <div>
-        <div className="text-[11px] text-muted-foreground">Price override (minor/M):</div>
+        <div className="text-[11px] text-muted-foreground">Price override (units/M):</div>
         <div className="font-mono text-xs">
-          input={entry.price?.inputMinorPerMillion ?? "—"}
-          {"  "}output={entry.price?.outputMinorPerMillion ?? "—"}
+          input={entry.price?.inputUnitsPerMillion ?? "—"}
+          {"  "}output={entry.price?.outputUnitsPerMillion ?? "—"}
         </div>
       </div>
     </div>
@@ -1271,7 +1271,7 @@ function AddEntryForm({ modelId, providers, onAdded }: AddEntryFormProps): React
           setError("Cost must be non-negative integers.");
           return;
         }
-        body.cost = { inputMinorPerMillion: cIn, outputMinorPerMillion: cOut };
+        body.cost = { inputUnitsPerMillion: cIn, outputUnitsPerMillion: cOut };
       }
 
       const pIn = toNonNegInt(state.priceInput);
@@ -1281,7 +1281,7 @@ function AddEntryForm({ modelId, providers, onAdded }: AddEntryFormProps): React
           setError("Price must be non-negative integers.");
           return;
         }
-        body.price = { inputMinorPerMillion: pIn, outputMinorPerMillion: pOut };
+        body.price = { inputUnitsPerMillion: pIn, outputUnitsPerMillion: pOut };
       }
 
       setSubmitting(true);
@@ -1351,16 +1351,16 @@ function AddEntryForm({ modelId, providers, onAdded }: AddEntryFormProps): React
       </div>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <FormField id="ae-cin" label="Cost input (minor/M, optional)">
+        <FormField id="ae-cin" label="Cost input (units/M, optional)">
           <Input id="ae-cin" type="number" min={0} value={state.costInput} onChange={(e) => setState((s) => ({ ...s, costInput: e.target.value }))} disabled={submitting} />
         </FormField>
-        <FormField id="ae-cout" label="Cost output (minor/M, optional)">
+        <FormField id="ae-cout" label="Cost output (units/M, optional)">
           <Input id="ae-cout" type="number" min={0} value={state.costOutput} onChange={(e) => setState((s) => ({ ...s, costOutput: e.target.value }))} disabled={submitting} />
         </FormField>
-        <FormField id="ae-pin" label="Price input (minor/M, optional)">
+        <FormField id="ae-pin" label="Price input (units/M, optional)">
           <Input id="ae-pin" type="number" min={0} value={state.priceInput} onChange={(e) => setState((s) => ({ ...s, priceInput: e.target.value }))} disabled={submitting} />
         </FormField>
-        <FormField id="ae-pout" label="Price output (minor/M, optional)">
+        <FormField id="ae-pout" label="Price output (units/M, optional)">
           <Input id="ae-pout" type="number" min={0} value={state.priceOutput} onChange={(e) => setState((s) => ({ ...s, priceOutput: e.target.value }))} disabled={submitting} />
         </FormField>
       </div>

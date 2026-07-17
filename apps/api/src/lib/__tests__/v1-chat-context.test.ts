@@ -24,7 +24,7 @@ function customerPrincipal(over: Partial<{ orgId: ObjectId; customerId: ObjectId
       externalId: null,
       name: "alice",
       email: "alice@example.com",
-      balance: { amountMinor: 1000, reservedMinor: 0, currency: "USD" },
+      balance: { amountUnits: 1000, reservedUnits: 0, currency: "USD" },
       status: "active" as const,
       metadata: {},
       createdAt: new Date(),

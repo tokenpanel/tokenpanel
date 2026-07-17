@@ -9,16 +9,16 @@ export type UsageByModelRow = {
   readonly modelAliasId: string;
   readonly requests: number;
   readonly tokens: number;
-  readonly costMinor: number;
-  readonly priceMinor: number;
+  readonly costUnits: number;
+  readonly priceUnits: number;
   readonly currency: string;
 };
 
 export type CustomerUsageSummary = {
   readonly totalRequests: number;
   readonly totalTokens: number;
-  readonly totalCostMinor: number;
-  readonly totalPriceMinor: number;
+  readonly totalCostUnits: number;
+  readonly totalPriceUnits: number;
   readonly currency: string;
   readonly byModel: readonly Omit<UsageByModelRow, "currency">[];
 };
@@ -27,8 +27,8 @@ export type AnalyticsCurrencyTotals = {
   readonly currency: string;
   readonly requests: number;
   readonly tokens: number;
-  readonly costMinor: number;
-  readonly priceMinor: number;
+  readonly costUnits: number;
+  readonly priceUnits: number;
 };
 
 export type AnalyticsTopCustomer = {
@@ -36,8 +36,8 @@ export type AnalyticsTopCustomer = {
   readonly currency: string;
   readonly requests: number;
   readonly tokens: number;
-  readonly costMinor: number;
-  readonly priceMinor: number;
+  readonly costUnits: number;
+  readonly priceUnits: number;
 };
 
 export type DashboardSummary = {

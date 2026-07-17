@@ -12,7 +12,7 @@ export * from "./primitives.ts";
 // common.ts aliases only (values already exported from primitives)
 export {
   currencyCodeSchema,
-  moneyMinorSchema,
+  moneyUnitsSchema,
   moneySchema,
 } from "./common.ts";
 export * from "./safe-map.ts";

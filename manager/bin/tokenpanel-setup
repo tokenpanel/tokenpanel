@@ -356,10 +356,16 @@ TRUST_PROXY="$(yn_to_env_bool "$TRUST_PROXY_YN")"
 
 if [ "$TRUST_PROXY_YN" = "y" ]; then
   _cf_default="${EXISTING_TRUST_CLOUDFLARE_YN:-n}"
-  TRUST_CLOUDFLARE_YN="$(prompt_yn '  Cloudflare (or CDN) in front — prefer CF-Connecting-IP?' "$_cf_default")"
+  TRUST_CLOUDFLARE_YN="$(prompt_yn '  Cloudflare terminates TLS directly to the API (not via Caddy) — trust CF-Connecting-IP?' "$_cf_default")"
   TRUST_CLOUDFLARE="$(yn_to_env_bool "$TRUST_CLOUDFLARE_YN")"
   if [ "$TRUST_CLOUDFLARE_YN" = "y" ]; then
-    info "  CF-Connecting-IP will be preferred when the TCP peer is trusted."
+    info "  CF-Connecting-IP trusted only when the TCP peer is a Cloudflare edge IP."
+    info "  Built-in Caddy already rewrites X-Real-IP from CF when remote is Cloudflare;"
+    info "  leave this off for the default Caddy deploy (X-Real-IP is enough)."
+  fi
+  if [ "$USE_CADDY" = "y" ]; then
+    info "  Caddy strips client-supplied CF-Connecting-IP and sets X-Real-IP"
+    info "  (CF-Connecting-IP when peer is Cloudflare, else TCP remote)."
   fi
   info "  Trusted peers default to private/loopback CIDRs (Docker-safe)."
   info "  Override later in ${ENV_FILE}: TRUSTED_PROXIES=..."

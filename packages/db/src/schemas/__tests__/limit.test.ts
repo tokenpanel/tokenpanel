@@ -20,7 +20,7 @@ const orgId = () => new ObjectId().toHexString();
 test("limitDimension + limitScope enums", () => {
   expect(limitDimension.safeParse("tokens").success).toBe(true);
   expect(limitDimension.safeParse("requests").success).toBe(true);
-  expect(limitDimension.safeParse("spend_minor").success).toBe(true);
+  expect(limitDimension.safeParse("spend_units").success).toBe(true);
   expect(limitDimension.safeParse("spend").success).toBe(false);
   expect(limitScope.safeParse("customer").success).toBe(true);
   expect(limitScope.safeParse("plan").success).toBe(true);
@@ -38,7 +38,6 @@ test("rateLimitRule applies defaults (scope, active) + bounds", () => {
   });
   expect(r.scope).toBe("customer");
   expect(r.scopeTarget).toBeUndefined();
-  expect(r.currency).toBeUndefined();
   expect(r.active).toBe(true);
 });
 
@@ -70,13 +69,13 @@ test("subscriptionPlanDoc defaults: intervalCount 1, includedCredit 0 USD, inclu
     _id: new ObjectId(),
     organizationId: new ObjectId(),
     name: "Pro",
-    price: { amountMinor: 1000, currency: "USD" },
+    price: { amountUnits: 1000, currency: "USD" },
     interval: "month",
     createdAt: new Date(),
     updatedAt: new Date(),
   });
   expect(r.intervalCount).toBe(1);
-  expect(r.includedCredit).toEqual({ amountMinor: 0, currency: "USD" });
+  expect(r.includedCredit).toEqual({ amountUnits: 0, currency: "USD" });
   expect(r.includedTokens).toBe(0);
   expect(r.rateLimits).toEqual([]);
   expect(r.active).toBe(true);
@@ -85,12 +84,12 @@ test("subscriptionPlanDoc defaults: intervalCount 1, includedCredit 0 USD, inclu
 test("subscriptionPlanCreateInput validates interval enum + price money", () => {
   const b = {
     name: "Pro",
-    price: { amountMinor: 1000, currency: "USD" },
+    price: { amountUnits: 1000, currency: "USD" },
     interval: "month",
   };
   expect(subscriptionPlanCreateInput.safeParse(b).success).toBe(true);
   expect(subscriptionPlanCreateInput.safeParse({ ...b, interval: "decade" }).success).toBe(false);
-  expect(subscriptionPlanCreateInput.safeParse({ ...b, price: { amountMinor: -1, currency: "USD" } }).success).toBe(false);
+  expect(subscriptionPlanCreateInput.safeParse({ ...b, price: { amountUnits: -1, currency: "USD" } }).success).toBe(false);
   expect(subscriptionPlanCreateInput.safeParse({ ...b, intervalCount: 0 }).success).toBe(false);
 });
 
@@ -140,20 +139,20 @@ test("customerLimitDoc defaults rules []", () => {
   expect(r.rules).toEqual([]);
 });
 
-test("budgetDoc defaults alertThresholds [50,80,100], amountMinor nonneg", () => {
+test("budgetDoc defaults alertThresholds [50,80,100], amountUnits nonneg", () => {
   const r = budgetDoc.parse({
     _id: new ObjectId(),
     organizationId: new ObjectId(),
     customerId: new ObjectId(),
     periodStart: new Date(),
     periodEnd: new Date(),
-    amountMinor: 1000,
+    amountUnits: 1000,
     currency: "USD",
     createdAt: new Date(),
     updatedAt: new Date(),
   });
   expect(r.alertThresholds).toEqual([50, 80, 100]);
-  expect(budgetDoc.safeParse({ ...r, amountMinor: -1 }).success).toBe(false);
+  expect(budgetDoc.safeParse({ ...r, amountUnits: -1 }).success).toBe(false);
 });
 
 test("budgetCreateInput threshold bounds 0-100", () => {
@@ -161,7 +160,7 @@ test("budgetCreateInput threshold bounds 0-100", () => {
     customerId: orgId(),
     periodStart: "2026-01-01T00:00:00.000Z",
     periodEnd: "2026-02-01T00:00:00.000Z",
-    amountMinor: 1000,
+    amountUnits: 1000,
     currency: "USD",
   };
   expect(budgetCreateInput.safeParse({ ...b, alertThresholds: [50, 80, 100] }).success).toBe(true);

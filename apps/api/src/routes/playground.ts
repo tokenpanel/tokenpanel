@@ -202,8 +202,8 @@ function playgroundCompletionJson(
         : {}),
     },
     cost: {
-      costMinor: result.charges.costMinor,
-      priceMinor: result.charges.priceMinor,
+      costUnits: result.charges.costUnits,
+      priceUnits: result.charges.priceUnits,
       currency: result.charges.currency,
     },
     billed,
@@ -249,9 +249,9 @@ playground.post("/chat", sValidator("json", PlaygroundChatBody), async (c) => {
           rules: p.ctx.rules,
           protocol: "openai",
           reservation: null,
-          reservedMinor: 0,
+          reservedUnits: 0,
           startedAtMs: Date.now(),
-          priceMinorOverride: p.ctx.customer ? undefined : 0,
+          priceUnitsOverride: p.ctx.customer ? undefined : 0,
           signal: abortSignal,
         });
         return playgroundCompletionJson(
@@ -289,7 +289,7 @@ playground.post("/chat", sValidator("json", PlaygroundChatBody), async (c) => {
     customerId: ctx.customer?._id ?? null,
     apiKeyId: null,
   };
-  const priceMinorOverride = ctx.customer ? undefined : 0;
+  const priceUnitsOverride = ctx.customer ? undefined : 0;
 
   c.header("Content-Type", "text/event-stream");
   c.header("Cache-Control", "no-cache");
@@ -307,9 +307,9 @@ playground.post("/chat", sValidator("json", PlaygroundChatBody), async (c) => {
     rules,
     protocol: "openai",
     reservation: null,
-    reservedMinor: 0,
+    reservedUnits: 0,
     startedAtMs: start,
-    priceMinorOverride,
+    priceUnitsOverride,
     signal: abortSignal,
   });
 
@@ -467,8 +467,8 @@ playground.post("/chat", sValidator("json", PlaygroundChatBody), async (c) => {
                 sdkType: activeProvider.sdkType,
               },
               cost: {
-                costMinor: charges.costMinor,
-                priceMinor: charges.priceMinor,
+                costUnits: charges.costUnits,
+                priceUnits: charges.priceUnits,
                 currency: charges.currency,
               },
               billed,

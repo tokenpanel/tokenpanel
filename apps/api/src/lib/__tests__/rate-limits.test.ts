@@ -52,7 +52,6 @@ function rule(over: Partial<RateLimitRule> = {}): RateLimitRule {
     capValue: 1000,
     scope: "customer",
     scopeTarget: null,
-    currency: null,
     active: true,
     ...over,
   };
@@ -109,29 +108,15 @@ describe("pure rate-limit helpers", () => {
   });
 
   test("ruleIncrement per dimension", () => {
-    const usage = { tokens: 500, requests: 1, spendMinor: 200, currency: "USD" };
+    const usage = { tokens: 500, requests: 1, spendUnits: 200, currency: "USD" };
     expect(ruleIncrement(rule({ dimension: "tokens" }), usage)).toBe(500);
     expect(ruleIncrement(rule({ dimension: "requests" }), usage)).toBe(1);
-    expect(ruleIncrement(rule({ dimension: "spend_minor" }), usage)).toBe(200);
+    expect(ruleIncrement(rule({ dimension: "spend_units" }), usage)).toBe(200);
   });
 
-  test("ruleIncrement spend_minor skips currency mismatch", () => {
-    const usage = { tokens: 0, requests: 1, spendMinor: 200, currency: "USD" };
-    expect(
-      ruleIncrement(
-        rule({ dimension: "spend_minor", currency: "EUR" }),
-        usage,
-      ),
-    ).toBe(0);
-    expect(
-      ruleIncrement(
-        rule({ dimension: "spend_minor", currency: "USD" }),
-        usage,
-      ),
-    ).toBe(200);
-    expect(
-      ruleIncrement(rule({ dimension: "spend_minor", currency: null }), usage),
-    ).toBe(200);
+  test("ruleIncrement spend_units always counts (org single-currency)", () => {
+    const usage = { tokens: 0, requests: 1, spendUnits: 200, currency: "USD" };
+    expect(ruleIncrement(rule({ dimension: "spend_units" }), usage)).toBe(200);
   });
 
   test("estimatedRuleIncrement: tokens/spend from estimate; requests always 1", () => {
@@ -151,17 +136,11 @@ describe("pure rate-limit helpers", () => {
       }),
     ).toBe(1);
     expect(
-      estimatedRuleIncrement(rule({ dimension: "spend_minor" }), {
-        estimatedSpendMinor: 50,
+      estimatedRuleIncrement(rule({ dimension: "spend_units" }), {
+        estimatedSpendUnits: 50,
         currency: "USD",
       }),
     ).toBe(50);
-    expect(
-      estimatedRuleIncrement(rule({ dimension: "spend_minor", currency: "EUR" }), {
-        estimatedSpendMinor: 50,
-        currency: "USD",
-      }),
-    ).toBe(0);
   });
 
   test("bucketDurationSeconds uses sub-buckets smaller than window", () => {
@@ -239,7 +218,7 @@ describe("pure rate-limit helpers", () => {
   });
 
   test("allowsCapOvershoot: only spend is soft", () => {
-    expect(allowsCapOvershoot("spend_minor")).toBe(true);
+    expect(allowsCapOvershoot("spend_units")).toBe(true);
     expect(allowsCapOvershoot("tokens")).toBe(false);
     expect(allowsCapOvershoot("requests")).toBe(false);
   });
@@ -266,7 +245,7 @@ describe("pure rate-limit helpers", () => {
     // spend soft: full overage
     expect(
       clampSettleDelta({
-        dimension: "spend_minor",
+        dimension: "spend_units",
         delta: 500,
         capValue: 1000,
         windowSum: 900,
@@ -361,10 +340,10 @@ describe("getEffectiveRules (repo-backed)", () => {
             organizationId: new ObjectId(),
             name: "p",
             description: null,
-            price: { amountMinor: 0, currency: "USD" },
+            price: { amountUnits: 0, currency: "USD" },
             interval: "month",
             intervalCount: 1,
-            includedCredit: { amountMinor: 0, currency: "USD" },
+            includedCredit: { amountUnits: 0, currency: "USD" },
             includedTokens: 0,
             rateLimits: planRules,
             active: true,
@@ -411,10 +390,10 @@ describe("getEffectiveRules (repo-backed)", () => {
             organizationId: new ObjectId(),
             name: "p",
             description: null,
-            price: { amountMinor: 0, currency: "USD" },
+            price: { amountUnits: 0, currency: "USD" },
             interval: "month",
             intervalCount: 1,
-            includedCredit: { amountMinor: 0, currency: "USD" },
+            includedCredit: { amountUnits: 0, currency: "USD" },
             includedTokens: 0,
             rateLimits: planRules,
             active: true,
@@ -463,10 +442,10 @@ describe("getEffectiveRules (repo-backed)", () => {
             organizationId: new ObjectId(),
             name: "p",
             description: null,
-            price: { amountMinor: 0, currency: "USD" },
+            price: { amountUnits: 0, currency: "USD" },
             interval: "month",
             intervalCount: 1,
-            includedCredit: { amountMinor: 0, currency: "USD" },
+            includedCredit: { amountUnits: 0, currency: "USD" },
             includedTokens: 0,
             rateLimits: [
               rule({ id: "a", windowSeconds: 3600, capValue: 5000 }),
@@ -600,7 +579,7 @@ describe("recordUsage (repo-backed)", () => {
         organizationId: new ObjectId(),
         customerId: new ObjectId(),
         rules: [r],
-        usage: { tokens: 0, requests: 0, spendMinor: 0, currency: "USD" },
+        usage: { tokens: 0, requests: 0, spendUnits: 0, currency: "USD" },
       }),
     );
     expect(calls).toBe(0);
@@ -627,7 +606,7 @@ describe("recordUsage (repo-backed)", () => {
         organizationId: new ObjectId(),
         customerId: new ObjectId(),
         rules: [r1, r2],
-        usage: { tokens: 100, requests: 1, spendMinor: 0, currency: "USD" },
+        usage: { tokens: 100, requests: 1, spendUnits: 0, currency: "USD" },
         occurredAt: new Date(1700000000000),
       }),
     );
@@ -657,7 +636,7 @@ describe("recordUsage (repo-backed)", () => {
         organizationId: new ObjectId(),
         customerId: new ObjectId(),
         rules: [r1, r2],
-        usage: { tokens: 100, requests: 0, spendMinor: 0, currency: "USD" },
+        usage: { tokens: 100, requests: 0, spendUnits: 0, currency: "USD" },
       }),
     );
     expect(captured).toEqual([100]);
@@ -834,7 +813,7 @@ describe("reserveLimits / settleLimits / releaseLimits", () => {
         usage: {
           tokens: 350,
           requests: 1,
-          spendMinor: 0,
+          spendUnits: 0,
           currency: "USD",
         },
       }),
@@ -899,7 +878,7 @@ describe("reserveLimits / settleLimits / releaseLimits", () => {
         usage: {
           tokens: 250,
           requests: 1,
-          spendMinor: 0,
+          spendUnits: 0,
           currency: "USD",
         },
       }),
@@ -910,7 +889,7 @@ describe("reserveLimits / settleLimits / releaseLimits", () => {
   test("settleLimits: spend soft — actual overshoot fully applied past cap", async () => {
     const r = rule({
       id: "sp",
-      dimension: "spend_minor",
+      dimension: "spend_units",
       capValue: 1000,
     });
     const bucketStart = bucketStartFor(Date.now(), 3600);
@@ -935,7 +914,7 @@ describe("reserveLimits / settleLimits / releaseLimits", () => {
           holds: [
             {
               ruleId: "sp",
-              dimension: "spend_minor",
+              dimension: "spend_units",
               windowSeconds: 3600,
               bucketStart,
               scopeTarget: null,
@@ -950,7 +929,7 @@ describe("reserveLimits / settleLimits / releaseLimits", () => {
         usage: {
           tokens: 0,
           requests: 1,
-          spendMinor: 400,
+          spendUnits: 400,
           currency: "USD",
         },
       }),
@@ -992,7 +971,7 @@ describe("reserveLimits / settleLimits / releaseLimits", () => {
         organizationId: new ObjectId(),
         customerId: new ObjectId(),
         rules: [r],
-        usage: { tokens: 0, requests: 1, spendMinor: 0, currency: "USD" },
+        usage: { tokens: 0, requests: 1, spendUnits: 0, currency: "USD" },
       }),
     );
     expect(calls).toBe(0);
@@ -1050,7 +1029,7 @@ describe("reserveLimits / settleLimits / releaseLimits", () => {
         customerId: new ObjectId(),
         rules: [r],
         estimatedTokens: 0,
-        estimatedSpendMinor: 0,
+        estimatedSpendUnits: 0,
       }),
     );
     expect(res.ok).toBe(true);

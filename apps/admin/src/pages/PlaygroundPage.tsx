@@ -3,7 +3,7 @@ import * as playgroundApi from "../api/playground.ts";
 import { apiStreamPost, ApiError } from "../api/client.ts";
 import {
   applyEventToState,
-  formatMinor,
+  formatUnits,
   formatBalance,
   safeErr,
   round,
@@ -70,7 +70,7 @@ interface StreamState {
     done: boolean;
     error: string | null;
     provider: { providerId: string; upstreamModelId: string; sdkType: string } | null;
-    cost: { costMinor: number; priceMinor: number; currency: string } | null;
+    cost: { costUnits: number; priceUnits: number; currency: string } | null;
     billed: boolean;
     usage: {
       promptTokens: number;
@@ -616,8 +616,8 @@ function StreamPanel({ displayName, state, streaming: isStreaming, modelReasonin
             )}
             {state.cost && (
               <span className="flex items-center gap-1">
-                cost {formatMinor(state.cost.costMinor, state.cost.currency)}
-                {state.billed ? ` · billed ${formatMinor(state.cost.priceMinor, state.cost.currency)}` : " · not billed"}
+                cost {formatUnits(state.cost.costUnits, state.cost.currency)}
+                {state.billed ? ` · billed ${formatUnits(state.cost.priceUnits, state.cost.currency)}` : " · not billed"}
               </span>
             )}
           </div>

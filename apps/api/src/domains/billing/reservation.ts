@@ -4,33 +4,33 @@
  */
 
 export type BalanceSnapshot = {
-  amountMinor: number;
-  reservedMinor: number;
+  amountUnits: number;
+  reservedUnits: number;
   currency: string;
 };
 
 /** Available prepaid cash after holds. */
-export function availableMinor(balance: {
-  amountMinor: number;
-  reservedMinor?: number | null;
+export function availableUnits(balance: {
+  amountUnits: number;
+  reservedUnits?: number | null;
 }): number {
-  const reserved = Math.max(0, balance.reservedMinor ?? 0);
-  return Math.max(0, balance.amountMinor - reserved);
+  const reserved = Math.max(0, balance.reservedUnits ?? 0);
+  return Math.max(0, balance.amountUnits - reserved);
 }
 
-/** Pure decision: would a hold of `needMinor` succeed given this snapshot? */
+/** Pure decision: would a hold of `needUnits` succeed given this snapshot? */
 export function wouldReserveSucceed(
   balance: BalanceSnapshot,
-  needMinor: number,
+  needUnits: number,
   currency: string,
 ):
   | { ok: true }
   | { ok: false; reason: "currency_mismatch" | "insufficient_available" } {
-  if (needMinor <= 0) return { ok: true };
+  if (needUnits <= 0) return { ok: true };
   if (balance.currency !== currency) {
     return { ok: false, reason: "currency_mismatch" };
   }
-  if (availableMinor(balance) < needMinor) {
+  if (availableUnits(balance) < needUnits) {
     return { ok: false, reason: "insufficient_available" };
   }
   return { ok: true };

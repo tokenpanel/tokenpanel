@@ -23,6 +23,7 @@ import {
 import type { HexId, RepoError } from "../ports/common.ts";
 import { PlanRepository } from "../ports/plan-repository.ts";
 import { CustomerRepository } from "../ports/customer-repository.ts";
+import { OrganizationRepository } from "../ports/organization-repository.ts";
 import { Clock } from "../../runtime/services/clock.ts";
 import { Crypto } from "../../runtime/services/crypto.ts";
 import { addInterval } from "./interval.ts";
@@ -68,7 +69,6 @@ export function normalizeRules(
     capValue: r.capValue,
     scope: r.scope ?? "customer",
     scopeTarget: r.scopeTarget ?? null,
-    currency: r.currency ?? null,
     active: r.active ?? true,
     // preserve sort order via map index (no _index leak)
     ...(i >= 0 ? {} : {}),
@@ -112,7 +112,6 @@ function ruleFromInput(r: RateLimitRuleInput, id: string): RateLimitRule {
     capValue: r.capValue,
     scope: r.scope ?? "customer",
     scopeTarget: r.scopeTarget ?? null,
-    currency: r.currency ?? null,
     active: r.active ?? true,
   };
 }
@@ -121,22 +120,25 @@ export const createPlan = (input: {
   readonly organizationId: HexId;
   readonly name: string;
   readonly description?: string | null | undefined;
-  readonly price: { readonly amountMinor: number; readonly currency: string };
+  readonly price: { readonly amountUnits: number; readonly currency: string };
   readonly interval: string;
   readonly intervalCount: number;
   readonly includedCredit?:
-    | { readonly amountMinor: number; readonly currency: string }
+    | { readonly amountUnits: number; readonly currency: string }
     | undefined;
   readonly includedTokens?: number | undefined;
   readonly rateLimits?: readonly RateLimitRuleInput[] | undefined;
 }): Effect.Effect<
   SubscriptionPlanDoc,
   PlanDomainError,
-  PlanRepository | Crypto
+  PlanRepository | Crypto | OrganizationRepository
 > =>
   Effect.gen(function* () {
     const plans = yield* PlanRepository;
     const crypto = yield* Crypto;
+    const orgs = yield* OrganizationRepository;
+    const org = yield* orgs.findById(input.organizationId);
+    const currency = org?.defaultCurrency ?? "USD";
     const withIds: RateLimitRule[] = [];
     for (const r of input.rateLimits ?? []) {
       const id =
@@ -148,12 +150,15 @@ export const createPlan = (input: {
       organizationId: input.organizationId,
       name: input.name,
       description: input.description ?? null,
-      price: input.price,
+      price: {
+        amountUnits: input.price.amountUnits,
+        currency,
+      },
       interval: input.interval,
       intervalCount: input.intervalCount,
-      includedCredit: input.includedCredit ?? {
-        amountMinor: 0,
-        currency: "USD",
+      includedCredit: {
+        amountUnits: input.includedCredit?.amountUnits ?? 0,
+        currency,
       },
       includedTokens: input.includedTokens ?? 0,
       rateLimits: withIds,
@@ -190,8 +195,34 @@ export const updatePlan = (input: {
     }
 
     // Peel rateLimits out of the raw patch so we never persist optional-id inputs.
+    // Stamp money currency to existing plan currency (org-owned; convert flow rewrites).
     const { rateLimits: patchRules, ...restPatch } = input.patch;
     const $set: Record<string, unknown> = { ...restPatch };
+    if (
+      $set.price !== undefined &&
+      typeof $set.price === "object" &&
+      $set.price !== null
+    ) {
+      const p = $set.price as { amountUnits?: number; currency?: string };
+      $set.price = {
+        amountUnits: p.amountUnits ?? existing.price.amountUnits,
+        currency: existing.price.currency,
+      };
+    }
+    if (
+      $set.includedCredit !== undefined &&
+      typeof $set.includedCredit === "object" &&
+      $set.includedCredit !== null
+    ) {
+      const c = $set.includedCredit as {
+        amountUnits?: number;
+        currency?: string;
+      };
+      $set.includedCredit = {
+        amountUnits: c.amountUnits ?? existing.includedCredit.amountUnits,
+        currency: existing.includedCredit.currency,
+      };
+    }
     const rawRules = input.rateLimits ?? patchRules;
     if (rawRules !== undefined) {
       if (!Array.isArray(rawRules)) {

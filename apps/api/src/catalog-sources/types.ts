@@ -13,13 +13,13 @@
 export type FetchedModelStatus = "alpha" | "beta" | "deprecated" | "ga";
 
 export type FetchedModelCost = {
-  inputMinorPerMillion: number;
-  outputMinorPerMillion: number;
-  reasoningMinorPerMillion?: number | undefined;
-  cacheReadMinorPerMillion?: number | undefined;
-  cacheWriteMinorPerMillion?: number | undefined;
-  inputAudioMinorPerMillion?: number | undefined;
-  outputAudioMinorPerMillion?: number | undefined;
+  inputUnitsPerMillion: number;
+  outputUnitsPerMillion: number;
+  reasoningUnitsPerMillion?: number | undefined;
+  cacheReadUnitsPerMillion?: number | undefined;
+  cacheWriteUnitsPerMillion?: number | undefined;
+  inputAudioUnitsPerMillion?: number | undefined;
+  outputAudioUnitsPerMillion?: number | undefined;
 };
 
 export type FetchedModel = {

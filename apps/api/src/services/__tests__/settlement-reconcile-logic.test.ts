@@ -172,16 +172,16 @@ describe("recon idempotency before live model/provider", () => {
 
   test("frozen price + upstream allows reconstruct when model deleted", () => {
     const ctx = {
-      priceMinor: 42,
+      priceUnits: 42,
       upstreamModelId: "gpt-4o",
       currency: "USD",
       priceSchedule: {
-        inputMinorPerMillion: 100,
-        outputMinorPerMillion: 200,
+        inputUnitsPerMillion: 100,
+        outputUnitsPerMillion: 200,
       },
     };
     const canReconstruct =
-      (typeof ctx.priceMinor === "number" || ctx.priceSchedule !== undefined) &&
+      (typeof ctx.priceUnits === "number" || ctx.priceSchedule !== undefined) &&
       !!ctx.upstreamModelId;
     expect(canReconstruct).toBe(true);
   });

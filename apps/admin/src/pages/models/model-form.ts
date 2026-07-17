@@ -17,13 +17,13 @@ type Modality = ModelModality;
 type Status = ModelStatus;
 
 export interface TokenPriceSchedule {
-  inputMinorPerMillion: number;
-  outputMinorPerMillion: number;
-  reasoningMinorPerMillion?: number;
-  cacheReadMinorPerMillion?: number;
-  cacheWriteMinorPerMillion?: number;
-  inputAudioMinorPerMillion?: number;
-  outputAudioMinorPerMillion?: number;
+  inputUnitsPerMillion: number;
+  outputUnitsPerMillion: number;
+  reasoningUnitsPerMillion?: number;
+  cacheReadUnitsPerMillion?: number;
+  cacheWriteUnitsPerMillion?: number;
+  inputAudioUnitsPerMillion?: number;
+  outputAudioUnitsPerMillion?: number;
 }
 
 export interface ModelEntry {
@@ -288,8 +288,8 @@ export interface FormState {
   inputModalities: string;
   outputModalities: string;
   status: StatusFilter;
-  inputMinor: string;
-  outputMinor: string;
+  inputUnits: string;
+  outputUnits: string;
   currency: string;
   marginBps: string;
   firstProviderId: string;
@@ -321,8 +321,8 @@ export function emptyForm(): FormState {
     inputModalities: "text",
     outputModalities: "text",
     status: "none",
-    inputMinor: "0",
-    outputMinor: "0",
+    inputUnits: "0",
+    outputUnits: "0",
     currency: "USD",
     marginBps: "0",
     firstProviderId: "",
@@ -350,8 +350,8 @@ export function formFromModel(m: Model): FormState {
     inputModalities: modalitiesToText(m.modalities.input),
     outputModalities: modalitiesToText(m.modalities.output),
     status: m.status ?? "none",
-    inputMinor: String(m.price.inputMinorPerMillion),
-    outputMinor: String(m.price.outputMinorPerMillion),
+    inputUnits: String(m.price.inputUnitsPerMillion),
+    outputUnits: String(m.price.outputUnitsPerMillion),
     currency: m.currency,
     marginBps: String(m.marginBps),
     firstProviderId: "",
@@ -393,8 +393,8 @@ export function formFromFetched(m: FetchedModel, base: FormState): FormState {
     inputModalities: m.modalities.input.length > 0 ? modalitiesToText(m.modalities.input as Modality[]) : base.inputModalities,
     outputModalities: m.modalities.output.length > 0 ? modalitiesToText(m.modalities.output as Modality[]) : base.outputModalities,
     status: m.status ?? "none",
-    inputMinor: m.cost ? String(m.cost.inputMinorPerMillion) : base.inputMinor,
-    outputMinor: m.cost ? String(m.cost.outputMinorPerMillion) : base.outputMinor,
+    inputUnits: m.cost ? String(m.cost.inputUnitsPerMillion) : base.inputUnits,
+    outputUnits: m.cost ? String(m.cost.outputUnitsPerMillion) : base.outputUnits,
     firstUpstreamModelId: m.upstreamModelId,
     // metadataRows preserved via ...base
   };
@@ -415,9 +415,9 @@ export function buildModelPayload(f: FormState, isCreate: boolean):
   if (context === undefined)
     return { ok: false, error: "Context limit must be a positive integer." };
 
-  const inputMinor = toNonNegInt(f.inputMinor);
-  const outputMinor = toNonNegInt(f.outputMinor);
-  if (inputMinor === undefined || outputMinor === undefined)
+  const inputUnits = toNonNegInt(f.inputUnits);
+  const outputUnits = toNonNegInt(f.outputUnits);
+  if (inputUnits === undefined || outputUnits === undefined)
     return { ok: false, error: "Price must be non-negative integers." };
 
   const marginBps = toNonNegInt(f.marginBps);
@@ -440,8 +440,8 @@ export function buildModelPayload(f: FormState, isCreate: boolean):
   const status = f.status === "none" ? undefined : f.status;
 
   const price: TokenPriceSchedule = {
-    inputMinorPerMillion: inputMinor,
-    outputMinorPerMillion: outputMinor,
+    inputUnitsPerMillion: inputUnits,
+    outputUnitsPerMillion: outputUnits,
   };
 
   const payload: Record<string, unknown> = {

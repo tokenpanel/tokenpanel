@@ -6,7 +6,7 @@ import { ObjectId } from "mongodb";
 import { ParseResult, Schema } from "effect";
 import {
   CurrencyCode,
-  MoneyMinor,
+  MoneyUnits,
   Money,
   TokenCount,
   SafeInt,
@@ -35,7 +35,7 @@ import {
 
 export {
   CurrencyCode,
-  MoneyMinor,
+  MoneyUnits,
   Money,
   TokenCount,
   SafeInt,
@@ -127,21 +127,21 @@ export const TimestampFields = {
 // ---------------------------------------------------------------------------
 
 export const CustomerBalance = Schema.Struct({
-  amountMinor: MoneyMinor,
-  reservedMinor: Schema.optionalWith(MoneyMinor, { default: () => 0 }),
+  amountUnits: MoneyUnits,
+  reservedUnits: Schema.optionalWith(MoneyUnits, { default: () => 0 }),
   currency: CurrencyCode,
 });
 
 export type CustomerBalance = Schema.Schema.Type<typeof CustomerBalance>;
 
 export const TokenPriceSchedule = Schema.Struct({
-  inputMinorPerMillion: MoneyMinor,
-  outputMinorPerMillion: MoneyMinor,
-  reasoningMinorPerMillion: exactOptional(MoneyMinor),
-  cacheReadMinorPerMillion: exactOptional(MoneyMinor),
-  cacheWriteMinorPerMillion: exactOptional(MoneyMinor),
-  inputAudioMinorPerMillion: exactOptional(MoneyMinor),
-  outputAudioMinorPerMillion: exactOptional(MoneyMinor),
+  inputUnitsPerMillion: MoneyUnits,
+  outputUnitsPerMillion: MoneyUnits,
+  reasoningUnitsPerMillion: exactOptional(MoneyUnits),
+  cacheReadUnitsPerMillion: exactOptional(MoneyUnits),
+  cacheWriteUnitsPerMillion: exactOptional(MoneyUnits),
+  inputAudioUnitsPerMillion: exactOptional(MoneyUnits),
+  outputAudioUnitsPerMillion: exactOptional(MoneyUnits),
 });
 
 export type TokenPriceSchedule = Schema.Schema.Type<typeof TokenPriceSchedule>;

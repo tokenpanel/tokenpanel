@@ -18,17 +18,17 @@
  *  - tokens / requests — **hard**. Window sum must never exceed cap. Admission
  *    reserves against the cap; settle clamps any underestimate overshoot so
  *    counters stay ≤ cap (usage records still store true provider tokens).
- *  - spend_minor — **soft**. Like balance overdraft, spend counters may exceed
+ *  - spend_units — **soft**. Like balance overdraft, spend counters may exceed
  *    cap when actual spend > reserved estimate. Still reserved at admission so
  *    concurrent requests cannot all claim the same remaining budget.
- *    Rules with a currency only apply when request currency matches.
+ *    Caps are org-currency units (single currency per org).
  *
  * Windows are rolling: usage is stored in sub-buckets smaller than the window
  * and summed over [now − window, now]. Product policy: at most one active rule
- * per counter stream (dimension + window + scope target + currency) — enforced
- * on plan write via @tokenpanel/contracts. Effective-rule resolution also
- * collapses legacy duplicates to the strictest cap. Writes for the same stream
- * key are still coalesced (defensive).
+ * per counter stream (dimension + window + scope target) — enforced on plan
+ * write via @tokenpanel/contracts. Effective-rule resolution also collapses
+ * legacy duplicates to the strictest cap. Writes for the same stream key are
+ * still coalesced (defensive).
  *
  * Counter values are never stored negative (release floors at 0).
  *
@@ -61,8 +61,8 @@ export type CheckLimitsParams = {
   customerId: ObjectId;
   rules: RateLimitRule[];
   estimatedTokens?: number | undefined;
-  estimatedSpendMinor?: number | undefined;
-  /** ISO currency for spend_minor rules (skipped on mismatch). */
+  estimatedSpendUnits?: number | undefined;
+  /** ISO currency for spend_units rules (skipped on mismatch). */
   currency?: string | undefined;
   modelAliasId?: string | undefined;
   /**
@@ -79,7 +79,7 @@ export type RecordUsageParams = {
   usage: {
     tokens: number;
     requests: number;
-    spendMinor: number;
+    spendUnits: number;
     currency: string;
     modelAliasId?: string | undefined;
   };
@@ -111,8 +111,8 @@ export type ReserveLimitsParams = {
   readonly customerId: ObjectId;
   readonly rules: readonly RateLimitRule[];
   readonly estimatedTokens?: number | undefined;
-  readonly estimatedSpendMinor?: number | undefined;
-  /** ISO currency for spend_minor rules (skipped on mismatch). */
+  readonly estimatedSpendUnits?: number | undefined;
+  /** ISO currency for spend_units rules (skipped on mismatch). */
   readonly currency?: string | undefined;
   readonly modelAliasId?: string | undefined;
   readonly nowMs?: number | undefined;
@@ -133,7 +133,7 @@ export type SettleLimitsParams = {
 export type EnforceParams = {
   customerId: ObjectId;
   estimatedTokens?: number | undefined;
-  estimatedSpendMinor?: number | undefined;
+  estimatedSpendUnits?: number | undefined;
   currency?: string | undefined;
   modelAliasId?: string | undefined;
 };
@@ -164,10 +164,9 @@ export function ruleIncrement(
       return usage.tokens;
     case "requests":
       return 1;
-    case "spend_minor":
-      // Only count spend in the rule's currency (null currency → any).
-      if (rule.currency != null && rule.currency !== usage.currency) return 0;
-      return usage.spendMinor;
+    case "spend_units":
+      // Org is single-currency; all spend counts toward the same stream.
+      return usage.spendUnits;
   }
 }
 
@@ -180,7 +179,7 @@ export function estimatedRuleIncrement(
   rule: RateLimitRule,
   estimates: {
     readonly estimatedTokens?: number | undefined;
-    readonly estimatedSpendMinor?: number | undefined;
+    readonly estimatedSpendUnits?: number | undefined;
     readonly currency?: string | undefined;
   },
 ): number {
@@ -189,23 +188,20 @@ export function estimatedRuleIncrement(
       return Math.max(0, estimates.estimatedTokens ?? 0);
     case "requests":
       return 1;
-    case "spend_minor":
-      if (rule.currency != null && rule.currency !== estimates.currency) {
-        return 0;
-      }
-      return Math.max(0, estimates.estimatedSpendMinor ?? 0);
+    case "spend_units":
+      return Math.max(0, estimates.estimatedSpendUnits ?? 0);
   }
 }
 
 /**
  * Whether a dimension may exceed its rolling cap after admission.
- * spend_minor is money-like (soft); tokens/requests are hard non-negative
+ * spend_units is money-like (soft); tokens/requests are hard non-negative
  * remaining capacity (window sum must stay ≤ cap).
  */
 export function allowsCapOvershoot(
   dimension: RateLimitRule["dimension"],
 ): boolean {
-  return dimension === "spend_minor";
+  return dimension === "spend_units";
 }
 
 /** Remaining room under a hard cap given current window sum. Never negative. */
@@ -410,7 +406,7 @@ export const checkLimits = (
       customerId,
       rules,
       estimatedTokens,
-      estimatedSpendMinor,
+      estimatedSpendUnits,
       currency,
       modelAliasId,
     } = params;
@@ -424,7 +420,7 @@ export const checkLimits = (
 
       const increment = estimatedRuleIncrement(rule, {
         estimatedTokens,
-        estimatedSpendMinor,
+        estimatedSpendUnits,
         currency,
       });
       // Zero-estimate token/spend rules are skipped at admission (nothing to
@@ -477,7 +473,7 @@ type PlannedHold = {
 function planHolds(params: {
   rules: readonly RateLimitRule[];
   estimatedTokens?: number | undefined;
-  estimatedSpendMinor?: number | undefined;
+  estimatedSpendUnits?: number | undefined;
   currency?: string | undefined;
   modelAliasId?: string | undefined;
   nowMs: number;
@@ -489,7 +485,7 @@ function planHolds(params: {
     if (target === undefined) continue;
     const increment = estimatedRuleIncrement(rule, {
       estimatedTokens: params.estimatedTokens,
-      estimatedSpendMinor: params.estimatedSpendMinor,
+      estimatedSpendUnits: params.estimatedSpendUnits,
       currency: params.currency,
     });
     if (increment <= 0) continue;
@@ -524,7 +520,7 @@ export const reserveLimits = (
     const planned = planHolds({
       rules: params.rules,
       estimatedTokens: params.estimatedTokens,
-      estimatedSpendMinor: params.estimatedSpendMinor,
+      estimatedSpendUnits: params.estimatedSpendUnits,
       currency: params.currency,
       modelAliasId: params.modelAliasId,
       nowMs,
@@ -545,7 +541,7 @@ export const reserveLimits = (
         customerId: params.customerId,
         rules: [...params.rules],
         estimatedTokens: params.estimatedTokens,
-        estimatedSpendMinor: params.estimatedSpendMinor,
+        estimatedSpendUnits: params.estimatedSpendUnits,
         currency: params.currency,
         modelAliasId: params.modelAliasId,
         nowMs,
@@ -738,7 +734,7 @@ export const releaseLimits = (
  * at preflight so mid-request window rolls do not orphan holds.
  *
  * Actual > reserved:
- *  - spend_minor: soft — full overage applied (cap may be exceeded)
+ *  - spend_units: soft — full overage applied (cap may be exceeded)
  *  - tokens / requests: hard — claim at most remaining room under cap
  *
  * No reservation (legacy / playground): increments current buckets with the
@@ -935,7 +931,7 @@ export const enforce = (
     const {
       customerId,
       estimatedTokens,
-      estimatedSpendMinor,
+      estimatedSpendUnits,
       currency,
       modelAliasId,
     } = params;
@@ -945,7 +941,7 @@ export const enforce = (
       customerId,
       rules,
       estimatedTokens,
-      estimatedSpendMinor,
+      estimatedSpendUnits,
       currency,
       modelAliasId,
     });
@@ -997,7 +993,7 @@ export function parseLimitReservation(params: {
     if (
       o.dimension !== "tokens" &&
       o.dimension !== "requests" &&
-      o.dimension !== "spend_minor"
+      o.dimension !== "spend_units"
     ) {
       continue;
     }

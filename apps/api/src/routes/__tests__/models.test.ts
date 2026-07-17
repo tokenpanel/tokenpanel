@@ -43,7 +43,7 @@ test("normalizeEntries: priority defaults to index for multiple entries", () => 
 });
 
 test("normalizeEntries: preserves cost/price overrides", () => {
-  const price = { inputMinorPerMillion: 300, outputMinorPerMillion: 600 };
+  const price = { inputUnitsPerMillion: 300, outputUnitsPerMillion: 600 };
   const out = normalizeEntries([{ providerId: new ObjectId(), upstreamModelId: "x", price }]);
   expect(out[0]?.price).toEqual(price);
 });
@@ -54,7 +54,7 @@ const validCreateBody = () => ({
   entries: [{ providerId: new ObjectId().toHexString(), upstreamModelId: "gpt-4o" }],
   limits: { context: 128000 },
   modalities: { input: ["text"] as const, output: ["text"] as const },
-  price: { inputMinorPerMillion: 300, outputMinorPerMillion: 600 },
+  price: { inputUnitsPerMillion: 300, outputUnitsPerMillion: 600 },
   currency: "USD",
 });
 

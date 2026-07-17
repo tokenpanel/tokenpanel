@@ -98,8 +98,9 @@ export type ApiRuntimeConfig = Readonly<{
    */
   trustedProxies: readonly string[];
   /**
-   * Prefer CF-Connecting-IP when trustProxy trusts the peer.
-   * Env: TRUST_CLOUDFLARE. Default false.
+   * Prefer CF-Connecting-IP when the TCP peer is a Cloudflare edge IP.
+   * Not used for private reverse proxies (Caddy) — those must put the
+   * client in X-Real-IP after sanitizing. Env: TRUST_CLOUDFLARE. Default false.
    */
   trustCloudflare: boolean;
 }>;

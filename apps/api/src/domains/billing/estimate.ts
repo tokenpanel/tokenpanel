@@ -46,18 +46,18 @@ export function estimatePromptTokens(messages: readonly ChatMessage[]): number {
  * the most expensive active entry.
  */
 export function worstCaseActiveEntryPrice(model: ModelDoc): {
-  inputMinorPerMillion: number;
-  outputMinorPerMillion: number;
+  inputUnitsPerMillion: number;
+  outputUnitsPerMillion: number;
 } {
   const active = model.entries.filter((e) => e.active);
-  let maxIn = model.price.inputMinorPerMillion;
-  let maxOut = model.price.outputMinorPerMillion;
+  let maxIn = model.price.inputUnitsPerMillion;
+  let maxOut = model.price.outputUnitsPerMillion;
   for (const e of active) {
     const s = e.price ?? model.price;
-    if (s.inputMinorPerMillion > maxIn) maxIn = s.inputMinorPerMillion;
-    if (s.outputMinorPerMillion > maxOut) maxOut = s.outputMinorPerMillion;
+    if (s.inputUnitsPerMillion > maxIn) maxIn = s.inputUnitsPerMillion;
+    if (s.outputUnitsPerMillion > maxOut) maxOut = s.outputUnitsPerMillion;
   }
-  return { inputMinorPerMillion: maxIn, outputMinorPerMillion: maxOut };
+  return { inputUnitsPerMillion: maxIn, outputUnitsPerMillion: maxOut };
 }
 
 /**
@@ -73,7 +73,7 @@ export function resolveCompletionCap(
   return Math.max(0, model.limits.output ?? DEFAULT_COMPLETION_CAP);
 }
 
-/** Conservative pre-flight spend estimate in minor units. */
+/** Conservative pre-flight spend estimate in units. */
 export function estimatePreFlightSpend(params: {
   readonly model: ModelDoc;
   readonly estimatedPromptTokens: number;
@@ -82,26 +82,26 @@ export function estimatePreFlightSpend(params: {
   readonly promptTokens: number;
   readonly completionTokens: number;
   readonly estimatedTokens: number;
-  readonly estimatedSpendMinor: number;
+  readonly estimatedSpendUnits: number;
   readonly currency: string;
   readonly price: {
-    readonly inputMinorPerMillion: number;
-    readonly outputMinorPerMillion: number;
+    readonly inputUnitsPerMillion: number;
+    readonly outputUnitsPerMillion: number;
   };
 } {
   const prompt = Math.max(0, params.estimatedPromptTokens);
   const completion = resolveCompletionCap(params.maxCompletionTokens, params.model);
   const price = worstCaseActiveEntryPrice(params.model);
-  const estimatedSpendMinor =
-    Math.ceil((prompt * price.inputMinorPerMillion) / TOKENS_PER_MILLION_COUNT) +
+  const estimatedSpendUnits =
+    Math.ceil((prompt * price.inputUnitsPerMillion) / TOKENS_PER_MILLION_COUNT) +
     Math.ceil(
-      (completion * price.outputMinorPerMillion) / TOKENS_PER_MILLION_COUNT,
+      (completion * price.outputUnitsPerMillion) / TOKENS_PER_MILLION_COUNT,
     );
   return {
     promptTokens: prompt,
     completionTokens: completion,
     estimatedTokens: prompt + completion,
-    estimatedSpendMinor,
+    estimatedSpendUnits,
     currency: params.model.currency,
     price,
   };

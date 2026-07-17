@@ -33,14 +33,14 @@ test("formatMoney: EUR/GBP/INR use symbol + 2 decimals + code", () => {
   expect(formatMoney(12345, "INR")).toBe("\u20b9123.45 INR");
 });
 
-test("formatMoney: JPY zero-decimal minor units (1 minor = 1 yen)", () => {
+test("formatMoney: JPY zero-decimal units (1 unit = 1 yen)", () => {
   expect(formatMoney(12345, "JPY")).toBe("\u00a512345 JPY");
   expect(formatMoney(100, "JPY")).toBe("\u00a5100 JPY");
   expect(formatMoney(0, "JPY")).toBe("\u00a50 JPY");
 });
 
 test("formatMoney: three-decimal currencies (KWD)", () => {
-  // 1.234 KWD = 1234 minor
+  // 1.234 KWD = 1234 units
   expect(formatMoney(1234, "KWD")).toBe("1.234 KWD");
   expect(formatMoney(1, "KWD")).toBe("0.001 KWD");
 });
@@ -54,7 +54,7 @@ test("currencyExponent: zero-decimal BIF/VUV (not /100)", () => {
 
 test("currencyExponent: four-decimal CLF", () => {
   expect(currencyExponent("CLF")).toBe(4);
-  // 1.2345 CLF = 12345 minor
+  // 1.2345 CLF = 12345 units
   expect(formatMoney(12345, "CLF")).toBe("1.2345 CLF");
   expect(formatMoney(1, "CLF")).toBe("0.0001 CLF");
 });
@@ -64,7 +64,7 @@ test("formatMoney: unknown currency → 'X.XX CODE' fallback", () => {
   expect(formatMoney(0, "ABC")).toBe("0.00 ABC");
 });
 
-test("formatMoney: minor < 10 pads with leading zero", () => {
+test("formatMoney: units < 10 pads with leading zero", () => {
   expect(formatMoney(105, "USD")).toBe("$1.05 USD");
   expect(formatMoney(5, "USD")).toBe("$0.05 USD");
 });

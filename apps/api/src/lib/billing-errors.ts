@@ -68,14 +68,14 @@ export function billingAppError(
         mode: "default_400",
       });
     case "insufficient_balance": {
-      const balanceMinor = num(extra, "balanceMinor") ?? num(extra, "availableMinor");
-      const requiredMinor = num(extra, "requiredMinor");
+      const balanceUnits = num(extra, "balanceUnits") ?? num(extra, "availableUnits");
+      const requiredUnits = num(extra, "requiredUnits");
       const currency = str(extra, "currency");
       return new InsufficientBalanceError({
         code: "insufficient_balance",
         message,
-        ...(balanceMinor !== undefined ? { balanceMinor } : {}),
-        ...(requiredMinor !== undefined ? { requiredMinor } : {}),
+        ...(balanceUnits !== undefined ? { balanceUnits } : {}),
+        ...(requiredUnits !== undefined ? { requiredUnits } : {}),
         ...(currency !== undefined ? { currency } : {}),
       });
     }

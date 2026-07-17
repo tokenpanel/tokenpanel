@@ -6,7 +6,7 @@ import {
   customerUpdateInput,
   balanceAdjustmentDoc,
   balanceAdjustmentCreateInput,
-  _balanceMoneyMinor,
+  _balanceMoneyUnits,
 } from "../customer.ts";
 
 const orgId = () => new ObjectId().toHexString();
@@ -19,7 +19,7 @@ test("customerDoc applies defaults: balance 0 USD, status active, metadata {}", 
     createdAt: new Date(),
     updatedAt: new Date(),
   });
-  expect(r.balance).toEqual({ amountMinor: 0, reservedMinor: 0, currency: "USD" });
+  expect(r.balance).toEqual({ amountUnits: 0, reservedUnits: 0, currency: "USD" });
   expect(r.status).toBe("active");
   expect(r.metadata).toEqual({});
   expect(r.externalId).toBeUndefined();
@@ -42,7 +42,7 @@ test("customerCreateInput requires name, optional email/externalId/balance/metad
   expect(
     customerCreateInput.safeParse({
       name: "Bob",
-      startingBalance: { amountMinor: -1, currency: "USD" },
+      startingBalance: { amountUnits: -1, currency: "USD" },
     }).success,
   ).toBe(false);
   expect(
@@ -61,7 +61,7 @@ test("customerUpdateInput allows nullish externalId/email", () => {
   expect(customerUpdateInput.safeParse({ status: "deleted" }).success).toBe(false);
 });
 
-test("balanceAdjustmentDoc requires amountMinor int (any sign), currency, reason enum", () => {
+test("balanceAdjustmentDoc requires amountUnits int (any sign), currency, reason enum", () => {
   const base = {
     _id: new ObjectId(),
     organizationId: new ObjectId(),
@@ -71,17 +71,17 @@ test("balanceAdjustmentDoc requires amountMinor int (any sign), currency, reason
     createdAt: new Date(),
     updatedAt: new Date(),
   };
-  expect(balanceAdjustmentDoc.safeParse({ ...base, amountMinor: 1000, reason: "topup" }).success).toBe(true);
-  expect(balanceAdjustmentDoc.safeParse({ ...base, amountMinor: -500, reason: "usage_debit" }).success).toBe(true);
-  expect(balanceAdjustmentDoc.safeParse({ ...base, amountMinor: 1000, reason: "bonus" }).success).toBe(false);
-  expect(balanceAdjustmentDoc.safeParse({ ...base, amountMinor: 1.5, reason: "topup" }).success).toBe(false);
-  expect(balanceAdjustmentDoc.safeParse({ ...base, amountMinor: 1000, reason: "topup", currency: "us" }).success).toBe(false);
+  expect(balanceAdjustmentDoc.safeParse({ ...base, amountUnits: 1000, reason: "topup" }).success).toBe(true);
+  expect(balanceAdjustmentDoc.safeParse({ ...base, amountUnits: -500, reason: "usage_debit" }).success).toBe(true);
+  expect(balanceAdjustmentDoc.safeParse({ ...base, amountUnits: 1000, reason: "bonus" }).success).toBe(false);
+  expect(balanceAdjustmentDoc.safeParse({ ...base, amountUnits: 1.5, reason: "topup" }).success).toBe(false);
+  expect(balanceAdjustmentDoc.safeParse({ ...base, amountUnits: 1000, reason: "topup", currency: "us" }).success).toBe(false);
 });
 
 test("balanceAdjustmentCreateInput coerces occurredAt from string", () => {
   const r = balanceAdjustmentCreateInput.parse({
     customerId: orgId(),
-    amountMinor: 1000,
+    amountUnits: 1000,
     currency: "USD",
     reason: "topup",
     occurredAt: "2026-01-01T00:00:00.000Z",
@@ -92,7 +92,7 @@ test("balanceAdjustmentCreateInput coerces occurredAt from string", () => {
 test("balanceAdjustmentCreateInput reason enum", () => {
   const b = {
     customerId: orgId(),
-    amountMinor: 100,
+    amountUnits: 100,
     currency: "USD",
   };
   for (const reason of ["topup", "usage_debit", "refund", "adjustment", "overage"]) {
@@ -101,7 +101,7 @@ test("balanceAdjustmentCreateInput reason enum", () => {
   expect(balanceAdjustmentCreateInput.safeParse({ ...b, reason: "bonus" }).success).toBe(false);
 });
 
-test("re-export _balanceMoneyMinor matches moneyMinor", () => {
-  expect(_balanceMoneyMinor.safeParse(100).success).toBe(true);
-  expect(_balanceMoneyMinor.safeParse(-1).success).toBe(false);
+test("re-export _balanceMoneyUnits matches moneyUnits", () => {
+  expect(_balanceMoneyUnits.safeParse(100).success).toBe(true);
+  expect(_balanceMoneyUnits.safeParse(-1).success).toBe(false);
 });

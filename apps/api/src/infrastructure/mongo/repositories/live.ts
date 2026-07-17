@@ -753,12 +753,12 @@ export const CustomerRepositoryLive = Layer.effect(
             doc,
           );
           let adjustmentDoc: BalanceAdjustmentDoc | null = null;
-          if (customer.balance.amountMinor !== 0) {
+          if (customer.balance.amountUnits !== 0) {
             adjustmentDoc = {
               _id: new ObjectId(),
               organizationId: toObjectId(customer.organizationId),
               customerId,
-              amountMinor: customer.balance.amountMinor,
+              amountUnits: customer.balance.amountUnits,
               currency: customer.balance.currency,
               reason: "topup",
               usageRecordId: null,
@@ -833,7 +833,7 @@ export const CustomerRepositoryLive = Layer.effect(
             _id: new ObjectId(),
             organizationId: orgId,
             customerId: oid,
-            amountMinor: input.amountMinor,
+            amountUnits: input.amountUnits,
             currency: input.currency,
             reason: input.reason,
             usageRecordId: null,
@@ -866,10 +866,38 @@ export const CustomerRepositoryLive = Layer.effect(
                     organizationId: orgId,
                     "balance.currency": input.expectedBalanceCurrency,
                   },
-                  {
-                    $inc: { "balance.amountMinor": input.amountMinor },
-                    $set: setFields,
-                  },
+                  // Dual-write Units + legacy Minor until post/ drops Minor.
+                  [
+                    {
+                      $set: {
+                        ...Object.fromEntries(
+                          Object.entries(setFields).map(([k, v]) => [k, v]),
+                        ),
+                        "balance.amountUnits": {
+                          $add: [
+                            {
+                              $ifNull: [
+                                "$balance.amountMinor",
+                                { $ifNull: ["$balance.amountUnits", 0] },
+                              ],
+                            },
+                            input.amountUnits,
+                          ],
+                        },
+                        "balance.amountMinor": {
+                          $add: [
+                            {
+                              $ifNull: [
+                                "$balance.amountMinor",
+                                { $ifNull: ["$balance.amountUnits", 0] },
+                              ],
+                            },
+                            input.amountUnits,
+                          ],
+                        },
+                      },
+                    },
+                  ],
                   { returnDocument: "after", session },
                 );
                 if (!res) throw new Error("BalanceCustomerGone");
@@ -1584,8 +1612,8 @@ export const UsageRepositoryLive = Layer.effect(
               _id: string;
               requests: number;
               tokens: number;
-              costMinor: number;
-              priceMinor: number;
+              costUnits: number;
+              priceUnits: number;
               currency: string;
             }>([
               { $match: match },
@@ -1594,37 +1622,45 @@ export const UsageRepositoryLive = Layer.effect(
                   _id: "$modelAliasId",
                   requests: { $sum: 1 },
                   tokens: { $sum: "$totalTokens" },
-                  costMinor: { $sum: "$costMinor" },
-                  priceMinor: { $sum: "$priceMinor" },
+                  costUnits: {
+                    $sum: {
+                      $ifNull: ["$costUnits", { $ifNull: ["$costMinor", 0] }],
+                    },
+                  },
+                  priceUnits: {
+                    $sum: {
+                      $ifNull: ["$priceUnits", { $ifNull: ["$priceMinor", 0] }],
+                    },
+                  },
                   currency: { $first: "$currency" },
                 },
               },
-              { $sort: { costMinor: -1 } },
+              { $sort: { costUnits: -1 } },
             ])
             .toArray();
           let totalRequests = 0;
           let totalTokens = 0;
-          let totalCostMinor = 0;
-          let totalPriceMinor = 0;
+          let totalCostUnits = 0;
+          let totalPriceUnits = 0;
           const currency = rows[0]?.currency ?? "USD";
           const byModel = rows.map((r) => {
             totalRequests += r.requests;
             totalTokens += r.tokens;
-            totalCostMinor += r.costMinor;
-            totalPriceMinor += r.priceMinor;
+            totalCostUnits += r.costUnits;
+            totalPriceUnits += r.priceUnits;
             return {
               modelAliasId: r._id,
               requests: r.requests,
               tokens: r.tokens,
-              costMinor: r.costMinor,
-              priceMinor: r.priceMinor,
+              costUnits: r.costUnits,
+              priceUnits: r.priceUnits,
             };
           });
           return {
             totalRequests,
             totalTokens,
-            totalCostMinor,
-            totalPriceMinor,
+            totalCostUnits,
+            totalPriceUnits,
             currency,
             byModel,
           };
@@ -1641,8 +1677,8 @@ export const UsageRepositoryLive = Layer.effect(
                 _id: string;
                 requests: number;
                 tokens: number;
-                costMinor: number;
-                priceMinor: number;
+                costUnits: number;
+                priceUnits: number;
               }>([
                 { $match: match },
                 {
@@ -1650,8 +1686,16 @@ export const UsageRepositoryLive = Layer.effect(
                     _id: "$currency",
                     requests: { $sum: 1 },
                     tokens: { $sum: "$totalTokens" },
-                    costMinor: { $sum: "$costMinor" },
-                    priceMinor: { $sum: "$priceMinor" },
+                    costUnits: {
+                      $sum: {
+                        $ifNull: ["$costUnits", { $ifNull: ["$costMinor", 0] }],
+                      },
+                    },
+                    priceUnits: {
+                      $sum: {
+                        $ifNull: ["$priceUnits", { $ifNull: ["$priceMinor", 0] }],
+                      },
+                    },
                   },
                 },
               ])
@@ -1661,8 +1705,8 @@ export const UsageRepositoryLive = Layer.effect(
                 _id: { customerId: ObjectId; currency: string };
                 requests: number;
                 tokens: number;
-                costMinor: number;
-                priceMinor: number;
+                costUnits: number;
+                priceUnits: number;
               }>([
                 { $match: { ...match, customerId: { $ne: null } } },
                 {
@@ -1673,11 +1717,19 @@ export const UsageRepositoryLive = Layer.effect(
                     },
                     requests: { $sum: 1 },
                     tokens: { $sum: "$totalTokens" },
-                    costMinor: { $sum: "$costMinor" },
-                    priceMinor: { $sum: "$priceMinor" },
+                    costUnits: {
+                      $sum: {
+                        $ifNull: ["$costUnits", { $ifNull: ["$costMinor", 0] }],
+                      },
+                    },
+                    priceUnits: {
+                      $sum: {
+                        $ifNull: ["$priceUnits", { $ifNull: ["$priceMinor", 0] }],
+                      },
+                    },
                   },
                 },
-                { $sort: { priceMinor: -1 } },
+                { $sort: { priceUnits: -1 } },
                 {
                   $group: {
                     _id: "$_id.currency",
@@ -1687,7 +1739,7 @@ export const UsageRepositoryLive = Layer.effect(
                 { $project: { rows: { $slice: ["$rows", top] } } },
                 { $unwind: "$rows" },
                 { $replaceRoot: { newRoot: "$rows" } },
-                { $sort: { priceMinor: -1 } },
+                { $sort: { priceUnits: -1 } },
               ])
               .toArray(),
           ]);
@@ -1696,16 +1748,16 @@ export const UsageRepositoryLive = Layer.effect(
               currency: r._id || "USD",
               requests: r.requests,
               tokens: r.tokens,
-              costMinor: r.costMinor,
-              priceMinor: r.priceMinor,
+              costUnits: r.costUnits,
+              priceUnits: r.priceUnits,
             })),
             topCustomers: byCustomer.map((r) => ({
               customerId: r._id.customerId.toHexString(),
               currency: r._id.currency || "USD",
               requests: r.requests,
               tokens: r.tokens,
-              costMinor: r.costMinor,
-              priceMinor: r.priceMinor,
+              costUnits: r.costUnits,
+              priceUnits: r.priceUnits,
             })),
           };
         }),
@@ -1743,12 +1795,19 @@ export const UsageRepositoryLive = Layer.effect(
                 .project({ active: 1 })
                 .toArray(),
               db().customers
-                .aggregate<{ _id: string; totalMinor: number }>([
+                .aggregate<{ _id: string; totalUnits: number }>([
                   { $match: { organizationId: orgId } },
                   {
                     $group: {
                       _id: "$balance.currency",
-                      totalMinor: { $sum: "$balance.amountMinor" },
+                      totalUnits: {
+                        $sum: {
+                          $ifNull: [
+                            "$balance.amountMinor",
+                            { $ifNull: ["$balance.amountUnits", 0] },
+                          ],
+                        },
+                      },
                     },
                   },
                 ])
@@ -1765,7 +1824,7 @@ export const UsageRepositoryLive = Layer.effect(
           ).length;
           const balancesByCurrency: Record<string, number> = {};
           for (const row of balanceAgg) {
-            if (row._id) balancesByCurrency[row._id] = row.totalMinor;
+            if (row._id) balancesByCurrency[row._id] = row.totalUnits;
           }
           const decodedRecent = yield* decodeCustomers(recentCustomers);
           return {

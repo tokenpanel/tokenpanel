@@ -67,8 +67,8 @@ function validForm(over: Record<string, unknown> = {}) {
     inputModalities: "text",
     outputModalities: "text",
     status: "none",
-    inputMinor: "300",
-    outputMinor: "600",
+    inputUnits: "300",
+    outputUnits: "600",
     currency: "USD",
     marginBps: "0",
     firstProviderId: "p1",
@@ -116,9 +116,9 @@ test("buildModelPayload: context not positive int → error", () => {
 });
 
 test("buildModelPayload: price not non-neg int → error", () => {
-  expect(buildModelPayload(validForm({ inputMinor: "-1" }), true).ok).toBe(false);
-  expect(buildModelPayload(validForm({ inputMinor: "1.5" }), true).ok).toBe(false);
-  expect(buildModelPayload(validForm({ outputMinor: "" }), true).ok).toBe(false);
+  expect(buildModelPayload(validForm({ inputUnits: "-1" }), true).ok).toBe(false);
+  expect(buildModelPayload(validForm({ inputUnits: "1.5" }), true).ok).toBe(false);
+  expect(buildModelPayload(validForm({ outputUnits: "" }), true).ok).toBe(false);
 });
 
 test("buildModelPayload: margin not non-neg int → error", () => {
@@ -334,7 +334,7 @@ test("formFromModel: rehydrates metadata rows from model", () => {
     attachment: false,
     limits: { context: 100 },
     modalities: { input: ["text"], output: ["text"] },
-    price: { inputMinorPerMillion: 0, outputMinorPerMillion: 0 },
+    price: { inputUnitsPerMillion: 0, outputUnitsPerMillion: 0 },
     marginBps: 0,
     currency: "USD",
     active: true,
@@ -360,7 +360,7 @@ test("formFromModel: malformed metadata sets corrupt flag and empty rows", () =>
     attachment: false,
     limits: { context: 100 },
     modalities: { input: ["text"], output: ["text"] },
-    price: { inputMinorPerMillion: 0, outputMinorPerMillion: 0 },
+    price: { inputUnitsPerMillion: 0, outputUnitsPerMillion: 0 },
     marginBps: 0,
     currency: "USD",
     active: true,

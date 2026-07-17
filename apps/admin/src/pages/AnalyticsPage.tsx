@@ -74,15 +74,15 @@ export default function AnalyticsPage(): React.ReactElement {
 
   const totals = summary?.totals;
   const primaryCurrency = totals?.byCurrency[0]?.currency ?? "USD";
-  const costMinor = totals?.byCurrency.reduce((s, r) => s + r.costMinor, 0) ?? 0;
-  const priceMinor =
-    totals?.byCurrency.reduce((s, r) => s + r.priceMinor, 0) ?? 0;
+  const costUnits = totals?.byCurrency.reduce((s, r) => s + r.costUnits, 0) ?? 0;
+  const priceUnits =
+    totals?.byCurrency.reduce((s, r) => s + r.priceUnits, 0) ?? 0;
   const multiCurrency = (totals?.byCurrency.length ?? 0) > 1;
-  // Share bars compare within currency only — never mix USD/AUD/CAD minors.
+  // Share bars compare within currency only — never mix USD/AUD/CAD units.
   const maxPriceByCurrency = new Map<string, number>();
   for (const r of summary?.topCustomers ?? []) {
     const prev = maxPriceByCurrency.get(r.currency) ?? 0;
-    if (r.priceMinor > prev) maxPriceByCurrency.set(r.currency, r.priceMinor);
+    if (r.priceUnits > prev) maxPriceByCurrency.set(r.currency, r.priceUnits);
   }
 
   return (
@@ -139,9 +139,9 @@ export default function AnalyticsPage(): React.ReactElement {
                 ? "…"
                 : multiCurrency
                   ? totals!.byCurrency
-                      .map((r) => formatMoney(r.costMinor, r.currency))
+                      .map((r) => formatMoney(r.costUnits, r.currency))
                       .join(" · ")
-                  : formatMoney(costMinor, primaryCurrency)
+                  : formatMoney(costUnits, primaryCurrency)
             }
             icon={<TrendingDown className="size-4" />}
           />
@@ -154,9 +154,9 @@ export default function AnalyticsPage(): React.ReactElement {
                 ? "…"
                 : multiCurrency
                   ? totals!.byCurrency
-                      .map((r) => formatMoney(r.priceMinor, r.currency))
+                      .map((r) => formatMoney(r.priceUnits, r.currency))
                       .join(" · ")
-                  : formatMoney(priceMinor, primaryCurrency)
+                  : formatMoney(priceUnits, primaryCurrency)
             }
             icon={<TrendingUp className="size-4" />}
           />
@@ -187,7 +187,7 @@ export default function AnalyticsPage(): React.ReactElement {
                     {formatNumber(row.tokens)}
                   </TableCell>
                   <TableCell className="text-right tabular-nums">
-                    {formatMoney(row.priceMinor, row.currency)}
+                    {formatMoney(row.priceUnits, row.currency)}
                   </TableCell>
                   <TableCell>
                     <div className="h-2 w-full rounded-full bg-muted overflow-hidden">
@@ -197,7 +197,7 @@ export default function AnalyticsPage(): React.ReactElement {
                         )}
                         style={{
                           width: `${Math.round(
-                            (row.priceMinor /
+                            (row.priceUnits /
                               Math.max(
                                 1,
                                 maxPriceByCurrency.get(row.currency) ?? 1,

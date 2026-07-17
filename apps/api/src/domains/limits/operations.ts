@@ -65,7 +65,7 @@ export const evaluateRateLimits = (params: {
   readonly customerId: ObjectId;
   readonly rules: readonly RateLimitRule[];
   readonly estimatedTokens?: number | undefined;
-  readonly estimatedSpendMinor?: number | undefined;
+  readonly estimatedSpendUnits?: number | undefined;
   readonly currency?: string | undefined;
   readonly modelAliasId?: string | undefined;
 }): Effect.Effect<RateLimitCheckResult, SystemError, Clock | UsageRepo> =>
@@ -75,7 +75,7 @@ export const evaluateRateLimits = (params: {
       customerId: params.customerId,
       rules: [...params.rules],
       estimatedTokens: params.estimatedTokens,
-      estimatedSpendMinor: params.estimatedSpendMinor,
+      estimatedSpendUnits: params.estimatedSpendUnits,
       currency: params.currency,
       modelAliasId: params.modelAliasId,
       nowMs: clock.nowMs(),
@@ -90,7 +90,7 @@ export const evaluateRateLimits = (params: {
 export const enforceRateLimits = (params: {
   readonly customerId: ObjectId;
   readonly estimatedTokens?: number | undefined;
-  readonly estimatedSpendMinor?: number | undefined;
+  readonly estimatedSpendUnits?: number | undefined;
   readonly currency?: string | undefined;
   readonly modelAliasId?: string | undefined;
 }): Effect.Effect<
@@ -105,7 +105,7 @@ export const enforceRateLimits = (params: {
       customerId: params.customerId,
       rules,
       estimatedTokens: params.estimatedTokens,
-      estimatedSpendMinor: params.estimatedSpendMinor,
+      estimatedSpendUnits: params.estimatedSpendUnits,
       currency: params.currency,
       modelAliasId: params.modelAliasId,
     });
@@ -170,7 +170,7 @@ export const reserveRateLimits = (params: {
   readonly customerId: ObjectId;
   readonly rules: readonly RateLimitRule[];
   readonly estimatedTokens?: number | undefined;
-  readonly estimatedSpendMinor?: number | undefined;
+  readonly estimatedSpendUnits?: number | undefined;
   readonly currency?: string | undefined;
   readonly modelAliasId?: string | undefined;
   readonly dryRun?: boolean | undefined;
@@ -187,7 +187,7 @@ export const reserveRateLimits = (params: {
       customerId: params.customerId,
       rules: params.rules,
       estimatedTokens: params.estimatedTokens,
-      estimatedSpendMinor: params.estimatedSpendMinor,
+      estimatedSpendUnits: params.estimatedSpendUnits,
       currency: params.currency,
       modelAliasId: params.modelAliasId,
       nowMs: clock.nowMs(),

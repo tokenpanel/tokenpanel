@@ -7,6 +7,9 @@ ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 # shellcheck source=../output.sh
 source "$ROOT/manager/lib/output.sh"
 
+# Unit tests exercise backup logic only — skip cross-command flock.
+TOKENPANEL_SKIP_MANAGER_LOCK=1
+
 APP_YML="/dev/null"
 BACKUP_DIR="$(mktemp -d)"
 MONGODB_DB="tokenpanel"

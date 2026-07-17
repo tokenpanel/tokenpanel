@@ -16,6 +16,7 @@
 
 source "${SCRIPT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}/output.sh"
 source "${SCRIPT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}/prompt.sh"
+source "${SCRIPT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}/lock.sh"
 
 # URI-encoded Mongo credentials (MONGO_USER_URI / MONGO_PASS_URI) are derived
 # in config.sh (_ensure_uri_creds), which is always sourced before this file.
@@ -74,9 +75,27 @@ _resume_writers() {
 
 create_backup() {
   local label="${1:-manual}"
-  local timestamp
+
+  # Serialize with update/restore/migrate/etc. Re-entrant if caller already holds.
+  acquire_manager_lock "backup" || return 1
+
+  # Unique path even within the same UTC second: include pid, and if the path
+  # still exists (PID reuse / clock skew), append a monotonic counter.
+  # Label stays as the final "_${label}.gz" segment so globs like
+  # *_pre-restore.gz / *_pre-update.gz keep working.
+  local timestamp pid backup_file n
   timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
-  local backup_file="${BACKUP_DIR}/${timestamp}_${label}.gz"
+  pid="$$"
+  n=0
+  backup_file="${BACKUP_DIR}/${timestamp}-${pid}_${label}.gz"
+  while [ -e "$backup_file" ]; do
+    n=$((n + 1))
+    backup_file="${BACKUP_DIR}/${timestamp}-${pid}-${n}_${label}.gz"
+    if [ "$n" -ge 1000 ]; then
+      err "could not allocate unique backup filename under $BACKUP_DIR"
+      return 1
+    fi
+  done
 
   mkdir -p "$BACKUP_DIR"
 
@@ -230,6 +249,32 @@ _drop_temp_db() {
     --quiet --eval "db.getSiblingDB('${tmp_db}').dropDatabase()" >/dev/null 2>&1 || true
 }
 
+# Restore EXIT-trap state. Globals (not locals) so the trap body can read them
+# after unexpected termination (signal / set -e abort of the whole script).
+#
+# _RESTORE_SWAP_UNSAFE=1 once the destructive drop+rename swap has started and
+# until it finishes cleanly. While set, the EXIT trap must NOT restart the API
+# — the live DB may be empty or only partially renamed.
+# Explicit rc==2 failure clears the trap and leaves API stopped; this flag
+# covers the path where the process dies before that code runs.
+_RESTORE_SWAP_UNSAFE=0
+_RESTORE_PRE_BACKUP=""
+
+# EXIT trap for restore_backup: restart API only when live DB is still safe.
+_restore_api_exit_trap() {
+  if [ "${_RESTORE_SWAP_UNSAFE:-0}" -eq 1 ]; then
+    echo "⚠ restore aborted during destructive swap — API left STOPPED" >&2
+    echo "  live database may be PARTIALLY restored — do NOT start api until recovery is confirmed" >&2
+    if [ -n "${_RESTORE_PRE_BACKUP:-}" ]; then
+      echo "  recover: tokenpanel restore \"${_RESTORE_PRE_BACKUP}\"" >&2
+    fi
+    return 0
+  fi
+  docker compose -f "$APP_YML" start api >/dev/null 2>&1 \
+    && echo "⚠ api restarted after aborted restore" \
+    || true
+}
+
 # Restore archive into a temp DB, verify it, then swap it into place of the
 # live DB via per-collection renameCollection. The LIVE database is never
 # touched until the temp DB is fully populated and verified. On any failure
@@ -277,7 +322,12 @@ _restore_into_temp() {
   # Swap: drop live DB, rename each temp collection into the live DB.
   # On partial failure the temp DB is PRESERVED (not dropped) so the operator
   # can retry the swap or recover from the pre-restore backup.
+  #
+  # Mark unsafe BEFORE drop/rename so an EXIT trap (SIGINT/SIGTERM/etc.) never
+  # restarts the API while live DB may be mid-swap. Cleared only on full
+  # success; left set on failure so unexpected termination also keeps API down.
   step "restore" "swapping temp database -> live (drop + rename)..."
+  _RESTORE_SWAP_UNSAFE=1
   if ! docker compose -f "$APP_YML" exec -T mongo mongosh "$admin_uri" --quiet --eval '
     var tmp = "'"$tmp_db"'", real = "'"$real_db"'";
     var dropRes = db.getSiblingDB(real).dropDatabase();
@@ -299,8 +349,10 @@ _restore_into_temp() {
   ' 2>/dev/null; then
     err "swap failed — live database may be partially restored"
     err "do NOT resume normal traffic until you recover"
+    # leave _RESTORE_SWAP_UNSAFE=1
     return 2
   fi
+  _RESTORE_SWAP_UNSAFE=0
   ok "swap complete: ${coll_count} collections restored to ${real_db}"
   return 0
 }
@@ -312,6 +364,10 @@ restore_backup() {
   # Resolve to an absolute path: stable regardless of the operator's CWD, and
   # matchable against the absolute paths apply_retention enumerates with ls -t.
   backup_file="$(cd "$(dirname "$backup_file")" && pwd)/$(basename "$backup_file")"
+
+  # Hold manager lock for the entire restore (incl. confirm + pre-restore dump +
+  # swap). Re-entrant create_backup inside will not self-deadlock.
+  acquire_manager_lock "restore" || return 1
 
   local admin_uri="mongodb://${MONGO_USER_URI}:${MONGO_PASS_URI}@localhost:27017/admin?authSource=admin&directConnection=true"
   local real_db="$MONGODB_DB"
@@ -341,23 +397,27 @@ restore_backup() {
   #    Protect the restore target from retention pruning: create_backup runs
   #    apply_retention, which could otherwise delete the very archive we are
   #    about to restore if it is old and lives in the same backup directory.
+  #    Capture create_backup stdout (path) — do not re-discover via glob.
   step "restore" "creating pre-restore backup of current database..."
   BACKUP_PROTECT="$backup_file"
-  if ! create_backup "pre-restore"; then
+  local pre_restore_file
+  if ! pre_restore_file="$(create_backup "pre-restore")"; then
     err "pre-restore backup failed — aborting (DB untouched)"
     return 1
   fi
-  local pre_restore_file
-  pre_restore_file="$(ls -t "$BACKUP_DIR"/*_pre-restore.gz 2>/dev/null | head -1 || true)"
-  if [ -z "$pre_restore_file" ]; then
+  if [ -z "$pre_restore_file" ] || [ ! -f "$pre_restore_file" ]; then
     err "pre-restore backup file not found after creation — aborting (DB untouched)"
     return 1
   fi
   ok "pre-restore backup: $(basename "$pre_restore_file")"
 
-  # 3. Stop the API for the swap window. Install an EXIT trap so the API is
-  #    ALWAYS restarted — even if the script aborts (set -e, signal, error).
-  trap 'docker compose -f "$APP_YML" start api >/dev/null 2>&1 && echo "⚠ api restarted after aborted restore" || true' EXIT
+  # 3. Stop the API for the swap window. EXIT trap restarts the API on
+  #    unexpected abort ONLY while live DB is still safe (before swap, or after
+  #    a clean full swap). Once drop/rename starts, _RESTORE_SWAP_UNSAFE=1 and
+  #    the trap leaves the API STOPPED — same policy as explicit rc==2.
+  _RESTORE_SWAP_UNSAFE=0
+  _RESTORE_PRE_BACKUP="$pre_restore_file"
+  trap '_restore_api_exit_trap' EXIT
 
   step "restore" "stopping api..."
   docker compose -f "$APP_YML" stop api
@@ -371,6 +431,7 @@ restore_backup() {
   #    on a partial-swap failure (rc == 2) we deliberately leave the API
   #    STOPPED so no traffic hits a partially-restored database.
   trap - EXIT
+  _RESTORE_PRE_BACKUP=""
 
   # _restore_into_temp exit codes: 0 = success; 1 = failed before swap (live
   # DB untouched); 2 = swap failed partway (live DB may be PARTIALLY restored).

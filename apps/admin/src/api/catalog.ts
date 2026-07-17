@@ -3,13 +3,13 @@ import { getJson } from "./client.ts";
 export type FetchedModelStatus = "alpha" | "beta" | "deprecated" | "ga";
 
 export type FetchedModelCost = {
-  inputMinorPerMillion: number;
-  outputMinorPerMillion: number;
-  reasoningMinorPerMillion?: number;
-  cacheReadMinorPerMillion?: number;
-  cacheWriteMinorPerMillion?: number;
-  inputAudioMinorPerMillion?: number;
-  outputAudioMinorPerMillion?: number;
+  inputUnitsPerMillion: number;
+  outputUnitsPerMillion: number;
+  reasoningUnitsPerMillion?: number;
+  cacheReadUnitsPerMillion?: number;
+  cacheWriteUnitsPerMillion?: number;
+  inputAudioUnitsPerMillion?: number;
+  outputAudioUnitsPerMillion?: number;
 };
 
 export type FetchedModel = {

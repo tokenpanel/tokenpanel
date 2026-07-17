@@ -7,13 +7,35 @@
 }
 
 ${DOMAIN} {
-	reverse_proxy api:3000 {
-		# Client IP for API credential throttles (TRUST_PROXY=true on api).
-		# X-Real-IP = TCP peer of Caddy (true client when Caddy is edge;
-		# Cloudflare edge when CF is in front — then enable TRUST_CLOUDFLARE
-		# and pass CF-Connecting-IP, which reverse_proxy forwards by default).
-		header_up X-Real-IP {remote_host}
-		header_up X-Forwarded-Proto {scheme}
+	# Cloudflare anycast edges — only these may assert CF-Connecting-IP.
+	# Source: https://www.cloudflare.com/ips/ (refresh when Cloudflare updates).
+	@from_cloudflare {
+		remote_ip 173.245.48.0/20 103.21.244.0/22 103.22.200.0/22 103.31.4.0/22 141.101.64.0/18 108.162.192.0/18 190.93.240.0/20 188.114.96.0/20 197.234.240.0/22 198.41.128.0/17 162.158.0.0/15 104.16.0.0/13 104.24.0.0/14 172.64.0.0/13 131.0.72.0/22 2400:cb00::/32 2606:4700::/32 2803:f800::/32 2405:b500::/32 2405:8100::/32 2a06:98c0::/29 2c0f:f248::/32
+	}
+
+	# Client → Cloudflare → Caddy → API: peer is CF; real client is CF-Connecting-IP.
+	# Put the authentic client in X-Real-IP and never forward CF-Connecting-IP
+	# (API only sees Caddy as TCP peer; a forwarded CF header would be spoofable
+	# if the origin is also reachable without Cloudflare).
+	handle @from_cloudflare {
+		reverse_proxy api:3000 {
+			header_up X-Real-IP {http.request.header.CF-Connecting-IP}
+			header_up X-Forwarded-For {http.request.header.CF-Connecting-IP}
+			header_up X-Forwarded-Proto {scheme}
+			header_up -CF-Connecting-IP
+		}
+	}
+
+	# Client → Caddy → API (no Cloudflare, or direct hit past CF):
+	# X-Real-IP = TCP peer of Caddy. Strip any client-supplied CF-Connecting-IP
+	# so TRUST_CLOUDFLARE on the API cannot be tricked by a spoofed header.
+	handle {
+		reverse_proxy api:3000 {
+			header_up X-Real-IP {remote_host}
+			header_up X-Forwarded-For {remote_host}
+			header_up X-Forwarded-Proto {scheme}
+			header_up -CF-Connecting-IP
+		}
 	}
 
 	encode gzip zstd
@@ -23,8 +45,10 @@ ${DOMAIN} {
 		X-Content-Type-Options nosniff
 		X-Frame-Options DENY
 		Referrer-Policy strict-origin-when-cross-origin
-		# JWT lives in localStorage — CSP is the primary XSS containment layer.
-		Content-Security-Policy "default-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; object-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:; upgrade-insecure-requests"
 		Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()"
+		# Content-Security-Policy is NOT set here. The API owns CSP so
+		# CSP_CONNECT_SRC can allow split-origin admin → API fetches. A
+		# hardcoded connect-src 'self' at the edge would override that and
+		# break split-origin deploys. See apps/api security-headers middleware.
 	}
 }

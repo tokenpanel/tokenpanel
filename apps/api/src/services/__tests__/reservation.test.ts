@@ -1,21 +1,21 @@
 import { test, expect, describe } from "bun:test";
 import {
-  availableMinor,
+  availableUnits,
   wouldReserveSucceed,
 } from "../reservation.ts";
 
-describe("availableMinor / wouldReserveSucceed", () => {
+describe("availableUnits / wouldReserveSucceed", () => {
   test("available = amount - reserved", () => {
-    expect(availableMinor({ amountMinor: 1000, reservedMinor: 200 })).toBe(800);
-    expect(availableMinor({ amountMinor: 100, reservedMinor: 0 })).toBe(100);
-    expect(availableMinor({ amountMinor: 50 })).toBe(50);
+    expect(availableUnits({ amountUnits: 1000, reservedUnits: 200 })).toBe(800);
+    expect(availableUnits({ amountUnits: 100, reservedUnits: 0 })).toBe(100);
+    expect(availableUnits({ amountUnits: 50 })).toBe(50);
     // Never negative available.
-    expect(availableMinor({ amountMinor: 10, reservedMinor: 50 })).toBe(0);
+    expect(availableUnits({ amountUnits: 10, reservedUnits: 50 })).toBe(0);
   });
 
   test("wouldReserveSucceed: currency mismatch", () => {
     const r = wouldReserveSucceed(
-      { amountMinor: 1000, reservedMinor: 0, currency: "USD" },
+      { amountUnits: 1000, reservedUnits: 0, currency: "USD" },
       100,
       "EUR",
     );
@@ -25,7 +25,7 @@ describe("availableMinor / wouldReserveSucceed", () => {
 
   test("wouldReserveSucceed: insufficient available (held reduces capacity)", () => {
     const r = wouldReserveSucceed(
-      { amountMinor: 1000, reservedMinor: 900, currency: "USD" },
+      { amountUnits: 1000, reservedUnits: 900, currency: "USD" },
       200,
       "USD",
     );
@@ -35,15 +35,15 @@ describe("availableMinor / wouldReserveSucceed", () => {
 
   test("wouldReserveSucceed: amount would pass but available fails", () => {
     // amount 1000 >= need 100 but reserved 950 → available 50.
-    const snap = { amountMinor: 1000, reservedMinor: 950, currency: "USD" };
-    expect(snap.amountMinor >= 100).toBe(true);
+    const snap = { amountUnits: 1000, reservedUnits: 950, currency: "USD" };
+    expect(snap.amountUnits >= 100).toBe(true);
     expect(wouldReserveSucceed(snap, 100, "USD").ok).toBe(false);
   });
 
   test("wouldReserveSucceed: zero need always ok", () => {
     expect(
       wouldReserveSucceed(
-        { amountMinor: 0, reservedMinor: 0, currency: "USD" },
+        { amountUnits: 0, reservedUnits: 0, currency: "USD" },
         0,
         "USD",
       ).ok,
@@ -53,7 +53,7 @@ describe("availableMinor / wouldReserveSucceed", () => {
   test("wouldReserveSucceed: sufficient available", () => {
     expect(
       wouldReserveSucceed(
-        { amountMinor: 1000, reservedMinor: 100, currency: "USD" },
+        { amountUnits: 1000, reservedUnits: 100, currency: "USD" },
         500,
         "USD",
       ).ok,

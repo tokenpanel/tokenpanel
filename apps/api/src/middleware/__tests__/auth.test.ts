@@ -166,4 +166,29 @@ test("requirePermission: member with grant → allowed", async () => {
   expect(called).toBe(true);
 });
 
+test("requirePermission: write implies paired read", async () => {
+  let called = false;
+  const next = async () => {
+    called = true;
+  };
+  await requirePermission("invites:read")(
+    roleCtx("member", ["invites:write"]) as never,
+    next as never,
+  );
+  expect(called).toBe(true);
+});
+
+test("requirePermission: write does not imply other resource read", async () => {
+  let called = false;
+  const next = async () => {
+    called = true;
+  };
+  const res = await requirePermission("customers:read")(
+    roleCtx("member", ["invites:write"]) as never,
+    next as never,
+  );
+  expect((res as Response).status).toBe(403);
+  expect(called).toBe(false);
+});
+
 void ManagedRuntime;

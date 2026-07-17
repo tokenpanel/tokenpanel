@@ -9,7 +9,7 @@ import {
   DateFromSelf,
   TimestampFields,
   CurrencyCode,
-  MoneyMinor,
+  MoneyUnits,
   Money as MoneySchema,
   CustomerBalance as CustomerBalanceSchema,
   TokenCount,
@@ -47,7 +47,7 @@ export const dateFromSelf = withParseApi(DateFromSelf);
 export const timestampFields = TimestampFields;
 
 export const currencyCode = withParseApi(CurrencyCode);
-export const moneyMinor = withParseApi(MoneyMinor);
+export const moneyUnits = withParseApi(MoneyUnits);
 export const tokenCount = withParseApi(TokenCount);
 export const money = withParseApi(MoneySchema);
 export const customerBalance = withParseApi(CustomerBalanceSchema);

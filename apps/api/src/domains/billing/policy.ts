@@ -32,16 +32,16 @@ export const NON_TEXT_PART_TOKENS_COUNT = 768;
 export const CHARS_PER_TOKEN_ESTIMATE_COUNT = 4;
 
 /**
- * Money denomination: all charges use integer minor units of an ISO currency.
+ * Money denomination: all charges use integer units of an ISO currency.
  * Never floats at the billing boundary. Product constant tokens-per-million
- * converts token counts → minor units via ceil per bucket.
+ * converts token counts → units via ceil per bucket.
  */
 export const MONEY_DENOMINATION = {
   /** Storage unit for balances and charges. */
-  unit: "minor" as const,
+  unit: "units" as const,
   /** Never free-bill when provider usage is missing/malformed/overflow. */
   freeBillMissingUsage: false as const,
-  /** Prices are per this many tokens (minor units per million). */
+  /** Prices are per this many tokens (units per million). */
   tokensPerMillion: TOKENS_PER_MILLION_COUNT,
 } as const;
 
@@ -57,11 +57,11 @@ export const CURRENCY_POLICY = {
 } as const;
 
 /**
- * Reservation policy: every org holds estimated spend in reservedMinor
+ * Reservation policy: every org holds estimated spend in reservedUnits
  * before the provider call; settle debits actual and releases the hold.
  */
 export const RESERVATION_POLICY = {
-  /** Available = max(0, amountMinor - max(0, reservedMinor)). */
+  /** Available = max(0, amountUnits - max(0, reservedUnits)). */
   availableFormula: "amount_minus_reserved" as const,
   /** Zero need always succeeds without write. */
   zeroNeedAlwaysOk: true as const,
@@ -69,7 +69,7 @@ export const RESERVATION_POLICY = {
   releaseOnFailure: true as const,
 } as const;
 
-/** Re-export product constant for billing math (minor units per million tokens). */
+/** Re-export product constant for billing math (units per million tokens). */
 export { TOKENS_PER_MILLION_COUNT };
 
 /** Historical alias used by billing.ts / tests (same value, tokens unit). */

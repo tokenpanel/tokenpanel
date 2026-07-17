@@ -13,7 +13,7 @@ import {
   DateFromUnknown,
   TimestampFields,
   Money,
-  MoneyMinor,
+  MoneyUnits,
   CustomerBalance,
   CurrencyCode,
   Email,
@@ -35,8 +35,8 @@ export const CustomerDoc = Schema.Struct({
   email: exactNullish(Email),
   balance: Schema.optionalWith(CustomerBalance, {
     default: () => ({
-      amountMinor: 0,
-      reservedMinor: 0,
+      amountUnits: 0,
+      reservedUnits: 0,
       currency: "USD",
     }),
   }),
@@ -75,7 +75,7 @@ export const BalanceAdjustmentDoc = Schema.Struct({
   _id: ObjectIdFromSelf,
   organizationId: ObjectIdFromSelf,
   customerId: ObjectIdFromSelf,
-  amountMinor: SafeInt,
+  amountUnits: SafeInt,
   currency: CurrencyCode,
   reason: BalanceAdjustmentReason,
   usageRecordId: exactNullish(ObjectIdFromSelf),
@@ -86,7 +86,7 @@ export const BalanceAdjustmentDoc = Schema.Struct({
 
 export const BalanceAdjustmentCreateInput = Schema.Struct({
   customerId: ObjectIdFromString,
-  amountMinor: SafeInt,
+  amountUnits: SafeInt,
   currency: CurrencyCode,
   reason: BalanceAdjustmentReason,
   usageRecordId: exactOptional(ObjectIdFromString),
@@ -104,4 +104,4 @@ export type BalanceAdjustmentCreateInput = Schema.Schema.Type<
   typeof BalanceAdjustmentCreateInput
 >;
 
-export { MoneyMinor };
+export { MoneyUnits };

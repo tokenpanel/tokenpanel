@@ -3,12 +3,19 @@
  *
  * Default: use the TCP peer (socket) only — never trust client-controlled
  * headers. When `trustProxy` is on and the peer is in `trustedProxies`,
- * prefer Cloudflare / reverse-proxy headers so the real client is used
- * behind Caddy, Cloudflare, nginx, etc.
+ * prefer reverse-proxy headers (X-Real-IP / X-Forwarded-For) so the real
+ * client is used behind Caddy, nginx, etc.
+ *
+ * CF-Connecting-IP is special: Cloudflare sets it only when the TCP peer is
+ * a Cloudflare edge IP. Private reverse proxies (Docker Caddy) must NOT be
+ * allowed to pass a client-supplied CF-Connecting-IP through — that header
+ * is trivial to spoof if the origin remains directly reachable. Caddy must
+ * sanitize and put the true client in X-Real-IP instead. TRUST_CLOUDFLARE
+ * only trusts CF-Connecting-IP when the peer matches Cloudflare IP ranges.
  *
  * Misconfiguration risk: enabling trustProxy without restricting who can
  * reach the API (or without a tight trustedProxies list) lets attackers
- * spoof X-Forwarded-For and bypass per-IP throttle buckets.
+ * spoof X-Forwarded-For / X-Real-IP and bypass per-IP throttle buckets.
  */
 import type { Context } from "hono";
 import { getConnInfo } from "hono/bun";
@@ -34,6 +41,39 @@ export const DEFAULT_TRUSTED_PROXY_CIDRS: readonly string[] = Object.freeze([
   "fc00::/7",
 ]);
 
+/**
+ * Cloudflare anycast edge ranges (https://www.cloudflare.com/ips/).
+ * Used only to decide whether CF-Connecting-IP may be trusted: the TCP peer
+ * must be Cloudflare, not a private reverse proxy that might forward a
+ * client-spoofed header. Refresh when Cloudflare publishes new ranges.
+ */
+export const CLOUDFLARE_IP_CIDRS: readonly string[] = Object.freeze([
+  // IPv4 — https://www.cloudflare.com/ips-v4/
+  "173.245.48.0/20",
+  "103.21.244.0/22",
+  "103.22.200.0/22",
+  "103.31.4.0/22",
+  "141.101.64.0/18",
+  "108.162.192.0/18",
+  "190.93.240.0/20",
+  "188.114.96.0/20",
+  "197.234.240.0/22",
+  "198.41.128.0/17",
+  "162.158.0.0/15",
+  "104.16.0.0/13",
+  "104.24.0.0/14",
+  "172.64.0.0/13",
+  "131.0.72.0/22",
+  // IPv6 — https://www.cloudflare.com/ips-v6/
+  "2400:cb00::/32",
+  "2606:4700::/32",
+  "2803:f800::/32",
+  "2405:b500::/32",
+  "2405:8100::/32",
+  "2a06:98c0::/29",
+  "2c0f:f248::/32",
+]);
+
 export type ClientIpResolveInput = {
   /** TCP peer address from the server socket (Bun requestIP). */
   peerAddress: string | null | undefined;
@@ -41,7 +81,11 @@ export type ClientIpResolveInput = {
   trustProxy: boolean;
   /** Exact IPs or CIDRs allowed to set forwarded-client headers. */
   trustedProxies: readonly string[];
-  /** Prefer CF-Connecting-IP when present and peer is trusted. */
+  /**
+   * Prefer CF-Connecting-IP when the TCP peer is a Cloudflare edge IP
+   * (or peer is unavailable in unit tests). Never when peer is only a
+   * private reverse proxy.
+   */
   trustCloudflare: boolean;
 };
 
@@ -265,20 +309,29 @@ export function resolveClientIp(input: ClientIpResolveInput): string {
       ? input.trustedProxies
       : DEFAULT_TRUSTED_PROXY_CIDRS;
 
-  // No peer (app.request in tests): allow headers only when trustProxy is on
-  // so middleware tests can inject CF / XFF. Production Bun always has a peer.
+  // CF-Connecting-IP is authentic only when the TCP peer is Cloudflare.
+  // Private reverse proxies (Caddy on Docker) must rewrite the real client
+  // into X-Real-IP and strip CF-Connecting-IP — never forward a client-
+  // supplied CF header. peerNorm === null: unit-test / app.request path.
+  if (input.trustCloudflare) {
+    const fromCloudflare =
+      peerNorm === null ||
+      ipMatchesTrusted(peerNorm, CLOUDFLARE_IP_CIDRS);
+    if (fromCloudflare) {
+      const cf = input.headers.get("cf-connecting-ip");
+      if (cf) {
+        const n = normalizeIp(cf);
+        if (n) return displayIp(n);
+      }
+    }
+  }
+
+  // X-Real-IP / XFF only when the peer is a configured trusted proxy
+  // (private Caddy, nginx, etc.). Untrusted public peers → socket only.
   const peerOk =
     peerNorm === null || ipMatchesTrusted(peerNorm, trustedList);
   if (!peerOk) {
     return peerDisplay ?? UNKNOWN_CLIENT_IP;
-  }
-
-  if (input.trustCloudflare) {
-    const cf = input.headers.get("cf-connecting-ip");
-    if (cf) {
-      const n = normalizeIp(cf);
-      if (n) return displayIp(n);
-    }
   }
 
   const realIp = input.headers.get("x-real-ip");

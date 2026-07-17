@@ -23,8 +23,8 @@ export type AnalyticsSummaryResult = {
       readonly currency: string;
       readonly requests: number;
       readonly tokens: number;
-      readonly costMinor: number;
-      readonly priceMinor: number;
+      readonly costUnits: number;
+      readonly priceUnits: number;
     }[];
   };
   readonly topCustomers: readonly {
@@ -33,8 +33,8 @@ export type AnalyticsSummaryResult = {
     readonly currency: string;
     readonly requests: number;
     readonly tokens: number;
-    readonly costMinor: number;
-    readonly priceMinor: number;
+    readonly costUnits: number;
+    readonly priceUnits: number;
   }[];
 };
 
@@ -97,8 +97,8 @@ export const analyticsSummary = (input: {
           currency: r.currency || "USD",
           requests: r.requests,
           tokens: r.tokens,
-          costMinor: r.costMinor,
-          priceMinor: r.priceMinor,
+          costUnits: r.costUnits,
+          priceUnits: r.priceUnits,
         })),
       },
       topCustomers: topCustomers.map((r) => ({
@@ -107,8 +107,8 @@ export const analyticsSummary = (input: {
         currency: r.currency || "USD",
         requests: r.requests,
         tokens: r.tokens,
-        costMinor: r.costMinor,
-        priceMinor: r.priceMinor,
+        costUnits: r.costUnits,
+        priceUnits: r.priceUnits,
       })),
     };
   });

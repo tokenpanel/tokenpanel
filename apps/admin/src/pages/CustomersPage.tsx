@@ -56,7 +56,7 @@ import {
 } from "@tokenpanel/contracts";
 
 interface Money {
-  amountMinor: number;
+  amountUnits: number;
   currency: string;
 }
 
@@ -77,7 +77,7 @@ interface Customer {
 
 interface BalanceAdjustment {
   _id: string;
-  amountMinor: number;
+  amountUnits: number;
   currency: string;
   reason: "topup" | "usage_debit" | "refund" | "adjustment" | "overage";
   note: string | null;
@@ -128,15 +128,15 @@ interface UsageByModel {
   modelAliasId: string;
   requests: number;
   tokens: number;
-  costMinor: number;
-  priceMinor: number;
+  costUnits: number;
+  priceUnits: number;
 }
 
 interface UsageResponse {
   totalRequests: number;
   totalTokens: number;
-  totalCostMinor: number;
-  totalPriceMinor: number;
+  totalCostUnits: number;
+  totalPriceUnits: number;
   currency: string;
   byModel: UsageByModel[];
 }
@@ -382,8 +382,8 @@ export default function CustomersPage(): React.ReactElement {
                     <TableCell className="font-medium">{c.name}</TableCell>
                     <TableCell className={cn(c.email ? "text-muted-foreground" : "text-muted-foreground/60")}>{c.email || "—"}</TableCell>
                     <TableCell className={cn("font-mono text-xs", c.externalId ? "text-muted-foreground" : "text-muted-foreground/60")}>{c.externalId || "—"}</TableCell>
-                    <TableCell className={cn("font-semibold tabular-nums", c.balance.amountMinor < 0 && "text-destructive")}>
-                      {formatMoney(c.balance.amountMinor, c.balance.currency)}
+                    <TableCell className={cn("font-semibold tabular-nums", c.balance.amountUnits < 0 && "text-destructive")}>
+                      {formatMoney(c.balance.amountUnits, c.balance.currency)}
                     </TableCell>
                     <TableCell><Badge variant={statusVariant(c.status)}>{c.status}</Badge></TableCell>
                     <TableCell>
@@ -463,8 +463,9 @@ function CustomerDrawer({ customer, onClose, onUpdated, onDeleted }: DrawerProps
   const canWriteBalances = hasPermission(user, "balances:write");
   const canWriteSubscriptions = hasPermission(user, "subscriptions:write");
   const canWriteKeys = hasPermission(user, "customer_keys:write");
-  const canReadBalances = hasPermission(user, "balances:read") || canWriteBalances;
-  const canReadKeys = hasPermission(user, "customer_keys:read") || canWriteKeys;
+  // write implies read via hasPanelPermission (contracts).
+  const canReadBalances = hasPermission(user, "balances:read");
+  const canReadKeys = hasPermission(user, "customer_keys:read");
 
   const [editOpen, setEditOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -519,7 +520,7 @@ function CustomerDrawer({ customer, onClose, onUpdated, onDeleted }: DrawerProps
             <div className="text-muted-foreground">Name</div><div>{customer.name}</div>
             <div className="text-muted-foreground">Email</div><div>{customer.email || "—"}</div>
             <div className="text-muted-foreground">External ID</div><div>{customer.externalId || "—"}</div>
-            <div className="text-muted-foreground">Balance</div><div className="text-2xl font-bold tabular-nums">{formatMoney(customer.balance.amountMinor, customer.balance.currency)}</div>
+            <div className="text-muted-foreground">Balance</div><div className="text-2xl font-bold tabular-nums">{formatMoney(customer.balance.amountUnits, customer.balance.currency)}</div>
             <div className="text-muted-foreground">Status</div><div><Badge variant={statusVariant(customer.status)}>{customer.status}</Badge></div>
             <div className="text-muted-foreground">Created</div><div>{formatDate(customer.createdAt)}</div>
             <div className="text-muted-foreground">Updated</div><div>{formatDate(customer.updatedAt)}</div>
@@ -621,7 +622,7 @@ function BalanceCard({
           </Button>
         ) : null}
       </div>
-      <div className="text-2xl font-bold tabular-nums">{formatMoney(balance.amountMinor, balance.currency)}</div>
+      <div className="text-2xl font-bold tabular-nums">{formatMoney(balance.amountUnits, balance.currency)}</div>
       <div>
         <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Recent adjustments</div>
         {loadingHistory && history.length === 0 ? (
@@ -639,8 +640,8 @@ function BalanceCard({
                   {a.note ? <span className="text-xs text-muted-foreground">{a.note}</span> : null}
                 </div>
                 <div className="text-xs text-muted-foreground">{formatDate(a.occurredAt)}</div>
-                <div className={cn("text-right font-semibold tabular-nums", a.amountMinor < 0 && "text-destructive")}>
-                  {formatMoney(a.amountMinor, a.currency)}
+                <div className={cn("text-right font-semibold tabular-nums", a.amountUnits < 0 && "text-destructive")}>
+                  {formatMoney(a.amountUnits, a.currency)}
                 </div>
               </div>
             ))}
@@ -686,19 +687,19 @@ function BalanceForm({ customerId, currency, onClose, onSaved }: BalanceFormProp
   async function onSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setError(null);
-    const amountMinor = Number(amount);
-    if (!Number.isInteger(amountMinor)) {
-      setError("Amount must be a whole number of minor units.");
+    const amountUnits = Number(amount);
+    if (!Number.isInteger(amountUnits)) {
+      setError("Amount must be a whole number of units.");
       return;
     }
-    if (amountMinor === 0) {
+    if (amountUnits === 0) {
       setError("Amount cannot be zero.");
       return;
     }
     setSubmitting(true);
     try {
       const res = await postJson<BalanceAdjustmentResponse>(`/admin/customers/${customerId}/balance`, {
-        amountMinor,
+        amountUnits,
         currency: cur,
         reason,
         note: note.trim() || undefined,
@@ -720,7 +721,7 @@ function BalanceForm({ customerId, currency, onClose, onSaved }: BalanceFormProp
       <form className="flex flex-col gap-4" onSubmit={onSubmit}>
         <div className="flex gap-3">
           <div className="flex-1">
-            <Field id="bal-amount" label="Amount (minor units)">
+            <Field id="bal-amount" label="Amount (units · USD: 1 unit = $0.01)">
               <Input id="bal-amount" type="number" step="1" value={amount} required disabled={submitting} onChange={(e) => setAmount(e.target.value)} />
             </Field>
           </div>
@@ -820,8 +821,8 @@ function SubscriptionCard({ customerId, canWrite }: SubscriptionCardProps): Reac
           <div className="flex gap-2"><span className="min-w-[90px] text-muted-foreground">Status</span><Badge variant={statusVariant(sub.subscription.status as CustomerStatus)}>{subStatusLabel(sub.subscription.status)}</Badge></div>
           {sub.plan ? (
             <>
-              <div className="flex gap-2"><span className="min-w-[90px] text-muted-foreground">Price</span><span>{formatMoney(sub.plan.price.amountMinor, sub.plan.price.currency)} {intervalLabel(sub.plan.interval, sub.plan.intervalCount)}</span></div>
-              <div className="flex gap-2"><span className="min-w-[90px] text-muted-foreground">Credits</span><span>{formatMoney(sub.plan.includedCredit.amountMinor, sub.plan.includedCredit.currency)}</span></div>
+              <div className="flex gap-2"><span className="min-w-[90px] text-muted-foreground">Price</span><span>{formatMoney(sub.plan.price.amountUnits, sub.plan.price.currency)} {intervalLabel(sub.plan.interval, sub.plan.intervalCount)}</span></div>
+              <div className="flex gap-2"><span className="min-w-[90px] text-muted-foreground">Credits</span><span>{formatMoney(sub.plan.includedCredit.amountUnits, sub.plan.includedCredit.currency)}</span></div>
               <div className="flex gap-2"><span className="min-w-[90px] text-muted-foreground">Tokens</span><span>{formatNumber(sub.plan.includedTokens)}</span></div>
             </>
           ) : null}
@@ -838,7 +839,7 @@ function SubscriptionCard({ customerId, canWrite }: SubscriptionCardProps): Reac
                 </SelectTrigger>
                 <SelectContent>
                   {plans.map((p) => (
-                    <SelectItem key={p._id} value={p._id}>{p.name} — {formatMoney(p.price.amountMinor, p.price.currency)} {intervalLabel(p.interval, p.intervalCount)}</SelectItem>
+                    <SelectItem key={p._id} value={p._id}>{p.name} — {formatMoney(p.price.amountUnits, p.price.currency)} {intervalLabel(p.interval, p.intervalCount)}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
@@ -918,11 +919,11 @@ function UsageCard({ customerId }: UsageCardProps): React.ReactElement {
             </div>
             <div className="flex flex-col gap-0.5 rounded-md bg-muted/50 px-3 py-2.5">
               <span className="text-[11px] uppercase tracking-wider text-muted-foreground">Cost</span>
-              <span className="text-base font-semibold tabular-nums">{formatMoney(data.totalCostMinor, data.currency)}</span>
+              <span className="text-base font-semibold tabular-nums">{formatMoney(data.totalCostUnits, data.currency)}</span>
             </div>
             <div className="flex flex-col gap-0.5 rounded-md bg-muted/50 px-3 py-2.5">
               <span className="text-[11px] uppercase tracking-wider text-muted-foreground">Price</span>
-              <span className="text-base font-semibold tabular-nums">{formatMoney(data.totalPriceMinor, data.currency)}</span>
+              <span className="text-base font-semibold tabular-nums">{formatMoney(data.totalPriceUnits, data.currency)}</span>
             </div>
           </div>
           {data.byModel.length > 0 ? (
@@ -943,8 +944,8 @@ function UsageCard({ customerId }: UsageCardProps): React.ReactElement {
                       <TableCell className="font-mono text-xs font-medium">{m.modelAliasId}</TableCell>
                       <TableCell className="text-muted-foreground">{formatNumber(m.requests)}</TableCell>
                       <TableCell className="text-muted-foreground">{formatNumber(m.tokens)}</TableCell>
-                      <TableCell className="text-right tabular-nums">{formatMoney(m.costMinor, data.currency)}</TableCell>
-                      <TableCell className="text-right tabular-nums">{formatMoney(m.priceMinor, data.currency)}</TableCell>
+                      <TableCell className="text-right tabular-nums">{formatMoney(m.costUnits, data.currency)}</TableCell>
+                      <TableCell className="text-right tabular-nums">{formatMoney(m.priceUnits, data.currency)}</TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
@@ -1182,13 +1183,13 @@ function CustomerFormModal({ mode, customer, onClose, onSaved }: CustomerFormMod
       if (mode === "create") {
         let startingBalance: Money | undefined;
         if (amount || currency !== "USD") {
-          const minor = Number(amount);
-          if (!Number.isInteger(minor) || minor < 0) {
+          const units = Number(amount);
+          if (!Number.isInteger(units) || units < 0) {
             setError("Starting balance must be a non-negative whole number.");
             setSubmitting(false);
             return;
           }
-          startingBalance = { amountMinor: minor, currency };
+          startingBalance = { amountUnits: units, currency };
         }
         const created = await postJson<Customer>("/admin/customers", {
           name: name.trim(),
@@ -1241,7 +1242,7 @@ function CustomerFormModal({ mode, customer, onClose, onSaved }: CustomerFormMod
         {mode === "create" ? (
           <div className="flex gap-3">
             <div className="flex-1">
-              <Field id="cust-amount" label="Starting balance (minor units)">
+              <Field id="cust-amount" label="Starting balance (units)">
                 <Input id="cust-amount" type="number" step="1" min={0} value={amount} disabled={submitting} onChange={(e) => setAmount(e.target.value)} />
               </Field>
             </div>

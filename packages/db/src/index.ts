@@ -1,5 +1,6 @@
 export * from "./schemas/index.ts";
 export * from "./schemas/common.ts";
+export { normalizeLegacyMoneyFields } from "./schemas/legacy-money-normalize.ts";
 export * from "./schemas/organization.ts";
 export * from "./schemas/user.ts";
 export * from "./schemas/session.ts";

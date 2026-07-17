@@ -13,6 +13,7 @@ source "${SCRIPT_DIR}/../lib/output.sh"
 source "${SCRIPT_DIR}/../lib/prompt.sh"
 source "${SCRIPT_DIR}/../lib/preflight.sh"
 source "${SCRIPT_DIR}/../lib/health.sh"
+source "${SCRIPT_DIR}/../lib/lock.sh"
 
 MANAGER_VERSION="$(cat "${SCRIPT_DIR}/../VERSION" 2>/dev/null || echo 'unknown')"
 
@@ -117,6 +118,7 @@ cmd_status() {
 }
 
 cmd_start() {
+  acquire_manager_lock "start" || die "could not acquire manager lock"
   preflight_quick || die "preflight failed"
   step "start" "bringing up containers..."
   docker compose -f "$APP_YML" up -d --remove-orphans
@@ -132,12 +134,15 @@ cmd_start() {
 }
 
 cmd_stop() {
+  acquire_manager_lock "stop" || die "could not acquire manager lock"
   step "stop" "stopping containers..."
   docker compose -f "$APP_YML" stop
   ok "stopped"
 }
 
 cmd_restart() {
+  # Single lock for the whole stop+start cycle (re-entrant acquire inside).
+  acquire_manager_lock "restart" || die "could not acquire manager lock"
   cmd_stop
   cmd_start
 }
@@ -256,6 +261,7 @@ cmd_version() {
 cmd_rebuild() {
   source "${SCRIPT_DIR}/../lib/build.sh"
 
+  acquire_manager_lock "rebuild" || die "could not acquire manager lock"
   preflight_quick || die "preflight failed"
   step "rebuild" "building current checkout image..."
   CURRENT_IMAGE_ID="$(docker compose -f "$APP_YML" images api --format '{{.ID}}' 2>/dev/null | head -1)"
@@ -284,6 +290,7 @@ cmd_destroy() {
   echo
   tp_read_required confirm "Proceed? [y/N] " || exit 1
   [[ "$confirm" =~ ^[Yy] ]] || { info "aborted"; exit 0; }
+  acquire_manager_lock "destroy" || die "could not acquire manager lock"
   docker compose -f "$APP_YML" down --remove-orphans
   ok "containers removed. Data preserved at $DATA_DIR"
   info "to restart: tokenpanel start"
@@ -323,6 +330,10 @@ cmd_reset() {
   warn "resetting in 5 seconds... (Ctrl+C to cancel)"
   sleep 5
 
+  # Lock after confirm so interactive typing does not block peers, but before
+  # any destructive work. Lock file lives under CONFIG_DIR (survives DATA wipe).
+  acquire_manager_lock "reset" || die "could not acquire manager lock"
+
   step "reset" "stopping containers..."
   docker compose -f "$APP_YML" down -v --remove-orphans 2>/dev/null || true
 
@@ -353,6 +364,10 @@ cmd_update() {
   source "${SCRIPT_DIR}/../lib/build.sh"
   source "${SCRIPT_DIR}/../lib/migrate.sh"
   source "${SCRIPT_DIR}/../lib/rollback.sh"
+
+  # Hold lock for the full update (backup → build → migrate → swap → post).
+  # create_backup re-acquires re-entrantly and will not self-deadlock.
+  acquire_manager_lock "update" || die "could not acquire manager lock"
 
   echo -e "${BOLD}TokenPanel Update${NC}"
   echo
@@ -453,6 +468,10 @@ case "${1:-}" in
   update)   shift; cmd_update "$@" ;;
   backup)   source "${SCRIPT_DIR}/../lib/backup.sh"; create_backup "manual" ;;
   restore)  source "${SCRIPT_DIR}/../lib/backup.sh"; restore_backup "${2:-}" ;;
-  migrate)  source "${SCRIPT_DIR}/../lib/migrate.sh"; run_migrations "${2:-pre}" ;;
+  migrate)
+    acquire_manager_lock "migrate" || die "could not acquire manager lock"
+    source "${SCRIPT_DIR}/../lib/migrate.sh"
+    run_migrations "${2:-pre}"
+    ;;
   *)        usage ;;
 esac

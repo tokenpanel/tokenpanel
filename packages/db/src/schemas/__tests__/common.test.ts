@@ -4,7 +4,7 @@ import {
   objectId,
   objectIdFromString,
   currencyCode,
-  moneyMinor,
+  moneyUnits,
   tokenCount,
   money,
   customerBalance,
@@ -50,14 +50,14 @@ test("currencyCode enforces 3 uppercase letters; regex blocks lowercase before t
   expect(currencyCode.safeParse("").success).toBe(false);
 });
 
-test("moneyMinor accepts non-negative ints, rejects negatives/floats/NaN", () => {
-  expect(moneyMinor.safeParse(0).success).toBe(true);
-  expect(moneyMinor.safeParse(100).success).toBe(true);
-  expect(moneyMinor.safeParse(-1).success).toBe(false);
-  expect(moneyMinor.safeParse(1.5).success).toBe(false);
-  expect(moneyMinor.safeParse(NaN).success).toBe(false);
-  expect(moneyMinor.safeParse(Infinity).success).toBe(false);
-  expect(moneyMinor.safeParse("100").success).toBe(false);
+test("moneyUnits accepts non-negative ints, rejects negatives/floats/NaN", () => {
+  expect(moneyUnits.safeParse(0).success).toBe(true);
+  expect(moneyUnits.safeParse(100).success).toBe(true);
+  expect(moneyUnits.safeParse(-1).success).toBe(false);
+  expect(moneyUnits.safeParse(1.5).success).toBe(false);
+  expect(moneyUnits.safeParse(NaN).success).toBe(false);
+  expect(moneyUnits.safeParse(Infinity).success).toBe(false);
+  expect(moneyUnits.safeParse("100").success).toBe(false);
 });
 
 test("tokenCount accepts safe non-negative ints, rejects unsafe/overflow values", () => {
@@ -70,20 +70,20 @@ test("tokenCount accepts safe non-negative ints, rejects unsafe/overflow values"
   expect(tokenCount.safeParse(Number.MAX_SAFE_INTEGER + 1).success).toBe(false);
 });
 
-test("money object requires amountMinor + currency", () => {
-  expect(money.safeParse({ amountMinor: 100, currency: "USD" }).success).toBe(true);
-  expect(money.safeParse({ amountMinor: 100 }).success).toBe(false);
-  expect(money.safeParse({ amountMinor: -1, currency: "USD" }).success).toBe(false);
-  expect(money.safeParse({ amountMinor: 100, currency: "us" }).success).toBe(false);
+test("money object requires amountUnits + currency", () => {
+  expect(money.safeParse({ amountUnits: 100, currency: "USD" }).success).toBe(true);
+  expect(money.safeParse({ amountUnits: 100 }).success).toBe(false);
+  expect(money.safeParse({ amountUnits: -1, currency: "USD" }).success).toBe(false);
+  expect(money.safeParse({ amountUnits: 100, currency: "us" }).success).toBe(false);
 });
 
-test("customerBalance defaults reservedMinor to 0", () => {
-  const r = customerBalance.parse({ amountMinor: 100, currency: "USD" });
-  expect(r.reservedMinor).toBe(0);
+test("customerBalance defaults reservedUnits to 0", () => {
+  const r = customerBalance.parse({ amountUnits: 100, currency: "USD" });
+  expect(r.reservedUnits).toBe(0);
   expect(
     customerBalance.safeParse({
-      amountMinor: 100,
-      reservedMinor: 25,
+      amountUnits: 100,
+      reservedUnits: 25,
       currency: "USD",
     }).success,
   ).toBe(true);
@@ -92,30 +92,30 @@ test("customerBalance defaults reservedMinor to 0", () => {
 test("tokenPriceSchedule requires input+output, optional rest", () => {
   expect(
     tokenPriceSchedule.safeParse({
-      inputMinorPerMillion: 300,
-      outputMinorPerMillion: 600,
+      inputUnitsPerMillion: 300,
+      outputUnitsPerMillion: 600,
     }).success,
   ).toBe(true);
   expect(
     tokenPriceSchedule.safeParse({
-      inputMinorPerMillion: 300,
-      outputMinorPerMillion: 600,
-      reasoningMinorPerMillion: 900,
-      cacheReadMinorPerMillion: 30,
-      cacheWriteMinorPerMillion: 40,
+      inputUnitsPerMillion: 300,
+      outputUnitsPerMillion: 600,
+      reasoningUnitsPerMillion: 900,
+      cacheReadUnitsPerMillion: 30,
+      cacheWriteUnitsPerMillion: 40,
     }).success,
   ).toBe(true);
-  expect(tokenPriceSchedule.safeParse({ inputMinorPerMillion: 300 }).success).toBe(false);
+  expect(tokenPriceSchedule.safeParse({ inputUnitsPerMillion: 300 }).success).toBe(false);
   expect(
     tokenPriceSchedule.safeParse({
-      inputMinorPerMillion: -1,
-      outputMinorPerMillion: 600,
+      inputUnitsPerMillion: -1,
+      outputUnitsPerMillion: 600,
     }).success,
   ).toBe(false);
   expect(
     tokenPriceSchedule.safeParse({
-      inputMinorPerMillion: 1.5,
-      outputMinorPerMillion: 600,
+      inputUnitsPerMillion: 1.5,
+      outputUnitsPerMillion: 600,
     }).success,
   ).toBe(false);
 });

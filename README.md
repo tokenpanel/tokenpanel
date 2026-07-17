@@ -72,7 +72,7 @@ Prefer local development? Jump to [Local Development](#local-development).
 
 **Budgets and limits**
 
-- Store money as integer minor units, never floats
+- Store money as integer units, never floats
 - Track upstream cost separately from charged price
 - Debit account balances after successful usage
 - Record append-only usage and balance ledgers

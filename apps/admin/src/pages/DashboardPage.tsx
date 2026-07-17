@@ -349,7 +349,7 @@ export default function DashboardPage(): React.ReactElement {
                           <div className="hidden shrink-0 flex-col items-end sm:flex">
                             <span className="text-sm font-semibold tabular-nums">
                               {formatMoney(
-                                c.balance.amountMinor,
+                                c.balance.amountUnits,
                                 c.balance.currency,
                               )}
                             </span>

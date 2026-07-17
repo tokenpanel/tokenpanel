@@ -20,7 +20,7 @@ function model(over: Partial<ModelDoc> = {}): ModelDoc {
     limits: { context: 128000 },
     modalities: { input: ["text"], output: ["text"] },
     status: undefined,
-    price: { inputMinorPerMillion: 300, outputMinorPerMillion: 600 },
+    price: { inputUnitsPerMillion: 300, outputUnitsPerMillion: 600 },
     marginBps: 0,
     currency: "USD",
     active: true,

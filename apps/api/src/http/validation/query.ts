@@ -86,7 +86,7 @@ export type EmailLookupQuery = Schema.Schema.Type<typeof EmailLookupQuery>;
 // ---------------------------------------------------------------------------
 
 export const BalanceAdjustBody = Schema.Struct({
-  amountMinor: SafeInt,
+  amountUnits: SafeInt,
   currency: CurrencyCode,
   reason: Schema.optionalWith(
     Schema.Literal("topup", "adjustment", "refund"),
@@ -98,7 +98,7 @@ export type BalanceAdjustBody = Schema.Schema.Type<typeof BalanceAdjustBody>;
 
 /** Management write may include usage_debit / overage as well. */
 export const ManagementBalanceBody = Schema.Struct({
-  amountMinor: SafeInt,
+  amountUnits: SafeInt,
   currency: CurrencyCode,
   reason: Schema.optionalWith(
     Schema.Literal("topup", "usage_debit", "refund", "adjustment", "overage"),

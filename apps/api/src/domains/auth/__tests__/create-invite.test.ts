@@ -43,7 +43,7 @@ function inviteStore() {
       }),
     findPendingByTokenHash: () => Effect.succeed(null),
     revokePending: () => Effect.succeed(false),
-    markAccepted: () => Effect.void,
+    claimPending: () => Effect.succeed(false),
     deleteByOrg: () => Effect.void,
   };
   return {

@@ -12,6 +12,7 @@ function base(
 ): Record<string, string | undefined> {
   return {
     JWT_SECRET: VALID_SECRET,
+    BOOTSTRAP_SECRET: "bootstrap-secret-for-tests-at-least-32-chars",
     MONGODB_URI: VALID_URI,
     MONGODB_DB: "tokenpanel",
     PORT: "3000",
@@ -29,6 +30,47 @@ describe("parseApiRuntimeConfig", () => {
     expect(cfg.database.name).toBe("tokenpanel");
     expect(cfg.environment).toBe("development");
     expect(cfg.corsOrigins).toBeNull();
+    expect(cfg.bootstrapSecret).toBe(
+      "bootstrap-secret-for-tests-at-least-32-chars",
+    );
+  });
+
+  test("requires a bootstrap secret in production", () => {
+    expect(() =>
+      parseApiRuntimeConfig(
+        base({
+          NODE_ENV: "production",
+          CORS_ORIGINS: "https://admin.example.com",
+          BOOTSTRAP_SECRET: undefined,
+        }),
+      ),
+    ).toThrow(/BOOTSTRAP_SECRET/);
+
+    const cfg = parseApiRuntimeConfig(
+      base({
+        NODE_ENV: "production",
+        CORS_ORIGINS: "https://admin.example.com",
+        BOOTSTRAP_SECRET: "bootstrap-secret-for-production-at-least-32-chars",
+      }),
+    );
+    expect(cfg.bootstrapSecret).toBe(
+      "bootstrap-secret-for-production-at-least-32-chars",
+    );
+  });
+
+  test("rejects short or sample bootstrap secret", () => {
+    expect(() =>
+      parseApiRuntimeConfig(base({ BOOTSTRAP_SECRET: "too-short" })),
+    ).toThrow(/BOOTSTRAP_SECRET/);
+    expect(() =>
+      parseApiRuntimeConfig(
+        base({
+          NODE_ENV: "production",
+          CORS_ORIGINS: "https://admin.example.com",
+          BOOTSTRAP_SECRET: "change_me_to_a_long_random_string_32chars",
+        }),
+      ),
+    ).toThrow(/BOOTSTRAP_SECRET/);
   });
 
   test("preserves exact JWT_SECRET bytes (no trim)", () => {
@@ -56,11 +98,36 @@ describe("parseApiRuntimeConfig", () => {
     }
   });
 
-  test("allows short JWT_SECRET outside production (compat)", () => {
+  test("rejects short JWT_SECRET outside production (length minimum is all-env)", () => {
+    expect(() =>
+      parseApiRuntimeConfig(
+        base({ JWT_SECRET: "too-short", NODE_ENV: "development" }),
+      ),
+    ).toThrow(ConfigValidationError);
+  });
+
+  test("ALLOW_WEAK_JWT_SECRET=1 bypasses length minimum (test opt-in)", () => {
     const cfg = parseApiRuntimeConfig(
-      base({ JWT_SECRET: "too-short", NODE_ENV: "development" }),
+      base({
+        JWT_SECRET: "too-short",
+        NODE_ENV: "development",
+        ALLOW_WEAK_JWT_SECRET: "1",
+      }),
     );
     expect(cfg.jwtSecret).toBe("too-short");
+  });
+
+  test("rejects ALLOW_WEAK_JWT_SECRET in production", () => {
+    expect(() =>
+      parseApiRuntimeConfig(
+        base({
+          JWT_SECRET: "a-strong-production-secret-at-least-32-chars",
+          NODE_ENV: "production",
+          CORS_ORIGINS: "https://admin.example.com",
+          ALLOW_WEAK_JWT_SECRET: "1",
+        }),
+      ),
+    ).toThrow(ConfigValidationError);
   });
 
   test("rejects short JWT_SECRET in production", () => {
@@ -68,6 +135,12 @@ describe("parseApiRuntimeConfig", () => {
       parseApiRuntimeConfig(
         base({ JWT_SECRET: "too-short", NODE_ENV: "production" }),
       ),
+    ).toThrow(ConfigValidationError);
+  });
+
+  test("rejects invalid ALLOW_WEAK_JWT_SECRET boolean", () => {
+    expect(() =>
+      parseApiRuntimeConfig(base({ ALLOW_WEAK_JWT_SECRET: "maybe" })),
     ).toThrow(ConfigValidationError);
   });
 

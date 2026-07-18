@@ -264,3 +264,46 @@ test("lintMigrationImports: rejects runtime and dynamic imports", () => {
   expect(lintMigrationImports(runtime).some((s) => s.includes("runtime imports"))).toBe(true);
   expect(lintMigrationImports(dynamic).some((s) => s.includes("dynamic import"))).toBe(true);
 });
+
+test("lintMigration: flags createIndex when transactional=true", () => {
+  const content = `
+    export const transactional = true as const;
+    export async function up(db, session) {
+      await db.collection("test").createIndex({ foo: 1 }, { session });
+    }
+  `;
+  const v = lintMigration(content);
+  expect(v.some((s) => s.includes("createIndex cannot run inside a transactional migration"))).toBe(true);
+});
+
+test("lintMigration: flags createIndexes (plural) when transactional=true", () => {
+  const content = `
+    export const transactional = true as const;
+    export async function up(db, session) {
+      await db.collection("test").createIndexes([{ key: { foo: 1 }, name: "foo_1" }], { session });
+    }
+  `;
+  const v = lintMigration(content);
+  expect(v.some((s) => s.includes("createIndex cannot run inside a transactional migration"))).toBe(true);
+});
+
+test("lintMigration: allows createIndex when transactional=false", () => {
+  const content = `
+    export const transactional = false as const;
+    export async function up(db, session) {
+      await db.collection("test").createIndex({ foo: 1 }, { session });
+    }
+  `;
+  expect(lintMigration(content)).toEqual([]);
+});
+
+test("lintMigration: allows transactional=true with only data ops", () => {
+  const content = `
+    export const transactional = true as const;
+    export async function up(db, session) {
+      await db.collection("test").insertOne({ foo: "bar" }, { session });
+      await db.collection("test").updateMany({}, { $set: { a: 1 } }, { session });
+    }
+  `;
+  expect(lintMigration(content)).toEqual([]);
+});

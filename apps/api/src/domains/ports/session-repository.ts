@@ -44,6 +44,16 @@ export type SessionRepositoryService = {
   readonly deleteAllForUser: (
     userId: HexId,
   ) => Effect.Effect<number, RepoError>;
+  /**
+   * Delete every session for a user EXCEPT the one identified by
+   * `keepSessionId`. Used when a security-sensitive action (e.g. email
+   * change) should revoke other devices without logging out the requester.
+   * Returns the number of sessions deleted.
+   */
+  readonly deleteAllForUserExcept: (
+    userId: HexId,
+    keepSessionId: HexId,
+  ) => Effect.Effect<number, RepoError>;
 };
 
 export class SessionRepository extends Context.Tag(

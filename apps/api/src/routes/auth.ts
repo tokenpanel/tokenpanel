@@ -104,6 +104,7 @@ authRoutes.patch(
   async (c) => {
     const user = c.get("user");
     const orgId = c.get("orgId");
+    const sessionId = c.get("sessionId");
     const body = c.req.valid("json");
     return runAdminEffect(
       c,
@@ -112,6 +113,7 @@ authRoutes.patch(
         currentEmail: user.email,
         email: body.email,
         activeOrganizationId: orgId.toHexString(),
+        sessionId,
       }),
       { operation: "updateMe" },
     );

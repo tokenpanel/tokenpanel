@@ -40,13 +40,13 @@ export function balanceDualIncPipeline(opts: {
     const base = effectiveAmountExpr();
     const next = { $add: [base, amountDelta] };
     setDoc["balance.amountUnits"] = next;
-    setDoc["balance.amountMinor"] = next;
+    setDoc["balance.amountMinor"] = "$$REMOVE";
   }
   if (reservedDelta !== 0) {
     const base = effectiveReservedExpr();
     const next = { $add: [base, reservedDelta] };
     setDoc["balance.reservedUnits"] = next;
-    setDoc["balance.reservedMinor"] = next;
+    setDoc["balance.reservedMinor"] = "$$REMOVE";
   }
 
   return [{ $set: setDoc }];

@@ -39,6 +39,7 @@ export function makeTestConfig(
     environment: over.environment ?? "test",
     port: over.port ?? 3000,
     jwtSecret,
+    bootstrapSecret: over.bootstrapSecret ?? null,
     corsOrigins: over.corsOrigins === undefined ? null : over.corsOrigins,
     database: Object.freeze({
       uri:

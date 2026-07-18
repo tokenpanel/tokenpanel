@@ -44,6 +44,8 @@ export type SignupInput = {
   readonly adminEmail: string;
   readonly adminUsername: string;
   readonly password: string;
+  /** Header value; never persisted or logged. */
+  readonly bootstrapSecret: string | undefined;
 };
 
 export type SignupResult = {
@@ -62,6 +64,12 @@ export type UpdateMeInput = {
   readonly email: string;
   /** Session tenant so the response matches request org context. */
   readonly activeOrganizationId?: HexId | undefined;
+  /**
+   * Current allowlist session id. When the email changes, all OTHER sessions
+   * for the user are revoked; this one is kept so the requester is not logged
+   * out mid-flow. When omitted, every session is revoked.
+   */
+  readonly sessionId?: HexId | undefined;
 };
 
 export type ChangePasswordInput = {

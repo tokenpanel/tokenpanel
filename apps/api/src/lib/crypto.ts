@@ -63,9 +63,8 @@ export function hashToken(token: string): string {
  * differing byte and leak how many leading bytes matched.
  */
 export function safeHashEqual(a: string, b: string): boolean {
-  const ab = Buffer.from(a, "utf8");
-  const bb = Buffer.from(b, "utf8");
-  if (ab.length !== bb.length) return false;
+  const ab = createHash("sha256").update(a, "utf8").digest();
+  const bb = createHash("sha256").update(b, "utf8").digest();
   return timingSafeEqual(ab, bb);
 }
 

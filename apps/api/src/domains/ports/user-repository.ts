@@ -68,6 +68,16 @@ export type UserRepositoryService = {
     setActive: boolean,
     permissions?: readonly PanelPermission[],
   ) => Effect.Effect<UserDoc | null, RepoError>;
+  /**
+   * Update an EXISTING membership's role + permissions (REPLACE semantics)
+   * for the given org. Returns the updated user doc, or null if no user/match.
+   */
+  readonly updateMembership: (
+    userId: HexId,
+    organizationId: HexId,
+    role: UserRole,
+    permissions: readonly PanelPermission[],
+  ) => Effect.Effect<UserDoc | null, RepoError>;
   readonly findMembersOfOrg: (
     organizationId: HexId,
   ) => Effect.Effect<readonly UserDoc[], RepoError>;

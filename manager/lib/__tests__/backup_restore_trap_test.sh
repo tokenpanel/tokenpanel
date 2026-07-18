@@ -208,5 +208,118 @@ set -e
 [ "${_RESTORE_SWAP_UNSAFE:-0}" -eq 1 ] || fail "flag should stay 1 after swap failure"
 echo "OK: _restore_into_temp leaves unsafe flag set on swap failure"
 
-echo "ALL PASS"
+# --- restore_backup runs post migrations after a successful restore ---
+# Phase-6 failure recovery: restoring a pre-update backup onto newer code
+# leaves the schema lagging the image. restore_backup must call
+# run_migrations post after wait_for_health so the first request does not
+# hit a schema mismatch. Idempotent via `_migrations`.
+: >"$LOG"
+DOMAIN="test.example.com"
+export DOMAIN
 
+# Comprehensive docker mock covering the full restore_backup flow:
+# create_backup (pre-restore: stats + dump + verify + stop/start) and
+# _restore_into_temp (mongorestore into temp + mongosh swap) + api restart.
+docker() {
+  if [ "${1:-}" != "compose" ]; then return 1; fi
+  shift
+  if [ "${1:-}" = "-f" ]; then shift 2; fi
+  local op="${1:-}"
+  case "$op" in
+    ps)
+      # _api_is_running: grep -qx 'api' matches this single line.
+      echo "api"
+      ;;
+    stop)
+      echo "STOP:$2" >>"$LOG"
+      ;;
+    start)
+      echo "START:$2" >>"$LOG"
+      ;;
+    exec)
+      shift  # exec
+      [ "${1:-}" = "-T" ] && shift
+      local svc="${1:-}"; shift
+      local tool="${1:-}"
+      case "$tool" in
+        mongosh)
+          local eval_arg
+          eval_arg="$(_mongosh_eval "$@")" || eval_arg=""
+          # create_backup: db.stats() for the disk-size estimate.
+  if [[ "$eval_arg" == *"db.stats()"* ]]; then
+            echo '{"dataSize":1048576,"indexSize":0}'
+            return 0
+          fi
+          # _restore_into_temp: collection count for the temp DB check.
+          if [[ "$eval_arg" == *getCollectionNames\(\).length* ]]; then
+            echo "3"
+            return 0
+          fi
+          # _restore_into_temp: drop+rename swap.
+          if [[ "$eval_arg" == *renameCollection* ]]; then
+            echo "SWAP_OK 3"
+            return 0
+          fi
+          # _drop_temp_db (dropDatabase cleanup) — no output needed.
+          return 0
+          ;;
+        mongodump)
+          # create_backup writes this to the backup archive path.
+          printf 'fake-archive'
+          return 0
+          ;;
+        mongorestore)
+          # restore_backup dryRun verify + create_backup verify + temp restore.
+          return 0
+          ;;
+        *)
+          return 0
+          ;;
+      esac
+      ;;
+    *)
+      return 0
+      ;;
+  esac
+}
+export -f docker
+
+# Skip the interactive domain confirm: set the named var to DOMAIN.
+tp_read_required() {
+  local __var="$1"
+  printf -v "$__var" '%s' "$DOMAIN"
+  return 0
+}
+export -f tp_read_required
+
+# Skip real docker health probes (create_backup resume + restore restart).
+wait_for_health() { return 0; }
+export -f wait_for_health
+
+# Mock run_migrations: record the phase, never fail. Defining this BEFORE
+# the call means restore_backup's `declare -F` check skips sourcing
+# migrate.sh and uses this mock instead.
+_MIGRATE_CALLS=""
+run_migrations() {
+  _MIGRATE_CALLS="${_MIGRATE_CALLS:+$_MIGRATE_CALLS }$1"
+  return 0
+}
+export -f run_migrations
+
+RESTORE_ARCHIVE="$BACKUP_DIR/restore-src.gz"
+printf 'fake-restore-archive' >"$RESTORE_ARCHIVE"
+
+set +e
+restore_backup "$RESTORE_ARCHIVE" >/dev/null 2>&1
+rc=$?
+set -e
+# restore_backup clears the test's EXIT trap (trap - EXIT inside the fn).
+# Re-set it so the script-exit cleanup (rm -rf BACKUP_DIR / LOG) still runs.
+trap 'rm -rf "$BACKUP_DIR"; rm -f "$LOG"' EXIT
+
+[ "$rc" -eq 0 ] || fail "restore_backup should succeed (rc=$rc); log: $(tr '\n' ' ' <"$LOG")"
+[ -n "$_MIGRATE_CALLS" ] || fail "run_migrations not called after restore"
+[[ "$_MIGRATE_CALLS" == *post* ]] || fail "run_migrations post not called (got: $_MIGRATE_CALLS)"
+echo "OK: restore_backup calls run_migrations post (calls: $_MIGRATE_CALLS)"
+
+echo "ALL PASS"

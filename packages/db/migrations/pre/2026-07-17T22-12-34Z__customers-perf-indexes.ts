@@ -9,13 +9,12 @@ import type { MigrationDb } from "../../src/migrator/migration-db.ts";
  *   (organizationId + name regex) — narrows the collection scan per
  *   keystroke to the org partition (P7).
  *
- * createIndex is supported inside multi-doc transactions on MongoDB 4.4+
- * (project runs 8); running transactionally keeps the index creation atomic
- * with the _migrations applied-state record.
+ * Index-only migration: run outside a transaction (project convention,
+ * commit 679a883). createIndex is idempotent; partial progress is resumable.
  */
 export const id = "2026-07-17T22-12-34Z__customers-perf-indexes";
 export const phase = "pre" as const;
-export const transactional = true as const;
+export const transactional = false as const;
 
 export async function up(mdb: MigrationDb): Promise<void> {
   const customers = mdb.collection("customers");

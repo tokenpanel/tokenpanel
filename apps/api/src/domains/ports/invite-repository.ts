@@ -30,7 +30,8 @@ export type InviteRepositoryService = {
     inviteId: HexId,
     organizationId: HexId,
   ) => Effect.Effect<boolean, RepoError>;
-  readonly markAccepted: (inviteId: HexId) => Effect.Effect<void, RepoError>;
+  /** Atomically consume a pending, unexpired invite. */
+  readonly claimPending: (inviteId: HexId) => Effect.Effect<boolean, RepoError>;
   readonly deleteByOrg: (organizationId: HexId) => Effect.Effect<void, RepoError>;
 };
 

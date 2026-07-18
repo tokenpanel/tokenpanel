@@ -11,6 +11,15 @@ import { loadMigrationTree } from "./validator.ts";
 export { validateMigrationMeta } from "./validator.ts";
 
 const MIGRATIONS_COLLECTION = "_migrations";
+const CHECKSUM_ENFORCEMENT_START_DATE = "2026-07-18";
+
+/**
+ * Migration checksums became enforceable on 2026-07-18. Earlier migration
+ * records may predate checksum tracking, so their mismatch is warning-only.
+ */
+export function isLegacyChecksumMismatch(migrationId: string): boolean {
+  return migrationId.slice(0, CHECKSUM_ENFORCEMENT_START_DATE.length) < CHECKSUM_ENFORCEMENT_START_DATE;
+}
 
 interface MigrationDoc {
   _id: string;
@@ -59,7 +68,12 @@ export async function runMigrations(
   db: Db,
   phase: MigrationPhase,
 ): Promise<MigrationReport> {
-  const report: MigrationReport = { phase, applied: [], skipped: [] };
+  const report: MigrationReport = {
+    phase,
+    applied: [],
+    skipped: [],
+    legacyChecksumMismatches: [],
+  };
 
   const lock = await acquireLock(db);
   try {
@@ -82,6 +96,15 @@ export async function runMigrations(
       const existingChecksum = appliedMap.get(m.id);
       if (existingChecksum !== undefined) {
         if (existingChecksum !== m.checksum) {
+          if (isLegacyChecksumMismatch(m.id)) {
+            console.warn(
+              `WARNING: legacy migration "${m.id}" has a different stored checksum; ` +
+                "skipping compatibility exception. Restore original bytes before any future edit.",
+            );
+            report.legacyChecksumMismatches.push(m.id);
+            report.skipped.push(m.id);
+            continue;
+          }
           throw new Error(
             `Migration "${m.id}" was already applied with a different checksum.\n` +
               `The file has been edited after application. This is unsafe —\n` +
@@ -112,6 +135,7 @@ export async function getMigrationStatus(db: Db): Promise<MigrationStatus> {
   let pending = 0;
   const pendingIds: string[] = [];
   const checksumMismatches: string[] = [];
+  const legacyChecksumMismatches: string[] = [];
 
   const migrations = await loadMigrationTree();
   for (const phase of ["pre", "post"] as MigrationPhase[]) {
@@ -123,7 +147,11 @@ export async function getMigrationStatus(db: Db): Promise<MigrationStatus> {
         pendingIds.push(m.id);
       } else if (existingChecksum !== m.checksum) {
         // Applied id with a different file body — runMigrations will refuse.
-        checksumMismatches.push(m.id);
+        if (isLegacyChecksumMismatch(m.id)) {
+          legacyChecksumMismatches.push(m.id);
+        } else {
+          checksumMismatches.push(m.id);
+        }
       }
     }
   }
@@ -133,5 +161,6 @@ export async function getMigrationStatus(db: Db): Promise<MigrationStatus> {
     pending,
     pendingIds,
     checksumMismatches,
+    legacyChecksumMismatches,
   };
 }

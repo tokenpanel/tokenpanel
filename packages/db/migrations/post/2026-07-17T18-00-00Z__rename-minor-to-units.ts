@@ -1,4 +1,3 @@
-import type { ObjectId } from "mongodb";
 import type { MigrationDb } from "../../src/migrator/migration-db.ts";
 
 /**
@@ -17,7 +16,8 @@ import type { MigrationDb } from "../../src/migrator/migration-db.ts";
  */
 export const id = "2026-07-17T18-00-00Z__rename-minor-to-units";
 export const phase = "post" as const;
-export const transactional = true as const;
+// non-transactional: 9 collections of updateMany/$unset (risk of 16MB oplog cap + lock contention); each step is independently idempotent and resumable on retry.
+export const transactional = false as const;
 
 const SCHEDULE_LEAVES = [
   ["inputMinorPerMillion", "inputUnitsPerMillion"],
@@ -30,9 +30,10 @@ const SCHEDULE_LEAVES = [
 ] as const;
 
 /**
- * Promote Minor → Units only when Units is missing (never clobber new writes),
- * then drop Minor. Balance dual-write keeps both equal after swap so dropping
- * Minor is safe when both exist.
+ * Promote Minor → Units whenever Minor is present (Minor wins over stale Units
+ * backfilled by pre during the pre→swap window), then drop Minor. The $ifNull
+ * falls back to existing Units only when Minor is somehow null, so a null Minor
+ * never clobbers a real Units value.
  */
 async function promoteMissingAndDrop(
   coll: ReturnType<MigrationDb["collection"]>,
@@ -40,11 +41,8 @@ async function promoteMissingAndDrop(
   unitsPath: string,
 ): Promise<void> {
   await coll.updateMany(
-    {
-      [minorPath]: { $exists: true },
-      [unitsPath]: { $exists: false },
-    },
-    [{ $set: { [unitsPath]: `$${minorPath}` } }],
+    { [minorPath]: { $exists: true } },
+    [{ $set: { [unitsPath]: { $ifNull: [`$${minorPath}`, `$${unitsPath}`] } } }],
   );
   await coll.updateMany(
     { [minorPath]: { $exists: true } },
@@ -76,44 +74,62 @@ async function resyncAndDropSchedulePrefix(
 async function cleanupModelEntrySchedules(
   coll: ReturnType<MigrationDb["collection"]>,
 ): Promise<void> {
-  const orFilter = SCHEDULE_LEAVES.flatMap(([minor]) => [
-    { [`entries.price.${minor}`]: { $exists: true } },
-    { [`entries.cost.${minor}`]: { $exists: true } },
-  ]);
-  if (orFilter.length === 0) return;
-  const rows = await coll.find({ $or: orFilter }).toArray();
-  for (const row of rows) {
-    const entries = (row as { entries?: unknown }).entries;
-    if (!Array.isArray(entries)) continue;
-    let dirty = false;
-    const nextEntries = entries.map((raw) => {
-      if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw;
-      const entry = { ...(raw as Record<string, unknown>) };
-      for (const key of ["price", "cost"] as const) {
-        const sched = entry[key];
-        if (!sched || typeof sched !== "object" || Array.isArray(sched)) {
-          continue;
-        }
-        const s = { ...(sched as Record<string, unknown>) };
-        let sDirty = false;
-        for (const [minor, units] of SCHEDULE_LEAVES) {
-          if (minor in s) {
-            if (s[units] === undefined) s[units] = s[minor];
-            delete s[minor];
-            sDirty = true;
-          }
-        }
-        if (sDirty) {
-          entry[key] = s;
-          dirty = true;
-        }
-      }
-      return entry;
-    });
-    if (dirty) {
-      await coll.updateOne(
-        { _id: (row as { _id: ObjectId })._id },
-        { $set: { entries: nextEntries } },
+  // Do every transform on MongoDB's current document. A client-side
+  // find/map/update loop can overwrite a model entry concurrently changed by
+  // the live API between its read and write.
+  for (const prefix of ["price", "cost"] as const) {
+    for (const [minor, units] of SCHEDULE_LEAVES) {
+      await coll.updateMany(
+        {
+          entries: {
+            $elemMatch: { [`${prefix}.${minor}`]: { $exists: true } },
+          },
+        },
+        [{
+          $set: {
+            entries: {
+              $map: {
+                input: { $ifNull: ["$entries", []] },
+                as: "entry",
+                in: {
+                  $mergeObjects: [
+                    "$$entry",
+                    {
+                      [prefix]: {
+                        $cond: [
+                          {
+                            $ne: [
+                              { $type: `$$entry.${prefix}.${minor}` },
+                              "missing",
+                            ],
+                          },
+                          {
+                            $unsetField: {
+                              field: minor,
+                              input: {
+                                $setField: {
+                                  field: units,
+                                  input: `$$entry.${prefix}`,
+                                  value: {
+                                    $ifNull: [
+                                      `$$entry.${prefix}.${minor}`,
+                                      `$$entry.${prefix}.${units}`,
+                                    ],
+                                  },
+                                },
+                              },
+                            },
+                          },
+                          `$$entry.${prefix}`,
+                        ],
+                      },
+                    },
+                  ],
+                },
+              },
+            },
+          },
+        }],
       );
     }
   }
@@ -192,61 +208,70 @@ export async function up(mdb: MigrationDb): Promise<void> {
     { $set: { dimension: "spend_units" } },
   );
 
-  // settlement_outbox.context
+  // settlement_outbox.context. Keep transforms server-side for the same
+  // reason as model entries: outbox workers may update a context while post
+  // migration runs.
   const outbox = mdb.collection("settlement_outbox");
-  const rows = await outbox
-    .find({
-      $or: [
-        { "context.priceMinor": { $exists: true } },
-        { "context.costMinor": { $exists: true } },
-        { "context.reservedMinor": { $exists: true } },
-        { "context.priceMinorOverride": { $exists: true } },
-        { "context.priceSchedule": { $exists: true } },
-        { "context.costSchedule": { $exists: true } },
-      ],
-    })
-    .toArray();
+  const top: Array<[string, string]> = [
+    ["priceMinor", "priceUnits"],
+    ["costMinor", "costUnits"],
+    ["reservedMinor", "reservedUnits"],
+    ["priceMinorOverride", "priceUnitsOverride"],
+  ];
+  for (const [minor, units] of top) {
+    await outbox.updateMany(
+      { [`context.${minor}`]: { $exists: true } },
+      [{
+        $set: {
+          context: {
+            $unsetField: {
+              field: minor,
+              input: {
+                $setField: {
+                  field: units,
+                  input: "$context",
+                  value: { $ifNull: [`$context.${minor}`, `$context.${units}`] },
+                },
+              },
+            },
+          },
+        },
+      }],
+    );
+  }
 
-  for (const row of rows) {
-    const ctx = (row as { context?: Record<string, unknown> }).context;
-    if (!ctx || typeof ctx !== "object") continue;
-    const next: Record<string, unknown> = { ...ctx };
-    let dirty = false;
-
-    const top: Array<[string, string]> = [
-      ["priceMinor", "priceUnits"],
-      ["costMinor", "costUnits"],
-      ["reservedMinor", "reservedUnits"],
-      ["priceMinorOverride", "priceUnitsOverride"],
-    ];
-    for (const [from, to] of top) {
-      if (from in next) {
-        if (next[to] === undefined) next[to] = next[from];
-        delete next[from];
-        dirty = true;
-      }
-    }
-
-    for (const scheduleKey of ["priceSchedule", "costSchedule"] as const) {
-      const sched = next[scheduleKey];
-      if (!sched || typeof sched !== "object" || Array.isArray(sched)) continue;
-      const s = { ...(sched as Record<string, unknown>) };
-      let sDirty = false;
-      for (const [minor, units] of SCHEDULE_LEAVES) {
-        if (minor in s) {
-          if (s[units] === undefined) s[units] = s[minor];
-          delete s[minor];
-          sDirty = true;
-        }
-      }
-      if (sDirty) {
-        next[scheduleKey] = s;
-        dirty = true;
-      }
-    }
-
-    if (dirty) {
-      await outbox.updateOne({ _id: row._id }, { $set: { context: next } });
+  for (const scheduleKey of ["priceSchedule", "costSchedule"] as const) {
+    for (const [minor, units] of SCHEDULE_LEAVES) {
+      await outbox.updateMany(
+        { [`context.${scheduleKey}.${minor}`]: { $exists: true } },
+        [{
+          $set: {
+            context: {
+              $setField: {
+                field: scheduleKey,
+                input: "$context",
+                value: {
+                  $unsetField: {
+                    field: minor,
+                    input: {
+                      $setField: {
+                        field: units,
+                        input: `$context.${scheduleKey}`,
+                        value: {
+                          $ifNull: [
+                            `$context.${scheduleKey}.${minor}`,
+                            `$context.${scheduleKey}.${units}`,
+                          ],
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        }],
+      );
     }
   }
 }

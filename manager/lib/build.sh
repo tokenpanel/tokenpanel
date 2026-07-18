@@ -47,9 +47,10 @@ build_current_checkout_image() {
   new_version_tag="$(current_checkout_tag)"
   info "building image: tokenpanel/app:${new_version_tag}..."
 
-  docker_build_prod \
-    "tokenpanel/app:${new_version_tag}" \
-    "tokenpanel/app:current" || {
+  # `current` is the image Compose starts. Do not move it while an update is
+  # still in its pre-migration phase: a failed pre migration must leave both
+  # the running service and a later `tokenpanel start` on the old image.
+  docker_build_prod "tokenpanel/app:${new_version_tag}" || {
     err "docker build failed"
     return 1
   }
@@ -57,6 +58,23 @@ build_current_checkout_image() {
   NEW_IMAGE_TAG="$new_version_tag"
   export NEW_IMAGE_TAG
   ok "image built: tokenpanel/app:${new_version_tag}"
+}
+
+promote_new_image_current() {
+  if [ -z "${NEW_IMAGE_TAG:-}" ]; then
+    err "cannot promote image: NEW_IMAGE_TAG is empty"
+    return 1
+  fi
+  if ! docker image inspect "tokenpanel/app:${NEW_IMAGE_TAG}" >/dev/null 2>&1; then
+    err "cannot promote image: tokenpanel/app:${NEW_IMAGE_TAG} is missing"
+    return 1
+  fi
+
+  docker tag "tokenpanel/app:${NEW_IMAGE_TAG}" tokenpanel/app:current || {
+    err "could not promote tokenpanel/app:${NEW_IMAGE_TAG} to current"
+    return 1
+  }
+  ok "promoted tokenpanel/app:${NEW_IMAGE_TAG} to current"
 }
 
 fetch_and_build() {
@@ -81,15 +99,17 @@ fetch_and_build() {
 
   if [ -n "$target_version" ]; then
     info "target: $target_version"
-    if ! git_err="$(git -C "$INSTALL_DIR" checkout "$target_version" 2>&1)"; then
+    if ! git_err="$(git -C "$INSTALL_DIR" checkout --detach "$target_version" 2>&1)"; then
       err "git checkout '$target_version' failed — aborting update (nothing changed):"
       printf '%s\n' "$git_err" >&2
       return 1
     fi
   else
-    info "pulling latest main (stable channel)..."
-    if ! git_err="$(git -C "$INSTALL_DIR" pull origin main 2>&1)"; then
-      err "git pull failed — aborting update (nothing changed):"
+    # A prior version-targeted update intentionally leaves HEAD detached. A
+    # regular `git pull` then fails, so always build the fetched stable ref.
+    info "checking out latest main (stable channel)..."
+    if ! git_err="$(git -C "$INSTALL_DIR" checkout --detach origin/main 2>&1)"; then
+      err "git checkout origin/main failed — aborting update (nothing changed):"
       printf '%s\n' "$git_err" >&2
       return 1
     fi

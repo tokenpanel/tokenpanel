@@ -36,7 +36,14 @@ async function main(): Promise<void> {
         `${phase} migrations: ${report.applied.length} applied, ${report.skipped.length} skipped`,
       );
       for (const id of report.applied) console.log(`  ✓ ${id}`);
-      for (const id of report.skipped) console.log(`  → ${id} (already applied)`);
+      const legacyMismatchIds = new Set(report.legacyChecksumMismatches);
+      for (const id of report.skipped) {
+        console.log(
+          legacyMismatchIds.has(id)
+            ? `  ! ${id} (legacy checksum mismatch; compatibility skip)`
+            : `  → ${id} (already applied)`,
+        );
+      }
       await closeDb();
       break;
     }
@@ -50,9 +57,15 @@ async function main(): Promise<void> {
       for (const id of status.pendingIds) console.log(`  ○ ${id}`);
       if (status.checksumMismatches.length > 0) {
         console.log(`Checksum mismatches: ${status.checksumMismatches.length}`);
-        for (const id of status.checksumMismatches) {
-          console.log(`  ✗ ${id} (file edited after apply — run will abort)`);
+      for (const id of status.checksumMismatches) {
+        console.log(`  ✗ ${id} (file edited after apply — run will abort)`);
+      }
+      if (status.legacyChecksumMismatches.length > 0) {
+        console.warn(`Legacy checksum mismatches: ${status.legacyChecksumMismatches.length}`);
+        for (const id of status.legacyChecksumMismatches) {
+          console.warn(`  ! ${id} (compatibility exception; restore original bytes before future edit)`);
         }
+      }
       }
       await closeDb();
       break;

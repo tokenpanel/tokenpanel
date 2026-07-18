@@ -73,7 +73,7 @@ export type ObjectIdFromSelf = Schema.Schema.Type<typeof ObjectIdFromSelf>;
 
 /** Wire/create input: 24-hex string → ObjectId. */
 export const ObjectIdFromString = Schema.transformOrFail(
-  Schema.String,
+  Schema.String.pipe(Schema.pattern(/^[0-9a-fA-F]{24}$/)),
   ObjectIdFromSelf,
   {
     strict: true,

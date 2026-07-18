@@ -266,6 +266,7 @@ cmd_rebuild() {
   step "rebuild" "building current checkout image..."
   CURRENT_IMAGE_ID="$(docker compose -f "$APP_YML" images api --format '{{.ID}}' 2>/dev/null | head -1)"
   build_current_checkout_image || die "build failed — old container still available"
+  promote_new_image_current || die "could not promote rebuilt image"
   if [ -n "$CURRENT_IMAGE_ID" ]; then
     docker tag "$CURRENT_IMAGE_ID" tokenpanel/app:previous 2>/dev/null || true
   fi
@@ -414,6 +415,10 @@ cmd_update() {
   step "4/6" "running pre-deploy migrations from new image (old container still serving)..."
   run_migrations_image "pre" "$NEW_IMAGE_TAG" || die "pre-migration failed — aborting (old container serving, db rolled back per-txn, backup available)"
   ok "pre-deploy migrations applied (from tokenpanel/app:${NEW_IMAGE_TAG})"
+
+  # Only now may Compose's `current` tag move. A failed pre migration above
+  # leaves current pointing at the known-good image for starts/reboots.
+  promote_new_image_current || die "could not promote new image — aborting (old container serving)"
 
   # ── Phase 5: SWAP ──
   step "5/6" "swapping to new container..."

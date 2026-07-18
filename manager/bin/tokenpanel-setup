@@ -295,6 +295,7 @@ EXISTING_MONGO_USER="${MONGO_USER:-tokenpanel}"
 EXISTING_MONGO_PASS="${MONGO_PASS:-}"
 EXISTING_MONGODB_DB="${MONGODB_DB:-tokenpanel}"
 EXISTING_JWT_SECRET="${JWT_SECRET:-}"
+EXISTING_BOOTSTRAP_SECRET="${BOOTSTRAP_SECRET:-}"
 EXISTING_TIMEZONE="${TZ:-UTC}"
 EXISTING_API_PORT="${API_PORT:-3000}"
 EXISTING_USE_CADDY="${USE_CADDY:-y}"
@@ -353,6 +354,14 @@ else
   TRUST_PROXY_YN="$(prompt_yn '  Behind an external reverse proxy — trust client-IP headers?' "$_tp_default")"
 fi
 TRUST_PROXY="$(yn_to_env_bool "$TRUST_PROXY_YN")"
+
+if [ "$USE_CADDY" = "n" ] && [ "$TRUST_PROXY_YN" = "y" ]; then
+  warn "Direct mode + TRUST_PROXY=true: if the API port is reachable by"
+  warn "untrusted clients, they can spoof X-Forwarded-For / X-Real-IP to"
+  warn "evade per-IP throttles (all admins share one login-throttle bucket)."
+  warn "Only enable if a trusted reverse proxy fronts the API and the port"
+  warn "is not exposed directly to untrusted networks."
+fi
 
 if [ "$TRUST_PROXY_YN" = "y" ]; then
   _cf_default="${EXISTING_TRUST_CLOUDFLARE_YN:-n}"
@@ -422,6 +431,16 @@ else
   JWT_SECRET="$JWT_SECRET_PROMPT"
 fi
 
+# First-run signup has a separate secret. Preserve it on reruns so an
+# unfinished setup remains recoverable; fresh installs generate entropy.
+if [ -n "$EXISTING_BOOTSTRAP_SECRET" ]; then
+  BOOTSTRAP_SECRET="$EXISTING_BOOTSTRAP_SECRET"
+else
+  BOOTSTRAP_SECRET="$(generate_secret 48)"
+  info "generated first-run bootstrap secret (saved to ${ENV_FILE})"
+  info "enter it in admin setup; retrieve with: sudo cat ${ENV_FILE}"
+fi
+
 step "6/8" "MongoDB database name"
 MONGODB_DB="$(prompt_with_default '  Database name' "${EXISTING_MONGODB_DB}")"
 validate_db_name "$MONGODB_DB" || die "invalid database name (allowed: letters, digits, underscore, hyphen; 1-64 chars)"
@@ -467,7 +486,7 @@ CONFIRM="$(prompt_yn 'Proceed with install?' 'y')"
 [ "$CONFIRM" = "y" ] || { info "aborted"; exit 0; }
 
 # ── Validate required config ──
-for var in DOMAIN ADMIN_EMAIL MONGO_USER MONGO_PASS MONGODB_DB JWT_SECRET; do
+for var in DOMAIN ADMIN_EMAIL MONGO_USER MONGO_PASS MONGODB_DB JWT_SECRET BOOTSTRAP_SECRET; do
   val="${!var:-}"
   [ -n "$val" ] || die "$var is required and must not be empty"
   validate_env_value "$val" "$var" \
@@ -497,7 +516,7 @@ fi
 # Export all variables for envsubst (env.tmpl expands everything — it's the
 # .env file itself, so secrets belong here).
 export DOMAIN ADMIN_EMAIL MONGO_USER MONGO_PASS MONGO_USER_URI MONGO_PASS_URI \
-       MONGODB_DB JWT_SECRET API_PORT USE_CADDY TIMEZONE \
+ MONGODB_DB JWT_SECRET BOOTSTRAP_SECRET API_PORT USE_CADDY TIMEZONE \
        TRUST_PROXY TRUST_CLOUDFLARE \
        INSTALL_DIR CONFIG_DIR DATA_DIR LOG_DIR BACKUP_DIR TEMPLATE_DIR
 
@@ -562,6 +581,7 @@ docker compose -f "$APP_YML" rm -sf mongo-init >/dev/null 2>&1 || true
 step "4/5" "building app image..."
 source "${SCRIPT_DIR}/../lib/build.sh"
 build_current_checkout_image || die "docker build failed — check Dockerfile and code"
+promote_new_image_current || die "could not promote built image"
 
 step "5/5" "starting app..."
 docker compose -f "$APP_YML" up -d

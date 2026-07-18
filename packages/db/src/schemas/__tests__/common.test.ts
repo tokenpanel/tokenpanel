@@ -39,6 +39,7 @@ test("objectIdFromString rejects invalid strings", () => {
   expect(objectIdFromString.safeParse("").success).toBe(false);
   expect(objectIdFromString.safeParse("507f1f77bcf86cd79943901").success).toBe(false);
   expect(objectIdFromString.safeParse("507f1f77bcf86cd7994390111").success).toBe(false);
+  expect(objectIdFromString.safeParse("abcdefghijkl").success).toBe(false);
 });
 
 test("currencyCode enforces 3 uppercase letters; regex blocks lowercase before transform", () => {

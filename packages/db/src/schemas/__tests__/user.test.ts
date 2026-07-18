@@ -107,6 +107,16 @@ test("userCreateInput email format + max", () => {
   expect(userCreateInput.safeParse({ ...base, username: "alice", email: "a".repeat(250) + "@b.com" }).success).toBe(false);
 });
 
+test("userCreateInput lowercases email", () => {
+  const r = userCreateInput.parse({ ...base, username: "alice", email: "Alice@B.com" });
+  expect(r.email).toBe("alice@b.com");
+});
+
+test("userUpdateInput lowercases email", () => {
+  const r = userUpdateInput.parse({ email: "Alice@B.com" });
+  expect(r.email).toBe("alice@b.com");
+});
+
 test("userCreateInput has no top-level role field (role lives on membership)", () => {
   // role on a membership is honored; top-level role is ignored/stripped
   const r = userCreateInput.parse({

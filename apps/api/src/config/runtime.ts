@@ -74,6 +74,8 @@ export type ApiRuntimeConfig = Readonly<{
   port: number;
   /** Exact JWT_SECRET bytes as provided — never log or include in errors. */
   jwtSecret: string;
+  /** Deployment-scoped first-run signup secret; never falls back to JWT_SECRET. */
+  bootstrapSecret: string | null;
   /**
    * When null, reflect request Origin (dev default).
    * When empty array in production, no cross-origin clients are allowed.
@@ -204,6 +206,7 @@ function parsePort(
 function parseJwtSecret(
   raw: string | undefined,
   environment: ApiEnvironment,
+  allowWeak: boolean,
   issues: { variable: string; reason: string }[],
 ): string {
   if (!isNonBlank(raw)) {
@@ -213,23 +216,56 @@ function parseJwtSecret(
     });
     return "";
   }
-  // Preserve exact bytes — do not trim (except we never rewrite the string).
-  // Existing deployments may use short secrets that still decrypt provider
-  // credentials; enforce length + sample rejection only in production.
-  if (environment === "production") {
-    if (raw.length < MIN_JWT_SECRET_LEN) {
+  // Preserve exact bytes — do not trim (we never rewrite the string).
+  // Length minimum applies in ALL environments, not just production: the same
+  // secret also derives the AES-256-GCM provider-credential key, so a weak
+  // secret accepted by a dev image that is accidentally run in production
+  // would silently weaken at-rest encryption. An explicit opt-in flag
+  // (ALLOW_WEAK_JWT_SECRET=1) exists for test suites that need short secrets.
+  if (!allowWeak && raw.length < MIN_JWT_SECRET_LEN) {
+    issues.push({
+      variable: "JWT_SECRET",
+      reason: `must be at least ${MIN_JWT_SECRET_LEN} characters (set ALLOW_WEAK_JWT_SECRET=1 only for tests)`,
+    });
+  }
+  // Sample/default/weak-value rejection stays production-only — dev may
+  // legitimately reuse documented samples as long as they meet the length.
+  if (environment === "production" && isRejectedProductionSecret(raw)) {
+    issues.push({
+      variable: "JWT_SECRET",
+      reason:
+        "rejects known sample/default/weak values in production (generate a random 32+ char secret)",
+    });
+  }
+  return raw;
+}
+
+function parseBootstrapSecret(
+  raw: string | undefined,
+  environment: ApiEnvironment,
+  issues: { variable: string; reason: string }[],
+): string | null {
+  if (!isNonBlank(raw)) {
+    if (environment === "production") {
       issues.push({
-        variable: "JWT_SECRET",
-        reason: `must be at least ${MIN_JWT_SECRET_LEN} characters in production`,
+        variable: "BOOTSTRAP_SECRET",
+        reason: "required in production to authorize first-run signup",
       });
     }
-    if (isRejectedProductionSecret(raw)) {
-      issues.push({
-        variable: "JWT_SECRET",
-        reason:
-          "rejects known sample/default/weak values in production (generate a random 32+ char secret)",
-      });
-    }
+    return null;
+  }
+  if (raw.length < MIN_JWT_SECRET_LEN) {
+    issues.push({
+      variable: "BOOTSTRAP_SECRET",
+      reason: `must be at least ${MIN_JWT_SECRET_LEN} characters`,
+    });
+  }
+  if (environment === "production" && isRejectedProductionSecret(raw)) {
+    issues.push({
+      variable: "BOOTSTRAP_SECRET",
+      reason:
+        "rejects known sample/default/weak values in production (generate random 32+ character secret)",
+    });
   }
   return raw;
 }
@@ -533,7 +569,29 @@ export function parseApiRuntimeConfig(
 
   const environment = parseEnvironment(source.NODE_ENV, issues);
   const port = parsePort(source.PORT, issues);
-  const jwtSecret = parseJwtSecret(source.JWT_SECRET, environment, issues);
+  const allowWeakJwtSecret = parseBoolEnv(
+    source.ALLOW_WEAK_JWT_SECRET,
+    "ALLOW_WEAK_JWT_SECRET",
+    false,
+    issues,
+  );
+  if (environment === "production" && allowWeakJwtSecret) {
+    issues.push({
+      variable: "ALLOW_WEAK_JWT_SECRET",
+      reason: "must not be enabled in production",
+    });
+  }
+  const jwtSecret = parseJwtSecret(
+    source.JWT_SECRET,
+    environment,
+    allowWeakJwtSecret && environment !== "production",
+    issues,
+  );
+  const bootstrapSecret = parseBootstrapSecret(
+    source.BOOTSTRAP_SECRET,
+    environment,
+    issues,
+  );
   const uri = parseMongoUri(source.MONGODB_URI, issues);
   const name = parseMongoDbName(source.MONGODB_DB, issues);
   const corsOrigins = parseCorsOrigins(source.CORS_ORIGINS, issues);
@@ -582,6 +640,7 @@ export function parseApiRuntimeConfig(
     environment,
     port,
     jwtSecret,
+    bootstrapSecret,
     corsOrigins: resolvedCors === null ? null : Object.freeze([...resolvedCors]),
     database: Object.freeze({ uri, name }),
     operational,

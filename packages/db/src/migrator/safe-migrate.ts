@@ -88,6 +88,13 @@ export function lintMigrationImports(content: string): string[] {
   return [...new Set(violations)];
 }
 
+function parseTransactional(source: string): boolean | undefined {
+  const match = source.match(/export\s+const\s+transactional\s*=\s*(true|false)\b/);
+  const val = match?.[1];
+  if (val === undefined) return undefined;
+  return val === "true";
+}
+
 export function lintMigration(content: string): string[] {
   const parts = content.split(/export\s+async\s+function\s+down/);
   const upOnly = parts[0] ?? content;
@@ -100,6 +107,11 @@ export function lintMigration(content: string): string[] {
   }
 
   scanCommands(upOnly, violations);
+
+  const transactional = parseTransactional(content);
+  if (transactional === true && /\bcreateIndex(es)?\s*\(/.test(upOnly)) {
+    violations.push("createIndex cannot run inside a transactional migration; set transactional = false (project rule from commit 679a883)");
+  }
 
   // De-duplicate while preserving order.
   return [...new Set(violations)];

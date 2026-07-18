@@ -358,6 +358,26 @@ export const UserRepositoryLive = Layer.effect(
           );
           return yield* decodeUser(raw);
         }),
+      updateMembership: (userId, organizationId, role, permissions) =>
+        Effect.gen(function* () {
+          const raw = yield* tryMongo(() =>
+            db().users.findOneAndUpdate(
+              {
+                _id: toObjectId(userId),
+                "memberships.organizationId": toObjectId(organizationId),
+              },
+              {
+                $set: {
+                  "memberships.$.role": role,
+                  "memberships.$.permissions": [...permissions],
+                  updatedAt: clock.now(),
+                },
+              },
+              { returnDocument: "after" },
+            ),
+          );
+          return yield* decodeUser(raw);
+        }),
       findMembersOfOrg: (organizationId) =>
         Effect.gen(function* () {
           const raws = yield* tryMongo(() =>
@@ -468,6 +488,14 @@ export const SessionRepositoryLive = Layer.effect(
           });
           return res.deletedCount;
         }),
+      deleteAllForUserExcept: (userId, keepSessionId) =>
+        tryMongo(async () => {
+          const res = await db().adminSessions.deleteMany({
+            userId: toObjectId(userId),
+            _id: { $ne: toObjectId(keepSessionId) },
+          });
+          return res.deletedCount;
+        }),
     };
   }),
 );
@@ -540,11 +568,15 @@ export const InviteRepositoryLive = Layer.effect(
           );
           return res.matchedCount > 0;
         }),
-      markAccepted: (inviteId) =>
+      claimPending: (inviteId) =>
         tryMongo(async () => {
           const now = clock.now();
-          await db().invites.updateOne(
-            { _id: toObjectId(inviteId) },
+          const res = await db().invites.updateOne(
+            {
+              _id: toObjectId(inviteId),
+              status: "pending",
+              expiresAt: { $gt: now },
+            },
             {
               $set: {
                 status: "accepted",
@@ -553,6 +585,7 @@ export const InviteRepositoryLive = Layer.effect(
               },
             },
           );
+          return res.matchedCount === 1;
         }),
       deleteByOrg: (organizationId) =>
         tryMongo(async () => {
@@ -884,17 +917,7 @@ export const CustomerRepositoryLive = Layer.effect(
                             input.amountUnits,
                           ],
                         },
-                        "balance.amountMinor": {
-                          $add: [
-                            {
-                              $ifNull: [
-                                "$balance.amountMinor",
-                                { $ifNull: ["$balance.amountUnits", 0] },
-                              ],
-                            },
-                            input.amountUnits,
-                          ],
-                        },
+                    "balance.amountMinor": "$$REMOVE",
                       },
                     },
                   ],

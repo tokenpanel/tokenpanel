@@ -1,5 +1,5 @@
 import { useMemo, useState, type FormEvent, type ReactElement } from "react";
-import { Navigate, useNavigate, useSearchParams } from "react-router-dom";
+import { Navigate, useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext.tsx";
 import { ApiError } from "../api/client.ts";
 import { Button } from "@/components/ui/button";
@@ -13,6 +13,7 @@ import { AuthBrandPanel, AuthMobileBrand } from "@/components/AuthBrandPanel";
 interface FirstRunForm {
   adminEmail: string;
   adminUsername: string;
+  bootstrapSecret: string;
   password: string;
   confirmPassword: string;
 }
@@ -26,6 +27,7 @@ interface InviteForm {
 interface FieldErrors {
   adminEmail?: string;
   adminUsername?: string;
+  bootstrapSecret?: string;
   username?: string;
   password?: string;
   confirmPassword?: string;
@@ -34,6 +36,7 @@ interface FieldErrors {
 const EMPTY_FIRST: FirstRunForm = {
   adminEmail: "",
   adminUsername: "",
+  bootstrapSecret: "",
   password: "",
   confirmPassword: "",
 };
@@ -62,6 +65,10 @@ export function validateFirstRun(form: FirstRunForm): FieldErrors {
     errs.adminUsername = "Username must be 3–60 characters.";
   } else if (!USERNAME_RE.test(form.adminUsername)) {
     errs.adminUsername = "Use letters, numbers, dots, hyphens, or underscores only.";
+  }
+
+  if (!form.bootstrapSecret) {
+    errs.bootstrapSecret = "Bootstrap secret is required.";
   }
 
   if (!form.password) {
@@ -133,11 +140,17 @@ function Field({
 export default function SignupPage(): ReactElement {
   const { user, loading, needsSetup, signup, acceptInvite } = useAuth();
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
+  // Read the invite token from the URL FRAGMENT (e.g. `/signup#/token=…`)
+  // rather than the query string. Query strings are logged in browser history,
+  // Referer headers, and proxy/edge access logs — the opaque invite token must
+  // not leak there. The fragment is never sent to servers in a normal request.
   const inviteToken = useMemo(() => {
-    const raw = searchParams.get("token");
+    if (typeof window === "undefined") return null;
+    const hash = window.location.hash.replace(/^#\/?/, "");
+    const params = new URLSearchParams(hash);
+    const raw = params.get("token");
     return raw && raw.trim().length > 0 ? raw.trim() : null;
-  }, [searchParams]);
+  }, []);
   const isInvite = inviteToken !== null;
 
   const [firstForm, setFirstForm] = useState<FirstRunForm>(EMPTY_FIRST);
@@ -194,6 +207,7 @@ export default function SignupPage(): ReactElement {
       await signup({
         adminEmail: firstForm.adminEmail.trim(),
         adminUsername: firstForm.adminUsername.trim(),
+        bootstrapSecret: firstForm.bootstrapSecret,
         password: firstForm.password,
         confirmPassword: firstForm.confirmPassword,
       });
@@ -323,6 +337,22 @@ export default function SignupPage(): ReactElement {
                   autoFocus
                   disabled={submitting}
                   onChange={(e) => updateInvite("username", e.target.value)}
+                />
+              </Field>
+
+              <Field
+                id="signup-bootstrap-secret"
+                label="Bootstrap secret"
+                error={fieldErrors.bootstrapSecret}
+              >
+                <PasswordInput
+                  id="signup-bootstrap-secret"
+                  value={firstForm.bootstrapSecret}
+                  autoComplete="off"
+                  disabled={submitting}
+                  showPassword={showPassword}
+                  onToggleShow={() => setShowPassword((v) => !v)}
+                  onChange={(e) => updateFirst("bootstrapSecret", e.target.value)}
                 />
               </Field>
 

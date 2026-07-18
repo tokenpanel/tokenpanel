@@ -368,7 +368,7 @@ export default function SettingsPage(): React.ReactElement {
   }
 
   const signupUrl = createdToken
-    ? `${window.location.origin}/signup?token=${encodeURIComponent(createdToken)}`
+    ? `${window.location.origin}/signup#/token=${encodeURIComponent(createdToken)}`
     : "";
 
   const initials = (user?.username ?? "U").slice(0, 2).toUpperCase();

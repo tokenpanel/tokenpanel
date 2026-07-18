@@ -3,7 +3,7 @@
 # Variables: ${DATA_DIR}, ${CONFIG_DIR}, ${DOMAIN},
 #            ${MONGO_USER}, ${MONGO_PASS}, ${MONGODB_DB}
 # The api image is pre-built by `tokenpanel-setup` / `tokenpanel update`
-# (fetch_and_build) and tagged tokenpanel/app:current; compose only runs it.
+# (promote_new_image_current) after pre migrations succeed; Compose only runs it.
 
 services:
   mongo:

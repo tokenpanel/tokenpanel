@@ -10,6 +10,7 @@ import {
   logout,
   changePassword,
   login,
+  updateMe,
   switchActiveOrganization,
 } from "../operations.ts";
 import { resolveAdminSession } from "../session.ts";
@@ -110,6 +111,20 @@ function sessionStore() {
         }
         return n;
       }),
+    deleteAllForUserExcept: (userId, keepSessionId) =>
+      Effect.sync(() => {
+        let n = 0;
+        for (const [k, v] of map) {
+          if (
+            v.userId.toHexString() === userId &&
+            k !== keepSessionId
+          ) {
+            map.delete(k);
+            n++;
+          }
+        }
+        return n;
+      }),
   };
   return { map, layer: Layer.succeed(SessionRepository, service) };
 }
@@ -118,6 +133,7 @@ const configLayer = Layer.succeed(AppConfig, {
   environment: "test",
   port: 3000,
   jwtSecret: JWT_SECRET,
+  bootstrapSecret: null,
   corsOrigins: [],
   database: { uri: "mongodb://localhost", name: "test" },
   operational: {
@@ -276,6 +292,72 @@ test("changePassword revokes all sessions for user", async () => {
   );
 });
 
+test("updateMe email change revokes other sessions but keeps the current one", async () => {
+  const { map, layer: sessions } = sessionStore();
+  const hash = await Bun.password.hash("secret123", {
+    algorithm: "argon2id",
+  });
+  const startUser = activeUser({ passwordHash: hash });
+  let email = startUser.email;
+  const users = Layer.succeed(UserRepository, {
+    findByUsername: neverCall,
+    findById: (id: string) =>
+      Effect.succeed(id === USER_ID.toHexString() ? startUser : null),
+    countUsers: neverCall,
+    findByEmail: neverCall,
+    findByUsernameOrEmail: neverCall,
+    emailTaken: () => Effect.succeed(false),
+    insertUser: neverCall,
+    updateEmail: (_id: string, newEmail: string) =>
+      Effect.sync(() => {
+        email = newEmail;
+        return { ...startUser, email: newEmail };
+      }),
+    updatePasswordHash: neverCall,
+    setActiveOrganization: neverCall,
+    addMembership: neverCall,
+    findMembersOfOrg: neverCall,
+    pullMembershipAndRepoint: neverCall,
+  } as unknown as UserRepositoryService);
+
+  const program = Effect.gen(function* () {
+    const a = yield* issueAdminToken({
+      userId: USER_ID.toHexString(),
+      orgId: ORG_ID.toHexString(),
+      role: "admin",
+    });
+    const b = yield* issueAdminToken({
+      userId: USER_ID.toHexString(),
+      orgId: ORG_ID.toHexString(),
+      role: "admin",
+    });
+    expect(map.size).toBe(2);
+
+    // Email change from the device holding session `a`: other sessions are
+    // revoked, but `a` stays alive so the requester is not logged out.
+    yield* updateMe({
+      userId: USER_ID.toHexString(),
+      currentEmail: startUser.email,
+      email: "alice-new@example.com",
+      activeOrganizationId: ORG_ID.toHexString(),
+      sessionId: a.sessionId,
+    });
+    expect(email).toBe("alice-new@example.com");
+    expect(map.size).toBe(1);
+    expect(map.has(a.sessionId)).toBe(true);
+    expect(map.has(b.sessionId)).toBe(false);
+
+    // Current session still resolves; revoked session no longer does.
+    yield* resolveAdminSession(a.token);
+    const stale = yield* resolveAdminSession(b.token).pipe(Effect.either);
+    expect(stale._tag).toBe("Left");
+  });
+
+  await Effect.runPromise(
+    program.pipe(Effect.provide(Layer.mergeAll(baseLayers(sessions), users))),
+  );
+});
+
 test("login mints session-backed token", async () => {
   const { map, layer: sessions } = sessionStore();
   const hash = await Bun.password.hash("secret123", { algorithm: "argon2id" });
@@ -312,6 +394,41 @@ test("login mints session-backed token", async () => {
   await Effect.runPromise(
     program.pipe(Effect.provide(Layer.mergeAll(baseLayers(sessions), users))),
   );
+});
+
+test("login with unknown username fails with invalid_credentials (dummy argon2 path)", async () => {
+  const { layer: sessions } = sessionStore();
+  const hash = await Bun.password.hash("secret123", { algorithm: "argon2id" });
+  const user = activeUser({ passwordHash: hash });
+  const users = Layer.succeed(UserRepository, {
+    findByUsername: (u: string) =>
+      Effect.succeed(u === "alice" ? user : null),
+    findById: neverCall,
+    countUsers: neverCall,
+    findByEmail: neverCall,
+    findByUsernameOrEmail: neverCall,
+    emailTaken: neverCall,
+    insertUser: neverCall,
+    updateEmail: neverCall,
+    updatePasswordHash: neverCall,
+    setActiveOrganization: neverCall,
+    addMembership: neverCall,
+    findMembersOfOrg: neverCall,
+    pullMembershipAndRepoint: neverCall,
+  } as unknown as UserRepositoryService);
+
+  // Missing username must run the dummy argon2 verify (timing equalization)
+  // and then fail with invalid_credentials — it must NOT throw or succeed.
+  const result = await Effect.runPromise(
+    login({ username: "no-such-user", password: "whatever" }).pipe(
+      Effect.either,
+      Effect.provide(Layer.mergeAll(baseLayers(sessions), users)),
+    ),
+  );
+  expect(result._tag).toBe("Left");
+  if (result._tag !== "Left") throw new Error("expected failure");
+  expect(result.left._tag).toBe("AuthenticationError");
+  expect(result.left.code).toBe("invalid_credentials");
 });
 
 test("resolveAdminSession uses session org, not user.activeOrganizationId", async () => {

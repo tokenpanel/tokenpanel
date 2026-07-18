@@ -1,4 +1,3 @@
-import type { ObjectId } from "mongodb";
 import type { MigrationDb } from "../../src/migrator/migration-db.ts";
 
 /**
@@ -15,7 +14,7 @@ import type { MigrationDb } from "../../src/migrator/migration-db.ts";
  */
 export const id = "2026-07-17T17-50-00Z__money-units-dual-fields";
 export const phase = "pre" as const;
-export const transactional = true as const;
+export const transactional = false as const;
 
 const SCHEDULE_LEAVES = [
   ["inputMinorPerMillion", "inputUnitsPerMillion"],
@@ -55,46 +54,69 @@ async function copySchedulePrefix(
   }
 }
 
-/** Additive copy of entry[].price|cost schedule leaves (in-process). */
+/**
+ * Server-side additive copy of entry[].price|cost schedule leaves. The
+ * aggregation pipeline reads `entries` at write time per document, so a
+ * concurrent old-container write to `entries[i].price.*Minor*` between match
+ * and update is observed (no stale read-modify-write clobber). For each leaf,
+ * set Units from Minor only when Units is missing; entries without the Minor
+ * leaf are left untouched (idempotent).
+ */
 async function copyModelEntrySchedules(
   coll: ReturnType<MigrationDb["collection"]>,
 ): Promise<void> {
-  const orFilter = SCHEDULE_LEAVES.flatMap(([minor]) => [
-    { [`entries.price.${minor}`]: { $exists: true } },
-    { [`entries.cost.${minor}`]: { $exists: true } },
-  ]);
-  const rows = await coll.find({ $or: orFilter }).toArray();
-  for (const row of rows) {
-    const entries = (row as { entries?: unknown }).entries;
-    if (!Array.isArray(entries)) continue;
-    let dirty = false;
-    const nextEntries = entries.map((raw) => {
-      if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw;
-      const entry = { ...(raw as Record<string, unknown>) };
-      for (const key of ["price", "cost"] as const) {
-        const sched = entry[key];
-        if (!sched || typeof sched !== "object" || Array.isArray(sched)) {
-          continue;
-        }
-        const s = { ...(sched as Record<string, unknown>) };
-        let sDirty = false;
-        for (const [minor, units] of SCHEDULE_LEAVES) {
-          if (s[units] === undefined && s[minor] !== undefined) {
-            s[units] = s[minor];
-            sDirty = true;
-          }
-        }
-        if (sDirty) {
-          entry[key] = s;
-          dirty = true;
-        }
-      }
-      return entry;
-    });
-    if (dirty) {
-      await coll.updateOne(
-        { _id: (row as { _id: ObjectId })._id },
-        { $set: { entries: nextEntries } },
+  for (const prefix of ["price", "cost"] as const) {
+    for (const [minorLeaf, unitsLeaf] of SCHEDULE_LEAVES) {
+      await coll.updateMany(
+        {
+          entries: {
+            $elemMatch: {
+              [`${prefix}.${minorLeaf}`]: { $exists: true },
+              [`${prefix}.${unitsLeaf}`]: { $exists: false },
+            },
+          },
+        },
+        [{
+          $set: {
+            entries: {
+              $map: {
+                input: { $ifNull: ["$entries", []] },
+                as: "e",
+                in: {
+                  $mergeObjects: [
+                    "$$e",
+                    {
+                      [prefix]: {
+                        $cond: [
+                          {
+                            $or: [
+                              { $eq: [{ $type: `$$e.${prefix}` }, "missing"] },
+                              { $eq: [`$$e.${prefix}`, null] },
+                            ],
+                          },
+                          "$$REMOVE",
+                          {
+                            $mergeObjects: [
+                              `$$e.${prefix}`,
+                              {
+                                [unitsLeaf]: {
+                                  $ifNull: [
+                                    `$$e.${prefix}.${unitsLeaf}`,
+                                    { $ifNull: [`$$e.${prefix}.${minorLeaf}`, "$$REMOVE"] },
+                                  ],
+                                },
+                              },
+                            ],
+                          },
+                        ],
+                      },
+                    },
+                  ],
+                },
+              },
+            },
+          },
+        }],
       );
     }
   }

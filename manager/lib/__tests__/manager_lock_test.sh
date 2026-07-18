@@ -12,6 +12,8 @@ trap 'rm -rf "$TMP"' EXIT
 
 export TOKENPANEL_LOCK_FILE="$TMP/manager.lock"
 export CONFIG_DIR="$TMP"
+# A root manager must never evaluate this environment value as shell source.
+export MANAGER_LOCK_FD='200; touch "$TMP/eval-ran"'
 # Ensure skip is off for lock tests.
 unset TOKENPANEL_SKIP_MANAGER_LOCK || true
 export TOKENPANEL_SKIP_MANAGER_LOCK=0
@@ -20,6 +22,8 @@ export TOKENPANEL_SKIP_MANAGER_LOCK=0
 source "$ROOT/manager/lib/lock.sh"
 
 fail() { echo "FAIL: $*"; exit 1; }
+
+[ ! -e "$TMP/eval-ran" ] || fail "MANAGER_LOCK_FD was evaluated while sourcing lock.sh"
 
 # --- acquire / re-enter ---
 acquire_manager_lock "test-a" || fail "first acquire should succeed"

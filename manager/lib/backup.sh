@@ -465,6 +465,25 @@ restore_backup() {
     return 1
   fi
 
+  # rc == 0: restore replaced the live DB with the backup's data. If the
+  # running image is newer than the backup (e.g. operator restored a
+  # pre-update backup onto newer code per the Phase-6 failure-recovery docs
+  # in `tokenpanel update`), the restored schema may lag the code — run
+  # post/ migrations to catch up. Idempotent via `_migrations` (already-applied
+  # ids are skipped). This mirrors cmd_start / cmd_rebuild / cmd_setup, which
+  # all run post after the api is healthy.
+  if ! declare -F run_migrations >/dev/null 2>&1; then
+    source "${SCRIPT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}/migrate.sh"
+  fi
+  step "restore" "applying pending post-restore migrations..."
+  if ! run_migrations "post"; then
+    err "post-migration failed after restore"
+    err "the restore itself SUCCEEDED and the api is running, but some"
+    err "destructive migrations did not apply — schema may lag the code."
+    err "retry manually: tokenpanel migrate post"
+    return 1
+  fi
+
   ok "restore complete: $backup_file"
   info "pre-restore backup retained: $(basename "$pre_restore_file")"
 }

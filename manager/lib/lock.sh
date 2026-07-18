@@ -17,8 +17,10 @@
 # default matches production layout. Override with TOKENPANEL_LOCK_FILE.
 MANAGER_LOCK_FILE="${TOKENPANEL_LOCK_FILE:-${CONFIG_DIR:-/etc/tokenpanel}/manager.lock}"
 
-# Fixed FD number so flock and reentrancy share one open file description.
-MANAGER_LOCK_FD="${MANAGER_LOCK_FD:-200}"
+# Allocated by bash's dynamic-FD redirection when the lock is acquired. Do not
+# take this value from the environment: the old eval-based redirection made an
+# untrusted MANAGER_LOCK_FD value executable in this root-owned script.
+MANAGER_LOCK_FD=""
 MANAGER_LOCK_HELD="${MANAGER_LOCK_HELD:-0}"
 
 # Acquire exclusive manager lock for $1 (command name for diagnostics).
@@ -52,9 +54,14 @@ acquire_manager_lock() {
     return 1
   fi
 
-  # Open lock file on a stable FD, then flock it non-blocking.
-  # shellcheck disable=SC2093,SC1083
-  eval "exec ${MANAGER_LOCK_FD}>\"\${lock_file}\""
+  # Open lock file on a shell-allocated FD, then flock it non-blocking. Bash
+  # validates the descriptor itself; no user-controlled value is evaluated.
+  local lock_fd
+  if ! exec {lock_fd}>"$lock_file"; then
+    err "cannot open manager lock: $lock_file"
+    return 1
+  fi
+  MANAGER_LOCK_FD="$lock_fd"
   if ! flock -n "${MANAGER_LOCK_FD}"; then
     local holder=""
     holder="$(tr '\n' ' ' <"$lock_file" 2>/dev/null | sed 's/ *$//')" || true
@@ -64,6 +71,8 @@ acquire_manager_lock() {
       err "holder: $holder"
     fi
     err "wait for it to finish (or kill the holder PID if it is truly stuck)"
+    exec {MANAGER_LOCK_FD}>&- 2>/dev/null || true
+    MANAGER_LOCK_FD=""
     return 1
   fi
 
@@ -85,7 +94,8 @@ release_manager_lock() {
     return 0
   fi
   flock -u "${MANAGER_LOCK_FD}" 2>/dev/null || true
-  eval "exec ${MANAGER_LOCK_FD}>&-" 2>/dev/null || true
+  exec {MANAGER_LOCK_FD}>&- 2>/dev/null || true
+  MANAGER_LOCK_FD=""
   MANAGER_LOCK_HELD=0
   return 0
 }

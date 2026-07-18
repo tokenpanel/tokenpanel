@@ -8,6 +8,7 @@ import {
   DateFromSelf,
   TimestampFields,
   Email,
+  LowercaseEmail,
   Username,
   exactOptional,
   exactNullish,
@@ -66,12 +67,12 @@ export const UserCreateInput = Schema.Struct({
   memberships: Schema.Array(MembershipInput).pipe(Schema.minItems(1)),
   activeOrganizationId: ObjectIdFromString,
   username: Username,
-  email: Email,
+  email: LowercaseEmail,
   password: PasswordBound,
 });
 
 export const UserUpdateInput = Schema.Struct({
-  email: exactOptional(Email),
+  email: exactOptional(LowercaseEmail),
   status: exactOptional(UserStatus),
 });
 

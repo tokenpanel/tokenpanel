@@ -9,10 +9,37 @@ export const phase = "pre" as const;
 // createIndexes on existing collections cannot run inside a multi-doc transaction.
 export const transactional = false as const;
 
+/**
+ * Pre runs while the old image can still write usage. It must not silently
+ * discard another request's idempotency key. Detect legacy duplicates and
+ * stop for an operator-approved post-phase repair instead.
+ */
 export async function up(mdb: MigrationDb): Promise<void> {
+  const usage = mdb.collection("usage_records");
+
+  const dupes = await usage
+    .aggregate<{ _id: string; count: number }>([
+      { $match: { gatewayRequestId: { $type: "string" } } },
+      {
+        $group: {
+          _id: "$gatewayRequestId",
+          count: { $sum: 1 },
+        },
+      },
+      { $match: { count: { $gt: 1 } } },
+      { $limit: 1 },
+    ])
+    .toArray();
+
+  if (dupes.length > 0) {
+    throw new Error(
+      "[migration:settlement-idempotency] duplicate gatewayRequestId values exist; resolve them with an operator-approved post-phase repair before retrying",
+    );
+  }
+
   // Sparse unique: only docs with a string gatewayRequestId participate.
   // Historical usage rows without the field are ignored by the index.
-  await mdb.collection("usage_records").createIndexes([
+  await usage.createIndexes([
     {
       key: { gatewayRequestId: 1 },
       name: "gatewayRequestId_unique",

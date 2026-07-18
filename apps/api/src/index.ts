@@ -107,7 +107,7 @@ app.use(
       return allowedOrigins.includes(origin) ? origin : null;
     },
     allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowHeaders: ["Content-Type", "Authorization"],
+    allowHeaders: ["Content-Type", "Authorization", "X-Bootstrap-Secret"],
     credentials: false,
     maxAge: 600,
   }),

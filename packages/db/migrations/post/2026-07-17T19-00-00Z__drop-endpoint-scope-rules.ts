@@ -19,17 +19,19 @@ export const phase = "post" as const;
 export const transactional = true as const;
 
 export async function up(mdb: MigrationDb): Promise<void> {
-  const plans = await mdb.collection("subscription_plans").updateMany(
+  const plans = mdb.collection<{ rateLimits?: { scope: string }[] }>("subscription_plans");
+  const limits = mdb.collection<{ rules?: { scope: string }[] }>("customer_limits");
+  const plansRes = await plans.updateMany(
     { "rateLimits.scope": "endpoint" },
     { $pull: { rateLimits: { scope: "endpoint" } } },
   );
-  const limits = await mdb.collection("customer_limits").updateMany(
+  const limitsRes = await limits.updateMany(
     { "rules.scope": "endpoint" },
     { $pull: { rules: { scope: "endpoint" } } },
   );
 
   console.log(
-    `[migration:drop-endpoint-scope-rules] subscription_plans matched=${plans.matchedCount} modified=${plans.modifiedCount}; customer_limits matched=${limits.matchedCount} modified=${limits.modifiedCount}`,
+    `[migration:drop-endpoint-scope-rules] subscription_plans matched=${plansRes.matchedCount} modified=${plansRes.modifiedCount}; customer_limits matched=${limitsRes.matchedCount} modified=${limitsRes.modifiedCount}`,
   );
 }
 

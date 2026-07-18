@@ -55,6 +55,15 @@ export type AuthDomainError =
   | NotFoundError
   | RepoError;
 
+/**
+ * Precomputed argon2id hash of a dummy value (default Bun.password params:
+ * m=65536, t=2, p=1 — same as lib/crypto.ts hashPassword). Used to equalize
+ * response time between missing and existing usernames so login cannot be
+ * used as a username-enumeration oracle. Verified once at module load.
+ */
+const DUMMY_PASSWORD_HASH =
+  "$argon2id$v=19$m=65536,t=2,p=1$RsgNWfvLKj8PD+Wt3BxyC3fruuZFPBrjmpC8GkJFqIc$ZVvRzsbt3ByDSWd9QvCs3ihZsebJXVdKpSRBWOTOdzQ";
+
 function jwtSecret(
   secret: string,
 ): Effect.Effect<string, ConfigurationError> {
@@ -179,6 +188,36 @@ export const needsSetup = (): Effect.Effect<
     return { needsSetup: count === 0 };
   });
 
+/** Dedicated deployment secret for first-run signup; no JWT fallback. */
+export const authorizeBootstrapSignup = (
+  providedSecret: string | undefined,
+): Effect.Effect<void, AuthorizationError, Crypto | AppConfig> =>
+  Effect.gen(function* () {
+    const config = yield* AppConfig;
+    const expectedSecret = config.bootstrapSecret;
+    if (expectedSecret === null) {
+      return yield* Effect.fail(
+        new AuthorizationError({
+          code: "forbidden",
+          message: "Bootstrap signup is unavailable",
+        }),
+      );
+    }
+    const crypto = yield* Crypto;
+    const authorized = yield* crypto.safeHashEqual(
+      providedSecret ?? "",
+      expectedSecret,
+    );
+    if (!authorized) {
+      return yield* Effect.fail(
+        new AuthorizationError({
+          code: "forbidden",
+          message: "Bootstrap signup is unavailable",
+        }),
+      );
+    }
+  });
+
 /**
  * Login with username/password. Issues JWT for active-org membership role.
  * Caller owns brute-force throttle (surface concern).
@@ -196,6 +235,11 @@ export const login = (
 
     const user = yield* users.findByUsername(input.username);
     if (!user) {
+      // Run argon2 against a dummy hash so a missing username takes the same
+      // time as a wrong password — prevents username enumeration via timing.
+      yield* crypto
+        .verifyPassword(input.password, DUMMY_PASSWORD_HASH)
+        .pipe(Effect.ignore);
       return yield* Effect.fail(
         new AuthenticationError({
           code: "invalid_credentials",
@@ -255,6 +299,8 @@ export const signup = (
     const orgs = yield* OrganizationRepository;
     const crypto = yield* Crypto;
     const clock = yield* Clock;
+
+    yield* authorizeBootstrapSignup(input.bootstrapSecret);
 
     const count = yield* users.countUsers();
     if (count !== 0) {
@@ -374,7 +420,11 @@ export const signup = (
 /** PATCH /me — update email with uniqueness check. */
 export const updateMe = (
   input: UpdateMeInput,
-): Effect.Effect<UserView, AuthDomainError, UserRepository> =>
+): Effect.Effect<
+  UserView,
+  AuthDomainError,
+  UserRepository | SessionRepository
+> =>
   Effect.gen(function* () {
     const users = yield* UserRepository;
     const sessionOrg = input.activeOrganizationId;
@@ -388,6 +438,16 @@ export const updateMe = (
             fields: ["email"],
           }),
         );
+      }
+      // Email change is a security-sensitive event: revoke other sessions so
+      // any device that may have captured the old email-bound credential is
+      // forced to re-authenticate. The current session is kept alive so the
+      // user making the change is not logged out mid-flow.
+      const sessions = yield* SessionRepository;
+      if (input.sessionId !== undefined) {
+        yield* sessions.deleteAllForUserExcept(input.userId, input.sessionId);
+      } else {
+        yield* sessions.deleteAllForUser(input.userId);
       }
       const updated = yield* users.updateEmail(input.userId, input.email);
       if (!updated) {
@@ -604,19 +664,48 @@ export const acceptInvite = (
 
     const orgId = invite.organizationId;
     const inviteRole = invite.role as UserRole;
-    const existingUser = yield* users.findByEmail(invite.email);
 
+    // Re-check the inviter's CURRENT membership before applying the invite's
+    // role/permissions. Between invite creation and accept, the inviter's own
+    // grants may have changed (or they may have left the org / been removed).
+    // If they can no longer grant what the invite promises, revoke the invite
+    // and refuse acceptance (privilege-escalation defense). Idempotent: a
+    // concurrent revoke is a no-op.
+    const inviter = yield* users.findById(invite.invitedBy.toHexString());
+    const inviterMembership = inviter?.memberships.find((m) =>
+      m.organizationId.equals(orgId),
+    );
     const invitePermissions =
       inviteRole === "admin" ? [] : [...(invite.permissions ?? [])];
+    const inviterCanStillGrant =
+      inviter !== null &&
+      inviter.status === "active" &&
+      inviterMembership !== undefined &&
+      canGrantPanelAccess(
+        inviterMembership.role,
+        inviterMembership.permissions ?? [],
+        inviteRole,
+        invitePermissions,
+      );
+    if (!inviterCanStillGrant) {
+      yield* invites
+        .revokePending(invite._id.toHexString(), orgId.toHexString())
+        .pipe(Effect.catchAll(() => Effect.void));
+      return yield* Effect.fail(
+        new AuthorizationError({
+          code: "forbidden",
+          message:
+            "Inviter can no longer grant the requested access; invite revoked",
+          reason: "privilege_escalation",
+        }),
+      );
+    }
 
-    let userId: string;
-    let username: string;
-    let memberships: {
-      organizationId: string;
-      role: UserRole;
-      permissions: readonly PanelPermission[];
-    }[];
+    const existingUser = yield* users.findByEmail(invite.email);
+    let newUserPasswordHash: string | undefined;
 
+    // Validate before consuming the token: claiming before an existing user's
+    // password check would let a token holder burn that user's invite.
     if (existingUser) {
       const ok = yield* crypto.verifyPassword(
         input.password,
@@ -639,17 +728,71 @@ export const acceptInvite = (
           }),
         );
       }
+    } else {
+      yield* crypto
+        .verifyPassword(input.password, DUMMY_PASSWORD_HASH)
+        .pipe(Effect.ignore);
+      const taken = yield* users.findByUsernameOrEmail(
+        input.username,
+        invite.email,
+      );
+      if (taken) {
+        return yield* Effect.fail(
+          new ConflictError({
+            code: "username_or_email_taken",
+            message: "Username or email taken",
+            fields: ["username", "email"],
+          }),
+        );
+      }
+      newUserPasswordHash = yield* crypto.hashPassword(input.password);
+    }
+
+    // Acceptance/revocation/redeem linearization point. Only its winner may
+    // mutate memberships or issue a JWT.
+    const claimed = yield* invites.claimPending(invite._id.toHexString());
+    if (!claimed) {
+      return yield* Effect.fail(
+        new NotFoundError({
+          code: "invalid_or_expired",
+          message: "Invalid or expired invite",
+          resource: "invite",
+        }),
+      );
+    }
+
+    let userId: string;
+    let username: string;
+    let memberships: {
+      organizationId: string;
+      role: UserRole;
+      permissions: readonly PanelPermission[];
+    }[];
+
+    if (existingUser) {
       userId = existingUser._id.toHexString();
       username = existingUser.username;
       const alreadyMember = existingUser.memberships.some((m) =>
         m.organizationId.equals(orgId),
       );
       if (alreadyMember) {
-        memberships = existingUser.memberships.map((m) => ({
-          organizationId: m.organizationId.toHexString(),
-          role: m.role,
-          permissions: m.permissions ?? [],
-        }));
+        // Apply the invite's role/permissions to the existing membership
+        // (REPLACE semantics — the invite's grants overwrite whatever the
+        // member currently holds, not a union). Safe because the inviter's
+        // current grants were re-checked above (canGrantPanelAccess).
+        const updated = yield* users.updateMembership(
+          userId,
+          orgId.toHexString(),
+          inviteRole,
+          invitePermissions,
+        );
+        memberships = (updated?.memberships ?? existingUser.memberships).map(
+          (m) => ({
+            organizationId: m.organizationId.toHexString(),
+            role: m.role,
+            permissions: m.permissions ?? [],
+          }),
+        );
         yield* users.setActiveOrganization(userId, orgId.toHexString());
       } else {
         const updated = yield* users.addMembership(
@@ -673,24 +816,13 @@ export const acceptInvite = (
         }));
       }
     } else {
-      const taken = yield* users.findByUsernameOrEmail(
-        input.username,
-        invite.email,
-      );
-      if (taken) {
-        return yield* Effect.fail(
-          new ConflictError({
-            code: "username_or_email_taken",
-            message: "Username or email taken",
-            fields: ["username", "email"],
-          }),
-        );
+      if (newUserPasswordHash === undefined) {
+        return yield* Effect.die("new-user invite accepted without password hash");
       }
-      const passwordHash = yield* crypto.hashPassword(input.password);
       const created = yield* users.insertUser({
         username: input.username,
         email: invite.email,
-        passwordHash,
+        passwordHash: newUserPasswordHash,
         memberships: [
           {
             organizationId: orgId,
@@ -710,7 +842,6 @@ export const acceptInvite = (
       }));
     }
 
-    yield* invites.markAccepted(invite._id.toHexString());
 
     const issued = yield* issueAdminToken({
       userId,

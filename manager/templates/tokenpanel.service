@@ -23,16 +23,46 @@ Environment=TOKENPANEL_INSTALL_DIR=${INSTALL_DIR}
 Environment=TOKENPANEL_CONFIG_DIR=${CONFIG_DIR}
 # Minimal PATH is too small for bare `docker` / `docker compose` used by the CLI.
 Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-# Health wait (60s) + post migrations can exceed the default oneshot start timeout.
-TimeoutStartSec=300
+# Health wait (60s) + manager-owned post migration (600s) need a deadline
+# longer than the migration runner itself. A failed destructive post migration
+# is operator-visible and must not be automatically retried by systemd.
+TimeoutStartSec=720
 TimeoutStopSec=120
 
 ExecStart=${INSTALL_DIR}/manager/bin/tokenpanel start
 ExecStop=${INSTALL_DIR}/manager/bin/tokenpanel stop
 ExecReload=${INSTALL_DIR}/manager/bin/tokenpanel restart
 
-Restart=on-failure
-RestartSec=10
+# No Restart=on-failure: retrying `tokenpanel start` would automatically retry
+# a failed post/ migration after code is live. Operator must inspect state,
+# then explicitly run `tokenpanel migrate post` if safe.
+
+# ── Kernel-level hardening ──
+# The manager scripts run as root (they write to /etc, /var, /opt and check
+# `id -u` == 0), so we cannot drop to a non-root user. Instead, restrict the
+# service with containment directives that do not break the docker CLI client
+# (it talks to /var/run/docker.sock via AF_UNIX, which is in the allowed
+# address families below). Docker CLI is a client; the daemon (privileged)
+# runs in its own unit.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+# Allow-set + deny-privileged/resources: the systemd-recommended baseline for
+# service daemons. @resources (setpriority/setrlimit/ioprio_set/...) is denied
+# — the docker CLI client does not need these.
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+LockPersonality=true
+# Writable subtrees: config (.env, manager.lock), data (mongo volume,
+# backups, caddy), and the code checkout (git ops during update).
+ReadWritePaths=-/etc/tokenpanel -/var/tokenpanel -/opt/tokenpanel
 
 [Install]
 WantedBy=multi-user.target

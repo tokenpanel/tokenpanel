@@ -116,7 +116,7 @@ test("deleteOrganization cascades management keys before org delete", async () =
     insert: neverCall,
     findPendingByTokenHash: neverCall,
     revokePending: neverCall,
-    markAccepted: neverCall,
+      claimPending: neverCall,
     deleteByOrg: (orgId: string) =>
       Effect.sync(() => {
         calls.push(`invites.deleteByOrg:${orgId}`);

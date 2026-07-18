@@ -4,6 +4,7 @@ node_modules/
 # Build outputs
 dist/
 .turbo/
+.tokensave/
 *.tsbuildinfo
 node_modules/.tmp/
 

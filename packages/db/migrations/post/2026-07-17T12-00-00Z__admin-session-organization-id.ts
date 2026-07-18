@@ -38,11 +38,17 @@ export async function up(mdb: MigrationDb): Promise<void> {
     .find({ organizationId: { $exists: false } })
     .toArray();
 
+  let deleted = 0;
   for (const row of missing) {
     const user = await users.findOne({ _id: row.userId });
     const orgId = user?.activeOrganizationId;
     if (!orgId) {
+      const reason = user ? "user has no activeOrganizationId" : "user not found";
+      console.warn(
+        `[migration:admin-session-organization-id] deleting orphan session _id=${row._id.toHexString()} userId=${row.userId.toHexString()} reason=${reason}`,
+      );
       await sessions.deleteOne({ _id: row._id });
+      deleted++;
       continue;
     }
     await sessions.updateOne(
@@ -50,6 +56,7 @@ export async function up(mdb: MigrationDb): Promise<void> {
       { $set: { organizationId: orgId } },
     );
   }
+  console.warn(`[migration:admin-session-organization-id] deleted ${deleted} orphan sessions`);
 }
 
 export async function down(mdb: MigrationDb): Promise<void> {

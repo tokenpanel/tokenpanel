@@ -30,8 +30,8 @@ rollback_to_previous() {
     docker compose -f "$APP_YML" up -d --no-deps --force-recreate api
 
     # Previous image may predate /ready. Rollout checks above stay strict for
-    # the target image; only recovery of the known-old image gets fallback.
-    if wait_for_health api 60 "/ready" 1; then
+    # the target image; recovery uses the frozen legacy /health contract.
+    if wait_for_health api 60 "/health"; then
       warn "rolled back to previous version — app is serving old code"
       warn "investigate the failure, fix, then retry: tokenpanel update"
       return 0

@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# New-image readiness stays strict; rollback to a previous legacy image may
-# fall back from /ready to /health.
+# New-image readiness stays strict; rollback uses frozen legacy /health.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
@@ -18,7 +17,7 @@ source "$ROOT/manager/lib/output.sh"
 docker() { return 0; }
 wait_for_health() {
   printf '%s\n' "$*" >>"$PROBES"
-  [ "$#" -eq 4 ] && [ "${4:-}" = "1" ]
+  [ "${3:-}" = "/health" ]
 }
 
 # shellcheck source=../rollback.sh
@@ -32,7 +31,7 @@ set -e
 [ "$rc" -eq 1 ] || { echo "FAIL: failed target rollout should return 1" >&2; exit 1; }
 [ "$(sed -n '1p' "$PROBES")" = "api 60" ] \
   || { echo "FAIL: target image probe was not strict" >&2; exit 1; }
-[ "$(sed -n '2p' "$PROBES")" = "api 60 /ready 1" ] \
-  || { echo "FAIL: previous image probe lacks legacy fallback" >&2; exit 1; }
+[ "$(sed -n '2p' "$PROBES")" = "api 60 /health" ] \
+  || { echo "FAIL: previous image probe did not use frozen /health" >&2; exit 1; }
 
 echo "OK: rollout strict, legacy rollback compatible"

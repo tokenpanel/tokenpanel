@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Backup restart of a legacy current image must accept /health when /ready is
-# absent. This covers health.sh + backup.sh integration, not helper isolation.
+# Backup restart of a legacy current image must use the frozen /health contract
+# without probing target-only /ready.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
@@ -45,7 +45,10 @@ source "$ROOT/manager/lib/backup.sh"
 
 backup_file="$(create_backup legacy-resume)"
 [ -f "$backup_file" ] || { echo "FAIL: backup was not created" >&2; exit 1; }
-grep -q '/ready' "$DOCKER_LOG" || { echo "FAIL: /ready was not probed" >&2; exit 1; }
-grep -q '/health' "$DOCKER_LOG" || { echo "FAIL: legacy /health fallback was not probed" >&2; exit 1; }
+grep -q '/health' "$DOCKER_LOG" || { echo "FAIL: /health was not probed" >&2; exit 1; }
+if grep -q '/ready' "$DOCKER_LOG"; then
+  echo "FAIL: backup resume probed target-only /ready" >&2
+  exit 1
+fi
 
-echo "OK: backup resumes legacy API through /health"
+echo "OK: backup resumes legacy API through frozen /health contract"

@@ -6,12 +6,10 @@ wait_for_health() {
   local service="${1:-api}"
   local timeout="${2:-60}"
   local path="${3:-/ready}"
-  local allow_legacy_health="${4:-0}"
-  local probe_path="$path"
   # Monotonic-ish deadline via SECONDS (bash special: increments once per
   # real second, immune to wall-clock jumps within the shell process).
   local start=$SECONDS
-  local max_attempt_timeout_ms=5000
+  local max_attempt_timeout_s=5
   local deadline=$((start + timeout))
 
   step "health" "waiting for $service ${path} (max ${timeout}s)..."
@@ -22,22 +20,12 @@ wait_for_health() {
       break
     fi
 
-    # Cap this attempt's fetch abort to remaining wall budget so we never
-    # overrun the configured timeout by a full fetch + sleep.
-    local this_timeout_ms=$((remaining * 1000))
-    if [ "$this_timeout_ms" -gt "$max_attempt_timeout_ms" ]; then
-      this_timeout_ms=$max_attempt_timeout_ms
-    fi
-    # Ensure at least 100ms so bun's timer is meaningful.
-    if [ "$this_timeout_ms" -lt 100 ]; then
-      this_timeout_ms=100
-    fi
-
-    # Outer hard deadline: docker compose exec IPC is outside fetch's
-    # AbortController. Wrap the whole attempt so a hung docker cannot push
-    # wait_for_health past the configured timeout (e.g. timeout=1 with a
-    # 2s docker hang must return in ~1s, not 2s+).
+    # Some deployed Bun releases hang when fetch uses AbortController, so host
+    # timeout is the compatibility boundary for fetch and Compose IPC.
     local outer_s=$remaining
+    if [ "$outer_s" -gt "$max_attempt_timeout_s" ]; then
+      outer_s=$max_attempt_timeout_s
+    fi
     if [ "$outer_s" -lt 1 ]; then
       outer_s=1
     fi
@@ -45,27 +33,17 @@ wait_for_health() {
     if timeout --preserve-status --kill-after=1s "${outer_s}s" \
       docker compose -f "$APP_YML" exec -T "$service" \
       bun -e "
-        const ctrl = new AbortController();
-        const t = setTimeout(() => ctrl.abort(), ${this_timeout_ms});
-        fetch('http://127.0.0.1:3000${probe_path}', { signal: ctrl.signal })
-          .then(r => { clearTimeout(t); process.exit(r.ok ? 0 : (r.status === 404 ? 42 : 1)); })
-          .catch(() => { clearTimeout(t); process.exit(1); });
+        fetch('http://127.0.0.1:3000${path}')
+          .then(r => process.exit(r.ok ? 0 : 1))
+          .catch(() => process.exit(1));
       " 2>/dev/null; then
       # Probe may have returned ok after the deadline while the shell waited.
       # Never report success past the configured timeout.
       if [ $((SECONDS - start)) -ge "$timeout" ]; then
         break
       fi
-      ok "$service ready (${probe_path})"
+      ok "$service ready (${path})"
       return 0
-    else
-      local probe_rc=$?
-      if [ "$allow_legacy_health" = "1" ] \
-        && [ "$probe_path" = "/ready" ] \
-        && [ "$probe_rc" -eq 42 ]; then
-        warn "api lacks /ready; falling back to legacy /health during bootstrap"
-        probe_path="/health"
-      fi
     fi
 
     now=$SECONDS

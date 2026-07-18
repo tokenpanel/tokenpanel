@@ -122,7 +122,9 @@ cmd_start() {
   preflight_quick || die "preflight failed"
   step "start" "bringing up containers..."
   docker compose -f "$APP_YML" up -d --remove-orphans
-  wait_for_health api 60 "/ready" 1 || die "api did not become healthy"
+  # `start` may bring up an unknown legacy current image. /health is the
+  # frozen contract shared by every supported image.
+  wait_for_health api 60 "/health" || die "api did not become healthy"
   # API boot applies pending pre/ migrations. Post/ (destructive) is not run on
   # boot — apply any pending post/ here so first install and plain restarts still
   # reach a fully-migrated schema. Already-applied ids are skipped via

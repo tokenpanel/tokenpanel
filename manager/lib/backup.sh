@@ -63,7 +63,7 @@ _resume_writers() {
   # health.sh is sourced by bin/tokenpanel before backup.sh; unit tests that
   # only source backup.sh skip readiness (start success is enough).
   if declare -F wait_for_health >/dev/null 2>&1; then
-    if ! wait_for_health api 60; then
+    if ! wait_for_health api 60 "/ready" 1; then
       err "api started but not ready — check: tokenpanel logs api"
       return 1
     fi
@@ -452,7 +452,7 @@ restore_backup() {
     return 1
   fi
   if declare -F wait_for_health >/dev/null 2>&1; then
-    if ! wait_for_health api 60; then
+    if ! wait_for_health api 60 "/ready" 1; then
       err "api started but not ready after restore — check: tokenpanel logs api"
       return 1
     fi

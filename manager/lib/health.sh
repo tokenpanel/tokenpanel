@@ -6,6 +6,8 @@ wait_for_health() {
   local service="${1:-api}"
   local timeout="${2:-60}"
   local path="${3:-/ready}"
+  local allow_legacy_health="${4:-0}"
+  local probe_path="$path"
   # Monotonic-ish deadline via SECONDS (bash special: increments once per
   # real second, immune to wall-clock jumps within the shell process).
   local start=$SECONDS
@@ -45,8 +47,8 @@ wait_for_health() {
       bun -e "
         const ctrl = new AbortController();
         const t = setTimeout(() => ctrl.abort(), ${this_timeout_ms});
-        fetch('http://127.0.0.1:3000${path}', { signal: ctrl.signal })
-          .then(r => { clearTimeout(t); process.exit(r.ok ? 0 : 1); })
+        fetch('http://127.0.0.1:3000${probe_path}', { signal: ctrl.signal })
+          .then(r => { clearTimeout(t); process.exit(r.ok ? 0 : (r.status === 404 ? 42 : 1)); })
           .catch(() => { clearTimeout(t); process.exit(1); });
       " 2>/dev/null; then
       # Probe may have returned ok after the deadline while the shell waited.
@@ -54,8 +56,16 @@ wait_for_health() {
       if [ $((SECONDS - start)) -ge "$timeout" ]; then
         break
       fi
-      ok "$service ready (${path})"
+      ok "$service ready (${probe_path})"
       return 0
+    else
+      local probe_rc=$?
+      if [ "$allow_legacy_health" = "1" ] \
+        && [ "$probe_path" = "/ready" ] \
+        && [ "$probe_rc" -eq 42 ]; then
+        warn "api lacks /ready; falling back to legacy /health during bootstrap"
+        probe_path="/health"
+      fi
     fi
 
     now=$SECONDS

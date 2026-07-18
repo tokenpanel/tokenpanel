@@ -115,6 +115,7 @@ export const analyticsSummary = (input: {
 
 export const dashboardSummary = (
   organizationId: HexId,
+  options?: { readonly includeBalances?: boolean },
 ): Effect.Effect<
   {
     readonly customers: number;
@@ -136,7 +137,7 @@ export const dashboardSummary = (
 > =>
   Effect.gen(function* () {
     const usage = yield* UsageRepository;
-    const summary = yield* usage.dashboardSummary(organizationId);
+    const summary = yield* usage.dashboardSummary(organizationId, options);
     return {
       customers: summary.customers,
       models: summary.models,

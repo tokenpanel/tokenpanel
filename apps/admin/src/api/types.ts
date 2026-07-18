@@ -7,7 +7,8 @@ export interface Customer {
   _id: string;
   name: string;
   email: string;
-  balance: Money;
+  /** Redacted when caller lacks balances:read. */
+  balance?: Money;
   status: string;
   createdAt?: string;
   updatedAt?: string;
@@ -52,7 +53,8 @@ export interface PlanListResponse {
 export interface ApiKey {
   _id: string;
   organizationId: string;
-  customerId: string;
+  /** Stripped when caller lacks customers:read. */
+  customerId?: string;
   name: string;
   prefix: string;
   modelWhitelist: string[] | null;
@@ -63,6 +65,7 @@ export interface ApiKey {
 
 export interface ApiKeyListResponse {
   items: ApiKey[];
+  total: number;
 }
 
 export interface ApiKeyCreateRequest {
@@ -159,7 +162,8 @@ export interface PlaygroundCustomer {
   name: string;
   email: string;
   status: string;
-  balance: Money;
+  /** Redacted when caller lacks balances:read. */
+  balance?: Money;
 }
 
 export interface PlaygroundCustomerListResponse {

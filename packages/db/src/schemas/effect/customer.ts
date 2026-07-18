@@ -1,7 +1,7 @@
 /**
  * Customer + balance-adjustment Effect schemas.
  */
-import { Schema } from "effect";
+import { ParseResult, Schema } from "effect";
 import {
   CustomerMetadataWrite,
   CustomerMetadataDefaultEmpty,
@@ -12,7 +12,6 @@ import {
   DateFromSelf,
   DateFromUnknown,
   TimestampFields,
-  Money,
   MoneyUnits,
   CustomerBalance,
   CurrencyCode,
@@ -26,6 +25,34 @@ import {
 } from "./primitives.ts";
 
 export const CustomerStatus = Schema.Literal("active", "suspended", "closed");
+
+function strictStruct<A, I, R>(
+  inner: Schema.Schema<A, I, R>,
+  allowed: readonly string[],
+  message: string,
+): Schema.Schema<A, unknown, R> {
+  const allowedSet = new Set(allowed);
+  const excessGuard = Schema.transformOrFail(Schema.Unknown, Schema.Unknown, {
+    strict: true,
+    decode: (input, _opts, ast) => {
+      if (
+        input !== null &&
+        typeof input === "object" &&
+        !Array.isArray(input)
+      ) {
+        const extra = Object.keys(input).filter((k) => !allowedSet.has(k));
+        if (extra.length > 0) {
+          return ParseResult.fail(
+            new ParseResult.Type(ast, input, `${message} [${extra.join(", ")}]`),
+          );
+        }
+      }
+      return ParseResult.succeed(input);
+    },
+    encode: ParseResult.succeed,
+  });
+  return Schema.compose(excessGuard, inner);
+}
 
 export const CustomerDoc = Schema.Struct({
   _id: ObjectIdFromSelf,
@@ -47,13 +74,16 @@ export const CustomerDoc = Schema.Struct({
   ...TimestampFields,
 });
 
-export const CustomerCreateInput = Schema.Struct({
-  externalId: exactOptional(maxString(128)),
-  name: boundedString(1, 160),
-  email: exactOptional(LowercaseEmail),
-  startingBalance: exactOptional(Money),
-  metadata: exactOptional(CustomerMetadataWrite),
-});
+export const CustomerCreateInput = strictStruct(
+  Schema.Struct({
+    externalId: exactOptional(maxString(128)),
+    name: boundedString(1, 160),
+    email: exactOptional(LowercaseEmail),
+    metadata: exactOptional(CustomerMetadataWrite),
+  }),
+  ["externalId", "name", "email", "metadata"],
+  "Unknown field — did you mean to use the balance adjust endpoint? startingBalance is no longer accepted at create time",
+);
 
 export const CustomerUpdateInput = Schema.Struct({
   externalId: exactNullish(maxString(128)),

@@ -10,7 +10,9 @@ import {
   updateCustomerApiKey,
   revokeCustomerApiKey,
   stripCustomerKey,
+  stripCustomerKeyMeta,
 } from "../domains/keys/operations.ts";
+import { hasPanelPermission } from "@tokenpanel/contracts";
 import {
   API_KEY_LOOKUP_PREFIX_CHARS,
   CUSTOMER_KEY_PREFIX_LITERAL,
@@ -42,12 +44,26 @@ apiKeyRoutes.get(
   async (c) => {
     const orgId = c.get("orgId");
     const q = c.req.valid("query");
+    const canReadCustomers = hasPanelPermission(
+      c.get("role"),
+      c.get("permissions"),
+      "customers:read",
+    );
     return runAdminEffect(
       c,
       listCustomerApiKeys({
         organizationId: orgId.toHexString(),
         ...(q.customerId !== undefined ? { customerId: q.customerId } : {}),
-      }).pipe(Effect.map((items) => ({ items }))),
+        limit: q.limit,
+        skip: q.skip,
+      }).pipe(
+        Effect.map((page) => ({
+          items: canReadCustomers
+            ? page.items
+            : page.items.map(stripCustomerKeyMeta),
+          total: page.total,
+        })),
+      ),
       { operation: "listCustomerApiKeys" },
     );
   },
@@ -71,10 +87,7 @@ apiKeyRoutes.post(
         name: body.name,
         modelWhitelist: body.modelWhitelist ?? [],
       }).pipe(
-        Effect.map((r) => ({
-          ...r.apiKey,
-          key: r.key,
-        })),
+        Effect.map((r) => ({ apiKey: r.apiKey, key: r.key })),
       ),
       { operation: "issueCustomerApiKey", successStatus: 201 },
     );

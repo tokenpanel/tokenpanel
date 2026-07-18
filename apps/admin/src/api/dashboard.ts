@@ -8,13 +8,18 @@ export type DashboardSummary = {
   models: number;
   providers: number;
   activePlans: number;
+  /** Empty when caller lacks balances:read. */
   balancesByCurrency: Record<string, number>;
   recentCustomers: Array<{
     _id: string;
-    name: string;
-    email: string | null;
-    balance: { amountUnits: number; currency: string; reservedUnits?: number };
+    /** Redacted when caller lacks customers:read. */
+    name?: string;
+    /** Redacted when caller lacks customers:read. */
+    email?: string | null;
+    /** Redacted when caller lacks balances:read. */
+    balance?: { amountUnits: number; currency: string; reservedUnits?: number };
     status: string;
+    /** Redacted when caller lacks customers:read. */
     createdAt?: string;
   }>;
 };

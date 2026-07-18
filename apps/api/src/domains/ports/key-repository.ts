@@ -7,7 +7,7 @@ import type {
   ManagementApiKeyDoc,
   ManagementScope,
 } from "@tokenpanel/db";
-import type { HexId, RepoError } from "./common.ts";
+import type { HexId, PageResult, RepoError } from "./common.ts";
 
 export type NewCustomerKeyRecord = {
   readonly organizationId: HexId;
@@ -32,7 +32,8 @@ export type KeyRepositoryService = {
   readonly listCustomerKeys: (
     organizationId: HexId,
     customerId?: HexId,
-  ) => Effect.Effect<readonly ApiKeyDoc[], RepoError>;
+    page?: { readonly limit?: number | undefined; readonly skip?: number | undefined },
+  ) => Effect.Effect<PageResult<ApiKeyDoc>, RepoError>;
   readonly findCustomerKey: (
     organizationId: HexId,
     keyId: HexId,

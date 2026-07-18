@@ -72,6 +72,7 @@ export type UsageRepositoryService = {
   ) => Effect.Effect<readonly CustomerDoc[], RepoError>;
   readonly dashboardSummary: (
     organizationId: HexId,
+    options?: { readonly includeBalances?: boolean },
   ) => Effect.Effect<DashboardSummary, RepoError>;
 };
 

@@ -58,6 +58,16 @@ export function renderAdminError(err: AppError): RenderedHttpError {
           headers: emptyHeaders(),
         };
       }
+      if (err.reason === "privilege_escalation") {
+        return {
+          status: 403,
+          body: bodyError("forbidden", {
+            reason: "privilege_escalation",
+            message: err.message,
+          }),
+          headers: emptyHeaders(),
+        };
+      }
       return {
         status: 403,
         body: bodyError("forbidden"),

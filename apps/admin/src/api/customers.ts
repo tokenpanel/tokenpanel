@@ -18,7 +18,8 @@ export type AdminCustomer = {
   externalId: string | null;
   name: string;
   email: string | null;
-  balance: Money;
+  /** Redacted when caller lacks balances:read. */
+  balance?: Money;
   status: CustomerStatus;
   metadata: Record<string, unknown>;
   createdAt: string;
@@ -106,14 +107,6 @@ export function deleteCustomer(id: string): Promise<{ ok: boolean }> {
   return deleteJson<{ ok: boolean }>(`/admin/customers/${id}`);
 }
 
-export function getBalanceHistory(
-  customerId: string,
-): Promise<{ items: BalanceAdjustment[] }> {
-  return getJson<{ items: BalanceAdjustment[] }>(
-    `/admin/customers/${customerId}/balance`,
-  );
-}
-
 export function adjustBalance(
   customerId: string,
   body: unknown,
@@ -129,13 +122,6 @@ export function getSubscription(
 
 export function listPlans(): Promise<{ items: PlanSummary[] }> {
   return getJson<{ items: PlanSummary[] }>("/admin/plans");
-}
-
-export function subscribeCustomer(
-  customerId: string,
-  body: { planId: string },
-): Promise<Subscription> {
-  return postJson<Subscription>(`/admin/customers/${customerId}/subscribe`, body);
 }
 
 export function getCustomerUsage(

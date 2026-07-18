@@ -7,7 +7,7 @@ import {
   listCustomers,
   getCustomer,
   listBalanceHistory,
-  maybeRedactCustomerBalance,
+  redactCustomerBalance,
 } from "../../domains/customers/operations.ts";
 import {
   getActiveSubscription,
@@ -36,12 +36,11 @@ import type { PublicPrincipal } from "../../middleware/public-auth.ts";
 
 type ManagementAuthVariables = PublicAuthVariables;
 
-/** Test helper: redact customer balance for management responses. */
-export function maybeRedactCustomer(
+/** Test helper: strip balance from a customer DTO. */
+export function redactCustomer(
   customer: CustomerDoc,
-  hasBalancesRead: boolean,
-): CustomerDoc | Omit<CustomerDoc, "balance"> {
-  return maybeRedactCustomerBalance(customer, hasBalancesRead);
+): Omit<CustomerDoc, "balance"> {
+  return redactCustomerBalance(customer);
 }
 
 /**
@@ -98,7 +97,7 @@ app.get(
         Effect.map((page) => ({
           ...page,
           items: page.items.map((item) =>
-            redact ? maybeRedactCustomerBalance(item, false) : item,
+            redact ? redactCustomerBalance(item) : item,
           ),
         })),
       ),
@@ -122,7 +121,7 @@ app.get(
         customerId: id,
       }).pipe(
         Effect.map((doc) =>
-          redact ? maybeRedactCustomerBalance(doc, false) : doc,
+          redact ? redactCustomerBalance(doc) : doc,
         ),
       ),
       { operation: "mgmt.getCustomer" },

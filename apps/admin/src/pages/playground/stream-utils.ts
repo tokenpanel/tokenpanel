@@ -1,5 +1,5 @@
 /** Pure playground stream/event helpers (domain split). */
-import { currencyExponent, formatMoney } from "../../utils/format.ts";
+import { currencyExponent } from "../../utils/format.ts";
 
 export type StreamPanelState = {
   content: string;
@@ -97,13 +97,6 @@ export function formatUnits(units: number, currency: string): string {
   const exp = currencyExponent(currency);
   const major = units / 10 ** exp;
   return `${currency.toUpperCase()} ${major.toFixed(Math.max(exp, 4))}`;
-}
-
-export function formatBalance(b: {
-  amountUnits: number;
-  currency: string;
-}): string {
-  return formatMoney(b.amountUnits, b.currency);
 }
 
 export async function safeErr(res: Response): Promise<string> {

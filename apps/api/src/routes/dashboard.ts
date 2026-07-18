@@ -1,7 +1,10 @@
 import { Hono } from "hono";
+import { Effect } from "effect";
 import type { AuthVariables } from "../middleware/auth.ts";
 import { requireAuth, requirePermission } from "../middleware/auth.ts";
 import { dashboardSummary } from "../domains/analytics/operations.ts";
+import { redactCustomerBalance } from "../domains/customers/operations.ts";
+import { hasPanelPermission } from "@tokenpanel/contracts";
 import { runAdminEffect } from "../http/adapters/boundary.ts";
 
 /**
@@ -16,9 +19,40 @@ dashboardRoutes.get(
   requirePermission("dashboard:read"),
   async (c) => {
     const orgId = c.get("orgId");
-    return runAdminEffect(c, dashboardSummary(orgId.toHexString()), {
-      operation: "dashboardSummary",
-    });
+    const canReadBalances = hasPanelPermission(
+      c.get("role"),
+      c.get("permissions"),
+      "balances:read",
+    );
+    const canReadCustomers = hasPanelPermission(
+      c.get("role"),
+      c.get("permissions"),
+      "customers:read",
+    );
+    return runAdminEffect(
+      c,
+      dashboardSummary(orgId.toHexString(), {
+        includeBalances: canReadBalances,
+      }).pipe(
+        Effect.map((summary) => {
+          const recentCustomers = summary.recentCustomers.map((rc) =>
+            canReadCustomers
+              ? canReadBalances
+                ? rc
+                : redactCustomerBalance(rc)
+              : { _id: rc._id, status: rc.status },
+          );
+          return canReadBalances
+            ? { ...summary, recentCustomers }
+            : {
+                ...summary,
+                balancesByCurrency: {},
+                recentCustomers,
+              };
+        }),
+      ),
+      { operation: "dashboardSummary" },
+    );
   },
 );
 

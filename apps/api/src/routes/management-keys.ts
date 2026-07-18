@@ -4,6 +4,7 @@ import { ObjectId } from "mongodb";
 import {
   managementApiKeyCreateInput,
   managementApiKeyUpdateInput,
+  type ManagementApiKeyUpdateInput,
 } from "@tokenpanel/db";
 import type { AuthVariables } from "../middleware/auth.ts";
 import { requireAuth, requirePermission } from "../middleware/auth.ts";
@@ -69,11 +70,10 @@ managementKeyRoutes.post(
         organizationId: orgId.toHexString(),
         name: body.name,
         scopes: body.scopes,
+        actorRole: c.get("role"),
+        actorPermissions: c.get("permissions"),
       }).pipe(
-        Effect.map((r) => ({
-          ...r.managementKey,
-          key: r.key,
-        })),
+        Effect.map((r) => ({ managementKey: r.managementKey, key: r.key })),
       ),
       { operation: "issueManagementKey", successStatus: 201 },
     );
@@ -123,7 +123,9 @@ managementKeyRoutes.patch(
       updateManagementKey({
         organizationId: orgId.toHexString(),
         keyId: id,
-        patch: body as Record<string, unknown>,
+        patch: body as ManagementApiKeyUpdateInput,
+        actorRole: c.get("role"),
+        actorPermissions: c.get("permissions"),
       }),
       { operation: "updateManagementKey" },
     );

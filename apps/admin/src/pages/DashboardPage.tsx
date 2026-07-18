@@ -28,6 +28,8 @@ import {
   LayoutDashboard,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { hasPermission, useAuth } from "../auth/AuthContext.tsx";
+import type { PanelPermission } from "../auth/AuthContext.tsx";
 
 function initials(name: string): string {
   const parts = name.trim().split(/\s+/).filter(Boolean);
@@ -91,34 +93,47 @@ function DashboardSkeleton(): React.ReactElement {
   );
 }
 
-const QUICK_LINKS = [
+const QUICK_LINKS: ReadonlyArray<{
+  to: string;
+  label: string;
+  description: string;
+  icon: typeof UserPlus;
+  permission: PanelPermission;
+}> = [
   {
     to: "/customers",
     label: "Add customer",
-    description: "Create an account and set balances",
+    description: "Create a customer account",
     icon: UserPlus,
+    permission: "customers:read",
   },
   {
     to: "/api-keys",
     label: "Issue API key",
     description: "Scoped keys for customer access",
     icon: KeyRound,
+    permission: "customer_keys:read",
   },
   {
     to: "/playground",
     label: "Open playground",
     description: "Try models with live chat",
     icon: MessageSquare,
+    permission: "playground:write",
   },
   {
     to: "/analytics",
     label: "View analytics",
     description: "Usage, spend, and top customers",
     icon: BarChart3,
+    permission: "usage:read",
   },
-] as const;
+];
 
 export default function DashboardPage(): React.ReactElement {
+  const { user } = useAuth();
+  const canReadBalances = hasPermission(user, "balances:read");
+  const canReadCustomers = hasPermission(user, "customers:read");
   const [data, setData] = useState<DashboardSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -206,6 +221,7 @@ export default function DashboardPage(): React.ReactElement {
           <div className="grid grid-cols-1 gap-6 xl:grid-cols-5">
             {/* Balance + quick actions column */}
             <FadeIn className="flex flex-col gap-6 xl:col-span-2" delay={0.06}>
+              {canReadBalances ? (
               <Card className="p-6">
                 <div className="flex flex-col gap-5">
                   <div className="flex items-start justify-between gap-3">
@@ -270,13 +286,16 @@ export default function DashboardPage(): React.ReactElement {
                   )}
                 </div>
               </Card>
+              ) : null}
 
               <Card className="overflow-hidden">
                 <div className="border-b border-border/80 px-6 py-3.5">
                   <h2 className="text-sm font-semibold tracking-tight">Quick actions</h2>
                 </div>
                 <ul className="divide-y divide-border/70">
-                  {QUICK_LINKS.map((item) => {
+                  {QUICK_LINKS.filter((item) =>
+                    hasPermission(user, item.permission),
+                  ).map((item) => {
                     const Icon = item.icon;
                     return (
                       <li key={item.to}>
@@ -311,7 +330,14 @@ export default function DashboardPage(): React.ReactElement {
             <FadeIn className="xl:col-span-3" delay={0.1}>
               <Card className="flex h-full flex-col overflow-hidden">
                 <div className="flex items-center justify-between gap-3 border-b border-border/80 px-6 py-3.5">
-                  <h2 className="text-sm font-semibold tracking-tight">Recent customers</h2>
+                  <h2 className="text-sm font-semibold tracking-tight">
+                    Recent customers
+                    {!canReadCustomers ? (
+                      <span className="ml-2 text-xs font-normal text-muted-foreground">
+                        (limited)
+                      </span>
+                    ) : null}
+                  </h2>
                   <Button asChild variant="ghost" size="sm" className="shrink-0">
                     <Link to="/customers">
                       View all
@@ -327,12 +353,14 @@ export default function DashboardPage(): React.ReactElement {
                         <div className="flex items-center gap-3.5 px-6 py-4 transition-colors hover:bg-muted/30">
                           <Avatar className="size-10 shrink-0 ring-1 ring-border/60">
                             <AvatarFallback className="bg-muted text-xs font-semibold text-muted-foreground">
-                              {initials(c.name)}
+                              {initials(c.name ?? "")}
                             </AvatarFallback>
                           </Avatar>
                           <div className="flex min-w-0 flex-1 flex-col gap-0.5">
                             <div className="flex items-center gap-2">
-                              <span className="truncate font-medium">{c.name}</span>
+                              <span className="truncate font-medium">
+                                {c.name ?? "Unknown customer"}
+                              </span>
                               <Badge
                                 variant={customerStatusVariant(c.status)}
                                 className="capitalize shrink-0"
@@ -342,21 +370,27 @@ export default function DashboardPage(): React.ReactElement {
                             </div>
                             <div className="truncate text-xs text-muted-foreground">
                               {c.email ?? "No email"}
-                              <span className="mx-1.5 text-border">·</span>
-                              {formatRelative(c.createdAt)}
+                              {c.createdAt ? (
+                                <>
+                                  <span className="mx-1.5 text-border">·</span>
+                                  {formatRelative(c.createdAt)}
+                                </>
+                              ) : null}
                             </div>
                           </div>
-                          <div className="hidden shrink-0 flex-col items-end sm:flex">
-                            <span className="text-sm font-semibold tabular-nums">
-                              {formatMoney(
-                                c.balance.amountUnits,
-                                c.balance.currency,
-                              )}
-                            </span>
-                            <span className="text-[11px] text-muted-foreground">
-                              balance
-                            </span>
-                          </div>
+                          {canReadBalances && c.balance ? (
+                            <div className="hidden shrink-0 flex-col items-end sm:flex">
+                              <span className="text-sm font-semibold tabular-nums">
+                                {formatMoney(
+                                  c.balance.amountUnits,
+                                  c.balance.currency,
+                                )}
+                              </span>
+                              <span className="text-[11px] text-muted-foreground">
+                                balance
+                              </span>
+                            </div>
+                          ) : null}
                         </div>
                       </StaggerItem>
                     ))}

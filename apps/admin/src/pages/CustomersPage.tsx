@@ -66,7 +66,7 @@ interface Customer {
   externalId: string | null;
   name: string;
   email: string | null;
-  balance: Money;
+  balance?: Money;
   status: CustomerStatus;
   metadata: Record<string, unknown>;
   createdAt: string;
@@ -222,6 +222,7 @@ function Field({
 export default function CustomersPage(): React.ReactElement {
   const { user } = useAuth();
   const canWriteCustomers = hasPermission(user, "customers:write");
+  const canReadBalances = hasPermission(user, "balances:read");
 
   const [items, setItems] = useState<Customer[]>([]);
   const [total, setTotal] = useState(0);
@@ -234,6 +235,7 @@ export default function CustomersPage(): React.ReactElement {
   const [selected, setSelected] = useState<Customer | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
+  const [reloadTick, setReloadTick] = useState(0);
 
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -248,30 +250,35 @@ export default function CustomersPage(): React.ReactElement {
     };
   }, [query]);
 
-  const loadList = useCallback(async () => {
-    setListLoading(true);
-    setListError(null);
-    try {
-      const params = new URLSearchParams();
-      params.set("limit", String(PAGE_SIZE));
-      params.set("skip", String(skip));
-      if (statusFilter) params.set("status", statusFilter);
-      if (debounced.trim()) params.set("q", debounced.trim());
-      const res = await customersApi.listCustomers(Object.fromEntries(params.entries()));
-      setItems(res.items);
-      setTotal(res.total);
-    } catch (err) {
-      setListError(errorMessage(err, "Failed to load customers."));
-      setItems([]);
-      setTotal(0);
-    } finally {
-      setListLoading(false);
-    }
-  }, [skip, statusFilter, debounced]);
-
   useEffect(() => {
-    void loadList();
-  }, [loadList]);
+    let cancelled = false;
+    async function load() {
+      setListLoading(true);
+      setListError(null);
+      try {
+        const params = new URLSearchParams();
+        params.set("limit", String(PAGE_SIZE));
+        params.set("skip", String(skip));
+        if (statusFilter) params.set("status", statusFilter);
+        if (debounced.trim()) params.set("q", debounced.trim());
+        const res = await customersApi.listCustomers(Object.fromEntries(params.entries()));
+        if (cancelled) return;
+        setItems(res.items);
+        setTotal(res.total);
+      } catch (err) {
+        if (cancelled) return;
+        setListError(errorMessage(err, "Failed to load customers."));
+        setItems([]);
+        setTotal(0);
+      } finally {
+        if (!cancelled) setListLoading(false);
+      }
+    }
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, [skip, statusFilter, debounced, reloadTick]);
 
   const pages = Math.ceil(total / PAGE_SIZE) || 1;
   const currentPage = Math.floor(skip / PAGE_SIZE) + 1;
@@ -367,7 +374,7 @@ export default function CustomersPage(): React.ReactElement {
                   <TableHead>Name</TableHead>
                   <TableHead>Email</TableHead>
                   <TableHead>External ID</TableHead>
-                  <TableHead>Balance</TableHead>
+                  {canReadBalances ? <TableHead>Balance</TableHead> : null}
                   <TableHead>Status</TableHead>
                   <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
@@ -382,9 +389,11 @@ export default function CustomersPage(): React.ReactElement {
                     <TableCell className="font-medium">{c.name}</TableCell>
                     <TableCell className={cn(c.email ? "text-muted-foreground" : "text-muted-foreground/60")}>{c.email || "—"}</TableCell>
                     <TableCell className={cn("font-mono text-xs", c.externalId ? "text-muted-foreground" : "text-muted-foreground/60")}>{c.externalId || "—"}</TableCell>
-                    <TableCell className={cn("font-semibold tabular-nums", c.balance.amountUnits < 0 && "text-destructive")}>
-                      {formatMoney(c.balance.amountUnits, c.balance.currency)}
-                    </TableCell>
+                    {canReadBalances ? (
+                      <TableCell className={cn("font-semibold tabular-nums", c.balance && c.balance.amountUnits < 0 && "text-destructive")}>
+                        {c.balance ? formatMoney(c.balance.amountUnits, c.balance.currency) : "—"}
+                      </TableCell>
+                    ) : null}
                     <TableCell><Badge variant={statusVariant(c.status)}>{c.status}</Badge></TableCell>
                     <TableCell>
                       <div className="flex justify-end gap-1.5" onClick={(e) => e.stopPropagation()}>
@@ -440,7 +449,7 @@ export default function CustomersPage(): React.ReactElement {
             onClose={() => setCreateOpen(false)}
             onSaved={(c) => {
               setCreateOpen(false);
-              void loadList();
+              setReloadTick((n) => n + 1);
               openDetail(c);
             }}
           />
@@ -466,6 +475,7 @@ function CustomerDrawer({ customer, onClose, onUpdated, onDeleted }: DrawerProps
   // write implies read via hasPanelPermission (contracts).
   const canReadBalances = hasPermission(user, "balances:read");
   const canReadKeys = hasPermission(user, "customer_keys:read");
+  const canReadUsage = hasPermission(user, "usage:read");
 
   const [editOpen, setEditOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -520,7 +530,12 @@ function CustomerDrawer({ customer, onClose, onUpdated, onDeleted }: DrawerProps
             <div className="text-muted-foreground">Name</div><div>{customer.name}</div>
             <div className="text-muted-foreground">Email</div><div>{customer.email || "—"}</div>
             <div className="text-muted-foreground">External ID</div><div>{customer.externalId || "—"}</div>
-            <div className="text-muted-foreground">Balance</div><div className="text-2xl font-bold tabular-nums">{formatMoney(customer.balance.amountUnits, customer.balance.currency)}</div>
+            {canReadBalances ? (
+              <>
+                <div className="text-muted-foreground">Balance</div>
+                <div className="text-2xl font-bold tabular-nums">{customer.balance ? formatMoney(customer.balance.amountUnits, customer.balance.currency) : "—"}</div>
+              </>
+            ) : null}
             <div className="text-muted-foreground">Status</div><div><Badge variant={statusVariant(customer.status)}>{customer.status}</Badge></div>
             <div className="text-muted-foreground">Created</div><div>{formatDate(customer.createdAt)}</div>
             <div className="text-muted-foreground">Updated</div><div>{formatDate(customer.updatedAt)}</div>
@@ -534,7 +549,7 @@ function CustomerDrawer({ customer, onClose, onUpdated, onDeleted }: DrawerProps
           {deleteError ? <Alert variant="destructive"><AlertDescription>{deleteError}</AlertDescription></Alert> : null}
         </Card>
 
-        {canReadBalances ? (
+        {canReadBalances && customer.balance ? (
           <BalanceCard
             customerId={customer._id}
             balance={customer.balance}
@@ -543,7 +558,9 @@ function CustomerDrawer({ customer, onClose, onUpdated, onDeleted }: DrawerProps
           />
         ) : null}
         <SubscriptionCard customerId={customer._id} canWrite={canWriteSubscriptions} />
-        <UsageCard customerId={customer._id} />
+        {canReadUsage ? (
+          <UsageCard customerId={customer._id} />
+        ) : null}
         {canReadKeys ? (
           <ApiKeysCard
             customerId={customer._id}
@@ -597,7 +614,7 @@ function BalanceCard({
     setHistoryError(null);
     try {
       const res = await getJson<BalanceHistoryResponse>(
-        `/admin/customers/${customerId}/balance-history?limit=10&skip=0`,
+        `/admin/customers/${customerId}/balance/history?limit=10&skip=0`,
       );
       setHistory(res.items);
       setHistoryTotal(res.total);
@@ -777,7 +794,7 @@ function SubscriptionCard({ customerId, canWrite }: SubscriptionCardProps): Reac
           if (err instanceof ApiError && err.status === 404) return null;
           throw err;
         }),
-        getJson<PlansResponse>("/admin/plans"),
+        getJson<PlansResponse>("/admin/plans").catch(() => ({ items: [] as Plan[] })),
       ]);
       setSub(subRes);
       setPlans(plansRes.items.filter((p) => p.active));
@@ -798,7 +815,7 @@ function SubscriptionCard({ customerId, canWrite }: SubscriptionCardProps): Reac
     setSubscribing(true);
     setError(null);
     try {
-      await postJson<Subscription>(`/admin/customers/${customerId}/subscribe`, { planId });
+      await postJson<Subscription>(`/admin/customers/${customerId}/subscription`, { planId });
       await load();
       setPlanId("");
     } catch (err) {
@@ -1142,8 +1159,6 @@ function CustomerFormModal({ mode, customer, onClose, onSaved }: CustomerFormMod
   const [name, setName] = useState(customer?.name ?? "");
   const [email, setEmail] = useState(customer?.email ?? "");
   const [externalId, setExternalId] = useState(customer?.externalId ?? "");
-  const [amount, setAmount] = useState("");
-  const [currency, setCurrency] = useState(customer?.balance.currency ?? "USD");
   const [metadata, setMetadata] = useState(
     customer && Object.keys(customer.metadata).length > 0 ? JSON.stringify(customer.metadata, null, 2) : "",
   );
@@ -1181,21 +1196,10 @@ function CustomerFormModal({ mode, customer, onClose, onSaved }: CustomerFormMod
     setSubmitting(true);
     try {
       if (mode === "create") {
-        let startingBalance: Money | undefined;
-        if (amount || currency !== "USD") {
-          const units = Number(amount);
-          if (!Number.isInteger(units) || units < 0) {
-            setError("Starting balance must be a non-negative whole number.");
-            setSubmitting(false);
-            return;
-          }
-          startingBalance = { amountUnits: units, currency };
-        }
         const created = await postJson<Customer>("/admin/customers", {
           name: name.trim(),
           email: email.trim() || undefined,
           externalId: externalId.trim() || undefined,
-          startingBalance,
           metadata: parsedMetadata,
         });
         onSaved(created);
@@ -1239,20 +1243,7 @@ function CustomerFormModal({ mode, customer, onClose, onSaved }: CustomerFormMod
             </Field>
           </div>
         </div>
-        {mode === "create" ? (
-          <div className="flex gap-3">
-            <div className="flex-1">
-              <Field id="cust-amount" label="Starting balance (units)">
-                <Input id="cust-amount" type="number" step="1" min={0} value={amount} disabled={submitting} onChange={(e) => setAmount(e.target.value)} />
-              </Field>
-            </div>
-            <div className="flex-1">
-              <Field id="cust-cur" label="Currency">
-                <Input id="cust-cur" type="text" maxLength={3} value={currency} disabled={submitting} onChange={(e) => setCurrency(e.target.value.toUpperCase())} />
-              </Field>
-            </div>
-          </div>
-        ) : (
+        {mode === "edit" ? (
           <Field id="cust-status" label="Status">
             <Select value={status} onValueChange={(v) => setStatus(v as CustomerStatus)} disabled={submitting}>
               <SelectTrigger id="cust-status">
@@ -1265,7 +1256,7 @@ function CustomerFormModal({ mode, customer, onClose, onSaved }: CustomerFormMod
               </SelectContent>
             </Select>
           </Field>
-        )}
+        ) : null}
         <Field id="cust-meta" label="Metadata (JSON, optional)">
           <Textarea id="cust-meta" value={metadata} disabled={submitting} onChange={(e) => setMetadata(e.target.value)} />
         </Field>

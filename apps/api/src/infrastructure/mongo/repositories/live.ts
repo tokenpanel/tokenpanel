@@ -1398,7 +1398,7 @@ export const KeyRepositoryLive = Layer.effect(
     // may install Mongo without a full TypedDb).
     const db = (): typeof mongo.db => mongo.db;
     return {
-      listCustomerKeys: (organizationId, customerId) =>
+      listCustomerKeys: (organizationId, customerId, page) =>
         Effect.gen(function* () {
           const filter: Filter<ApiKeyDoc> = {
             organizationId: toObjectId(organizationId),
@@ -1406,10 +1406,20 @@ export const KeyRepositoryLive = Layer.effect(
           if (customerId !== undefined) {
             filter.customerId = toObjectId(customerId);
           }
-          const raws = yield* tryMongo(() =>
-            db().apiKeys.find(filter).sort({ createdAt: -1 }).toArray(),
-          );
-          return yield* decodeApiKeys(raws);
+          const limit = page?.limit ?? 50;
+          const skip = page?.skip ?? 0;
+          const [raws, total] = yield* tryMongo(async () => {
+            const items = await db()
+              .apiKeys.find(filter)
+              .sort({ createdAt: -1 })
+              .skip(skip)
+              .limit(limit)
+              .toArray();
+            const count = await db().apiKeys.countDocuments(filter);
+            return [items, count] as const;
+          });
+          const items = yield* decodeApiKeys(raws);
+          return { items, total };
         }),
       findCustomerKey: (organizationId, keyId) =>
         Effect.gen(function* () {
@@ -1775,14 +1785,15 @@ export const UsageRepositoryLive = Layer.effect(
           );
           return yield* decodeCustomers(raws);
         }),
-      dashboardSummary: (organizationId) =>
+      dashboardSummary: (organizationId, options) =>
         Effect.gen(function* () {
           const orgId = toObjectId(organizationId);
+          const includeBalances = options?.includeBalances !== false;
           const [
             customerCount,
             modelCount,
             providerCount,
-            plans,
+            activePlanCount,
             balanceAgg,
             recentCustomers,
           ] = yield* tryMongo(() =>
@@ -1790,28 +1801,38 @@ export const UsageRepositoryLive = Layer.effect(
               db().customers.countDocuments({ organizationId: orgId }),
               db().models.countDocuments({ organizationId: orgId }),
               db().providers.countDocuments({ organizationId: orgId }),
-              db().subscriptionPlans
-                .find({ organizationId: orgId })
-                .project({ active: 1 })
-                .toArray(),
-              db().customers
-                .aggregate<{ _id: string; totalUnits: number }>([
-                  { $match: { organizationId: orgId } },
-                  {
-                    $group: {
-                      _id: "$balance.currency",
-                      totalUnits: {
-                        $sum: {
-                          $ifNull: [
-                            "$balance.amountMinor",
-                            { $ifNull: ["$balance.amountUnits", 0] },
-                          ],
+              db().subscriptionPlans.countDocuments({
+                organizationId: orgId,
+                active: true,
+              }),
+              includeBalances
+                ? db().customers
+                    .aggregate<{ _id: string; totalUnits: number }>([
+                      { $match: { organizationId: orgId } },
+                      // Prefer amountMinor (legacy) over amountUnits (new) during dual-write migration window — do NOT simplify until post-migration confirmed applied everywhere.
+                      {
+                        $project: {
+                          _id: 0,
+                          currency: "$balance.currency",
+                          amount: {
+                            $ifNull: [
+                              "$balance.amountMinor",
+                              { $ifNull: ["$balance.amountUnits", 0] },
+                            ],
+                          },
                         },
                       },
-                    },
-                  },
-                ])
-                .toArray(),
+                      {
+                        $group: {
+                          _id: "$currency",
+                          totalUnits: { $sum: "$amount" },
+                        },
+                      },
+                    ])
+                    .toArray()
+                : Promise.resolve(
+                    [] as { _id: string; totalUnits: number }[],
+                  ),
               db().customers
                 .find({ organizationId: orgId })
                 .sort({ createdAt: -1 })
@@ -1819,9 +1840,6 @@ export const UsageRepositoryLive = Layer.effect(
                 .toArray(),
             ]),
           );
-          const activePlanCount = plans.filter(
-            (p) => (p as { active?: boolean }).active === true,
-          ).length;
           const balancesByCurrency: Record<string, number> = {};
           for (const row of balanceAgg) {
             if (row._id) balancesByCurrency[row._id] = row.totalUnits;

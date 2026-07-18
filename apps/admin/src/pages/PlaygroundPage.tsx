@@ -4,7 +4,6 @@ import { apiStreamPost, ApiError } from "../api/client.ts";
 import {
   applyEventToState,
   formatUnits,
-  formatBalance,
   safeErr,
   round,
 } from "./playground/stream-utils.ts";
@@ -48,6 +47,7 @@ import {
 import { PageHeader } from "@/components/PageHeader";
 import { EmptyState } from "@/components/EmptyState";
 import { Slider } from "@/components/ui/slider";
+import { hasPermission, useAuth } from "../auth/AuthContext.tsx";
 import { StreamingMarkdown, ReasoningPanel, useRafBuffer, useAutoScroll } from "@/components/StreamingMarkdown";
 import { cn } from "@/lib/utils";
 import type {
@@ -108,6 +108,9 @@ const DEFAULT_PARAMS: Params = {
 const CUSTOMER_LIMIT = 200;
 
 export default function PlaygroundPage(): React.ReactElement {
+  const { user } = useAuth();
+  const canReadCustomers = hasPermission(user, "customers:read");
+
   const [models, setModels] = useState<PlaygroundModel[]>([]);
   const [customers, setCustomers] = useState<PlaygroundCustomer[]>([]);
 
@@ -134,7 +137,9 @@ export default function PlaygroundPage(): React.ReactElement {
       try {
         const [modelRes, custRes] = await Promise.all([
           playgroundApi.listPlaygroundModels(),
-          playgroundApi.listPlaygroundCustomers(CUSTOMER_LIMIT),
+          canReadCustomers
+            ? playgroundApi.listPlaygroundCustomers(CUSTOMER_LIMIT)
+            : Promise.resolve({ items: [], total: 0 }),
         ]);
         if (cancelled) return;
         const active = modelRes.items.filter((m) => m.active);
@@ -149,7 +154,7 @@ export default function PlaygroundPage(): React.ReactElement {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [canReadCustomers]);
 
   const stopStream = useCallback(() => {
     abortRef.current?.abort();
@@ -380,7 +385,7 @@ export default function PlaygroundPage(): React.ReactElement {
                     <SelectContent>
                       <SelectItem value="">No billing (admin test)</SelectItem>
                       {customers.map((c) => (
-                        <SelectItem key={c._id} value={c._id}>{c.name} — {formatBalance(c.balance)}</SelectItem>
+                        <SelectItem key={c._id} value={c._id}>{c.name}</SelectItem>
                       ))}
                     </SelectContent>
                   </Select>

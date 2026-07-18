@@ -13,7 +13,7 @@
  * | Concern              | Domain module                         | Operations |
  * |----------------------|---------------------------------------|------------|
  * | Customers            | `domains/customers`                   | createCustomer, updateCustomer, closeCustomer, listCustomers, getCustomer |
- * | Balance              | `domains/customers`                   | adjustCustomerBalance, listBalanceHistory, maybeRedactCustomerBalance |
+ * | Balance              | `domains/customers`                   | adjustCustomerBalance, listBalanceHistory, redactCustomerBalance |
  * | Subscriptions        | `domains/plans`                       | subscribeCustomer, getActiveSubscription, addInterval |
  * | Plans / limits       | `domains/plans`                       | listPlans, createPlan, updatePlan, deactivatePlan, listCustomerLimits, listCustomerBudgets |
  * | Models (read DTO)    | `domains/models`                      | listActiveModels, toModelCapability |
@@ -41,7 +41,7 @@ export {
   getCustomer,
   adjustCustomerBalance,
   listBalanceHistory,
-  maybeRedactCustomerBalance,
+  redactCustomerBalance,
 } from "../customers/operations.ts";
 
 export {

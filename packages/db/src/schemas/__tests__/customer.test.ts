@@ -26,7 +26,7 @@ test("customerDoc applies defaults: balance 0 USD, status active, metadata {}", 
   expect(r.email).toBeUndefined();
 });
 
-test("customerCreateInput requires name, optional email/externalId/balance/metadata", () => {
+test("customerCreateInput requires name, optional email/externalId/metadata", () => {
   expect(
     customerCreateInput.safeParse({ name: "Bob" }).success,
   ).toBe(true);
@@ -42,15 +42,33 @@ test("customerCreateInput requires name, optional email/externalId/balance/metad
   expect(
     customerCreateInput.safeParse({
       name: "Bob",
-      startingBalance: { amountUnits: -1, currency: "USD" },
-    }).success,
-  ).toBe(false);
-  expect(
-    customerCreateInput.safeParse({
-      name: "Bob",
       externalId: "x".repeat(129),
     }).success,
   ).toBe(false);
+});
+
+test("customerCreateInput rejects excess fields (legacy startingBalance)", () => {
+  expect(
+    customerCreateInput.safeParse({
+      name: "Bob",
+      startingBalance: { amountUnits: 1000, currency: "USD" },
+    }).success,
+  ).toBe(false);
+  const r = customerCreateInput.safeParse({
+    name: "Bob",
+    otherField: 1,
+  });
+  expect(r.success).toBe(false);
+  if (!r.success) {
+    expect(
+      r.error.issues.some((i) => i.message.includes("otherField")),
+    ).toBe(true);
+    expect(
+      r.error.issues.some((i) =>
+        i.message.includes("startingBalance is no longer accepted"),
+      ),
+    ).toBe(true);
+  }
 });
 
 test("customerUpdateInput allows nullish externalId/email", () => {

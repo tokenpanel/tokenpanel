@@ -2,7 +2,7 @@ import { test, expect } from "bun:test";
 import { ObjectId } from "mongodb";
 import type { CustomerDoc, ModelDoc } from "@tokenpanel/db";
 import {
-  maybeRedactCustomer,
+  redactCustomer,
   principalHasScope,
   toModelCapability,
 } from "../management/read.ts";
@@ -23,33 +23,16 @@ function customer(over: Partial<CustomerDoc> = {}): CustomerDoc {
   };
 }
 
-test("maybeRedactCustomer: returns full doc when caller has balances:read", () => {
+test("redactCustomer: strips balance and preserves other fields", () => {
   const c = customer({
     balance: { amountUnits: 5000, reservedUnits: 0, currency: "USD" },
   });
-  const out = maybeRedactCustomer(c, true);
-  expect("balance" in out).toBe(true);
-  if ("balance" in out) {
-    expect(out.balance.amountUnits).toBe(5000);
-  }
-});
-
-test("maybeRedactCustomer: strips balance when caller lacks balances:read", () => {
-  const c = customer({
-    balance: { amountUnits: 5000, reservedUnits: 0, currency: "USD" },
-  });
-  const out = maybeRedactCustomer(c, false);
+  const out = redactCustomer(c);
   expect("balance" in out).toBe(false);
-  // Other fields preserved.
   expect(out.name).toBe("alice");
   expect(out.email).toBe("alice@example.com");
   expect(out.status).toBe("active");
   expect(out._id).toBe(c._id);
-});
-
-test("maybeRedactCustomer: identity when hasBalancesRead true (no copy needed)", () => {
-  const c = customer();
-  expect(maybeRedactCustomer(c, true)).toBe(c);
 });
 
 function fakeContext(scopes: string[]) {

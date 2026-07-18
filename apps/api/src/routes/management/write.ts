@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { Effect } from "effect";
 import { ObjectId } from "mongodb";
 import {
   customerCreateInput,
@@ -11,6 +12,7 @@ import {
   updateCustomer,
   closeCustomer,
   adjustCustomerBalance,
+  redactCustomerBalance,
 } from "../../domains/customers/operations.ts";
 import { subscribeCustomer } from "../../domains/plans/operations.ts";
 import { runManagementEffect } from "../../http/adapters/boundary.ts";
@@ -44,6 +46,14 @@ const subscribeBody = withParseApi(SubscribeBody);
 
 const app = new Hono<{ Variables: ManagementAuthVariables }>();
 
+function hasBalancesRead(c: {
+  get: (k: "principal") => ManagementAuthVariables["principal"];
+}): boolean {
+  const p = c.get("principal");
+  if (p.kind !== "management") return false;
+  return p.managementKey.scopes.includes("balances:read");
+}
+
 app.post(
   "/customers",
   requireManagementScope("customers:write"),
@@ -51,6 +61,7 @@ app.post(
   async (c) => {
     const orgId = c.get("orgId");
     const body = c.req.valid("json");
+    const canReadBalances = hasBalancesRead(c);
     return runManagementEffect(
       c,
       createCustomer({
@@ -58,10 +69,12 @@ app.post(
         name: body.name,
         externalId: body.externalId,
         email: body.email,
-        startingBalance: body.startingBalance,
         metadata: body.metadata,
-        openingNote: "management_api",
-      }),
+      }).pipe(
+        Effect.map((doc) =>
+          canReadBalances ? doc : redactCustomerBalance(doc),
+        ),
+      ),
       { operation: "mgmt.createCustomer", successStatus: 201 },
     );
   },
@@ -76,13 +89,18 @@ app.patch(
     const id = c.req.param("id");
     if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
     const body = c.req.valid("json");
+    const canReadBalances = hasBalancesRead(c);
     return runManagementEffect(
       c,
       updateCustomer({
         organizationId: orgId.toHexString(),
         customerId: id,
         patch: body,
-      }),
+      }).pipe(
+        Effect.map((doc) =>
+          canReadBalances ? doc : redactCustomerBalance(doc),
+        ),
+      ),
       { operation: "mgmt.updateCustomer" },
     );
   },
@@ -115,6 +133,7 @@ app.post(
     const id = c.req.param("id");
     if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
     const body = c.req.valid("json");
+    const canReadBalances = hasBalancesRead(c);
     return runManagementEffect(
       c,
       adjustCustomerBalance({
@@ -124,7 +143,14 @@ app.post(
         currency: body.currency,
         reason: body.reason,
         note: body.note ?? "management_api",
-      }),
+      }).pipe(
+        Effect.map((result) => ({
+          customer: canReadBalances
+            ? result.customer
+            : redactCustomerBalance(result.customer),
+          adjustment: result.adjustment,
+        })),
+      ),
       {
         operation: "mgmt.adjustCustomerBalance",
         mapError: (err) => {

@@ -51,6 +51,8 @@ export {
   MANAGEMENT_SCOPE_DEFINITIONS,
   MANAGEMENT_SCOPES,
   managementScopeSchema,
+  requiredPanelPermissionForScope,
+  canGrantManagementScopes,
 } from "./management-scopes.ts";
 export type {
   ManagementScope,

@@ -9,6 +9,7 @@
  */
 import { Schema } from "effect";
 import { withParseApi } from "./parse.ts";
+import { hasPanelPermission, type PanelPermission } from "./panel-permissions.ts";
 
 export const MANAGEMENT_SCOPE_DEFINITIONS = [
   {
@@ -74,3 +75,52 @@ const scopeLiterals = MANAGEMENT_SCOPES as unknown as [
 export const managementScopeSchema = withParseApi(
   Schema.Literal(...scopeLiterals),
 );
+
+/**
+ * Maps each management scope to the panel permission an actor must hold to
+ * grant it on a management API key. Prevents lateral privilege escalation:
+ * a member with only `management_keys:write` cannot mint a key carrying
+ * `balances:write` unless they also hold `balances:write` themselves.
+ *
+ * `chat:write` maps to `playground:write` — the closest panel equivalent
+ * (both consume provider capacity via chat completions).
+ */
+const SCOPE_REQUIRED_PANEL_PERMISSION: Readonly<
+  Record<ManagementScope, PanelPermission>
+> = {
+  "models:read": "models:read",
+  "customers:read": "customers:read",
+  "customers:write": "customers:write",
+  "balances:read": "balances:read",
+  "balances:write": "balances:write",
+  "usage:read": "usage:read",
+  "plans:read": "plans:read",
+  "subscriptions:write": "subscriptions:write",
+  "chat:write": "playground:write",
+};
+
+export function requiredPanelPermissionForScope(
+  scope: ManagementScope,
+): PanelPermission {
+  return SCOPE_REQUIRED_PANEL_PERMISSION[scope];
+}
+
+/**
+ * Whether an actor may grant the given management scopes on a management
+ * API key. Mirrors `canGrantPanelAccess` for invites: every scope's
+ * required panel permission must be held by the actor (admin role passes
+ * all; write implies read via `hasPanelPermission`).
+ */
+export function canGrantManagementScopes(
+  actorRole: "admin" | "member",
+  actorPermissions: readonly PanelPermission[] | undefined,
+  scopes: readonly ManagementScope[],
+): boolean {
+  return scopes.every((scope) =>
+    hasPanelPermission(
+      actorRole,
+      actorPermissions,
+      requiredPanelPermissionForScope(scope),
+    ),
+  );
+}

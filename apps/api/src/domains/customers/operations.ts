@@ -28,12 +28,7 @@ export type CreateCustomerInput = {
   readonly name: string;
   readonly externalId?: string | undefined;
   readonly email?: string | undefined;
-  readonly startingBalance?:
-    | { readonly amountUnits: number; readonly currency: string }
-    | undefined;
   readonly metadata?: Readonly<Record<string, unknown>> | undefined;
-  /** Optional ledger note for non-zero opening balance (management provenance). */
-  readonly openingNote?: string | null | undefined;
 };
 
 export const listCustomers = (input: {
@@ -100,10 +95,6 @@ export const createCustomer = (
     const orgs = yield* OrganizationRepository;
     const org = yield* orgs.findById(input.organizationId);
     if (org) orgCurrency = org.defaultCurrency;
-    const starting = {
-      amountUnits: input.startingBalance?.amountUnits ?? 0,
-      currency: orgCurrency,
-    };
     const conflictFields: {
       externalId?: string | undefined;
       email?: string | undefined;
@@ -130,6 +121,8 @@ export const createCustomer = (
       }
     }
 
+    // New customers always start at balance 0. Use the balance adjust API
+    // (balances:write) to credit funds — never accept balance at create time.
     const doc = yield* customers
       .insertWithOpeningBalance(
         {
@@ -138,15 +131,14 @@ export const createCustomer = (
           name: input.name,
           email: input.email ?? null,
           balance: {
-            amountUnits: starting.amountUnits,
-            currency: starting.currency,
+            amountUnits: 0,
+            currency: orgCurrency,
             reservedUnits: 0,
           },
           status: "active",
           metadata: input.metadata ?? {},
         },
-        input.openingNote ??
-          (starting.amountUnits !== 0 ? "opening balance" : null),
+        null,
       )
       .pipe(
         Effect.mapError((e) =>
@@ -331,14 +323,13 @@ export const listBalanceHistory = (input: {
   });
 
 /**
- * Redact balance when caller lacks balances:read (management surface).
- * Shared pure helper for admin/management DTO mapping.
+ * Strip the `balance` field from a customer DTO. Callers that conditionally
+ * keep the balance (e.g. based on `balances:read`) must hoist that check
+ * outside this helper.
  */
-export function maybeRedactCustomerBalance<T extends { balance: unknown }>(
+export function redactCustomerBalance<T extends { balance: unknown }>(
   customer: T,
-  hasBalancesRead: boolean,
-): T | Omit<T, "balance"> {
-  if (hasBalancesRead) return customer;
+): Omit<T, "balance"> {
   const { balance: _drop, ...rest } = customer;
   void _drop;
   return rest;

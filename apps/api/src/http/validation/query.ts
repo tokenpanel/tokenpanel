@@ -66,6 +66,11 @@ export const ApiKeyListQuery = Schema.Struct({
   customerId: exactOptional(
     Schema.String.pipe(Schema.minLength(1), Schema.maxLength(64)),
   ),
+  limit: Schema.optionalWith(
+    CoercedInt.pipe(Schema.positive(), Schema.lessThanOrEqualTo(200)),
+    { default: () => 50 },
+  ),
+  skip: PaginationSkip,
 });
 export type ApiKeyListQuery = Schema.Schema.Type<typeof ApiKeyListQuery>;
 

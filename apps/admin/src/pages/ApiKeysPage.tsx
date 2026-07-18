@@ -28,7 +28,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Plus, KeyRound, Copy, Check, ShieldCheck } from "lucide-react";
+import { Plus, KeyRound, Copy, Check, ShieldCheck, ChevronLeft, ChevronRight } from "lucide-react";
 import { PageHeader } from "@/components/PageHeader";
 import { EmptyState } from "@/components/EmptyState";
 import { FadeIn } from "@/components/anim";
@@ -36,14 +36,18 @@ import { cn } from "@/lib/utils";
 import { hasPermission, useAuth } from "../auth/AuthContext.tsx";
 
 const CUSTOMER_LIMIT = 200;
+const PAGE_SIZE = 50;
 
 export default function ApiKeysPage(): React.ReactElement {
   const { user } = useAuth();
   const canWrite = hasPermission(user, "customer_keys:write");
+  const canReadCustomers = hasPermission(user, "customers:read");
 
   const [customers, setCustomers] = useState<CustomerListResponse | null>(null);
   const [customerId, setCustomerId] = useState<string>("");
   const [keys, setKeys] = useState<ApiKey[]>([]);
+  const [total, setTotal] = useState(0);
+  const [skip, setSkip] = useState(0);
   const [loadingCustomers, setLoadingCustomers] = useState(true);
   const [loadingKeys, setLoadingKeys] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -57,6 +61,10 @@ export default function ApiKeysPage(): React.ReactElement {
   const [revokingId, setRevokingId] = useState<string | null>(null);
 
   useEffect(() => {
+    if (!canReadCustomers) {
+      setLoadingCustomers(false);
+      return;
+    }
     let cancelled = false;
     async function load() {
       setLoadingCustomers(true);
@@ -79,11 +87,12 @@ export default function ApiKeysPage(): React.ReactElement {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [canReadCustomers]);
 
   useEffect(() => {
-    if (!customerId) {
+    if (canReadCustomers && !customerId) {
       setKeys([]);
+      setTotal(0);
       return;
     }
     let cancelled = false;
@@ -91,15 +100,21 @@ export default function ApiKeysPage(): React.ReactElement {
       setLoadingKeys(true);
       setError(null);
       try {
+        const params = new URLSearchParams();
+        params.set("limit", String(PAGE_SIZE));
+        params.set("skip", String(skip));
+        if (canReadCustomers) params.set("customerId", customerId);
         const res = await getJson<ApiKeyListResponse>(
-          `/admin/api-keys?customerId=${encodeURIComponent(customerId)}`,
+          `/admin/api-keys?${params.toString()}`,
         );
         if (cancelled) return;
         setKeys(res.items);
+        setTotal(res.total);
       } catch (err) {
         if (cancelled) return;
         setError(err instanceof Error ? err.message : "Failed to load API keys.");
         setKeys([]);
+        setTotal(0);
       } finally {
         if (!cancelled) setLoadingKeys(false);
       }
@@ -108,7 +123,11 @@ export default function ApiKeysPage(): React.ReactElement {
     return () => {
       cancelled = true;
     };
-  }, [customerId]);
+  }, [customerId, canReadCustomers, skip]);
+
+  useEffect(() => {
+    setSkip(0);
+  }, [customerId, canReadCustomers]);
 
   const customerName = useMemo(() => {
     if (!customers || !customerId) return "";
@@ -134,7 +153,8 @@ export default function ApiKeysPage(): React.ReactElement {
       setNewName("");
       setNewWhitelist("");
       setShowCreate(false);
-      setKeys((prev) => [res.apiKey, ...prev.filter((k) => k._id !== res.apiKey._id)]);
+      setSkip(0);
+      setKeys((prev) => [res.apiKey, ...prev.filter((k) => k._id !== res.apiKey._id)].slice(0, PAGE_SIZE));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create key.");
     } finally {
@@ -142,8 +162,9 @@ export default function ApiKeysPage(): React.ReactElement {
     }
   }
 
-  async function onRevoke(keyId: string) {
+  async function onRevoke(keyId: string, keyName: string) {
     if (!canWrite) return;
+    if (!confirm(`Revoke key "${keyName}"? This cannot be undone.`)) return;
     setRevokingId(keyId);
     setError(null);
     try {
@@ -204,7 +225,7 @@ export default function ApiKeysPage(): React.ReactElement {
         </Alert>
       ) : null}
 
-      {loadingCustomers ? null : customers && customers.items.length === 0 ? (
+      {loadingCustomers ? null : canReadCustomers && customers && customers.items.length === 0 ? (
         <EmptyState
           icon={<KeyRound className="size-5" />}
           title="No customers available"
@@ -212,129 +233,150 @@ export default function ApiKeysPage(): React.ReactElement {
         />
       ) : (
         <>
-          <FadeIn className="flex flex-col gap-1.5" style={{ minWidth: 280 }}>
-            <Label htmlFor="apikey-customer">Customer</Label>
-            <Select value={customerId} onValueChange={setCustomerId}>
-              <SelectTrigger id="apikey-customer" className="w-[320px]">
-                <SelectValue placeholder="Select customer…" />
-              </SelectTrigger>
-              <SelectContent>
-                {customers?.items.map((c) => (
-                  <SelectItem key={c._id} value={c._id}>
-                    {c.name} — {c.email}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </FadeIn>
+          {canReadCustomers ? (
+            <FadeIn className="flex flex-col gap-1.5" style={{ minWidth: 280 }}>
+              <Label htmlFor="apikey-customer">Customer</Label>
+              <Select value={customerId} onValueChange={setCustomerId}>
+                <SelectTrigger id="apikey-customer" className="w-[320px]">
+                  <SelectValue placeholder="Select customer…" />
+                </SelectTrigger>
+                <SelectContent>
+                  {customers?.items.map((c) => (
+                    <SelectItem key={c._id} value={c._id}>
+                      {c.name} — {c.email}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </FadeIn>
+          ) : null}
 
-          {customerId ? (
-            <>
-              <div className="flex flex-col gap-3">
-                <div className="flex items-center justify-between">
-                  <h2 className="text-base font-semibold">Keys for {customerName}</h2>
-                  {canWrite ? (
-                    <Button size="sm" onClick={() => setShowCreate((v) => !v)}>
-                      {showCreate ? "Cancel" : (
-                        <>
-                          <Plus className="size-4" />
-                          Create Key
-                        </>
-                      )}
-                    </Button>
-                  ) : null}
-                </div>
-
-                {showCreate && canWrite ? (
-                  <FadeIn>
-                    <Card className="p-5">
-                      <form className="flex flex-col gap-3" onSubmit={onCreate}>
-                        <div className="flex flex-col gap-1.5">
-                          <Label htmlFor="apikey-name">Name</Label>
-                          <Input
-                            id="apikey-name"
-                            type="text"
-                            placeholder="e.g. Production server"
-                            value={newName}
-                            required
-                            disabled={creating}
-                            onChange={(e) => setNewName(e.target.value)}
-                          />
-                        </div>
-                        <div className="flex flex-col gap-1.5">
-                          <Label htmlFor="apikey-whitelist">Model whitelist (optional)</Label>
-                          <Input
-                            id="apikey-whitelist"
-                            type="text"
-                            placeholder="model-a, model-b"
-                            value={newWhitelist}
-                            disabled={creating}
-                            onChange={(e) => setNewWhitelist(e.target.value)}
-                          />
-                          <span className="text-xs text-muted-foreground">
-                            Comma-separated list of allowed model IDs. Leave empty for all models.
-                          </span>
-                        </div>
-                        <div>
-                          <Button type="submit" disabled={creating}>{creating ? "Creating…" : "Create Key"}</Button>
-                        </div>
-                      </form>
-                    </Card>
-                  </FadeIn>
+          {(!canReadCustomers || customerId) ? (
+            <div className="flex flex-col gap-3">
+              <div className="flex items-center justify-between">
+                <h2 className="text-base font-semibold">
+                  {canReadCustomers ? `Keys for ${customerName}` : "All API Keys"}
+                </h2>
+                {canWrite && canReadCustomers ? (
+                  <Button size="sm" onClick={() => setShowCreate((v) => !v)}>
+                    {showCreate ? "Cancel" : (
+                      <>
+                        <Plus className="size-4" />
+                        Create Key
+                      </>
+                    )}
+                  </Button>
                 ) : null}
-
-                {loadingKeys ? null : keys.length === 0 ? (
-                  <Card className="p-8 text-center text-sm text-muted-foreground">No API keys for this customer.</Card>
-                ) : (
-                  <FadeIn>
-                    <Card className="overflow-hidden p-0">
-                      <Table>
-                        <TableHeader>
-                          <TableRow>
-                            <TableHead>Name</TableHead>
-                            <TableHead>Prefix</TableHead>
-                            <TableHead>Status</TableHead>
-                            <TableHead>Model Whitelist</TableHead>
-                            <TableHead>Last Used</TableHead>
-                            <TableHead className="text-right">Actions</TableHead>
-                          </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                          {keys.map((k) => (
-                            <TableRow key={k._id}>
-                              <TableCell className="font-medium">{k.name}</TableCell>
-                              <TableCell><code className="font-mono text-xs">{k.prefix}…</code></TableCell>
-                              <TableCell>
-                                <Badge variant={k.status === "active" ? "success" : "destructive"}>{k.status}</Badge>
-                              </TableCell>
-                              <TableCell>
-                                {k.modelWhitelist && k.modelWhitelist.length > 0 ? (
-                                  <div className="flex flex-wrap gap-1">
-                                    {k.modelWhitelist.map((m) => (
-                                      <span key={m} className={cn("rounded border border-border bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground")}>{m}</span>
-                                    ))}
-                                  </div>
-                                ) : (
-                                  <span className="text-xs text-muted-foreground">All models</span>
-                                )}
-                              </TableCell>
-                              <TableCell className="text-muted-foreground">{formatRelative(k.lastUsedAt)}</TableCell>
-                              <TableCell className="text-right">
-                                {canWrite && k.status !== "revoked" ? (
-                                  <Button variant="destructive" size="sm" disabled={revokingId === k._id} onClick={() => void onRevoke(k._id)}>
-                                    {revokingId === k._id ? "Revoking…" : "Revoke"}
-                                  </Button>
-                                ) : null}
-                              </TableCell>
-                            </TableRow>
-                          ))}
-                        </TableBody>
-                      </Table>
-                    </Card>
-                  </FadeIn>
-                )}
               </div>
-            </>
+
+              {canReadCustomers && showCreate && canWrite ? (
+                <FadeIn>
+                  <Card className="p-5">
+                    <form className="flex flex-col gap-3" onSubmit={onCreate}>
+                      <div className="flex flex-col gap-1.5">
+                        <Label htmlFor="apikey-name">Name</Label>
+                        <Input
+                          id="apikey-name"
+                          type="text"
+                          placeholder="e.g. Production server"
+                          value={newName}
+                          required
+                          disabled={creating}
+                          onChange={(e) => setNewName(e.target.value)}
+                        />
+                      </div>
+                      <div className="flex flex-col gap-1.5">
+                        <Label htmlFor="apikey-whitelist">Model whitelist (optional)</Label>
+                        <Input
+                          id="apikey-whitelist"
+                          type="text"
+                          placeholder="model-a, model-b"
+                          value={newWhitelist}
+                          disabled={creating}
+                          onChange={(e) => setNewWhitelist(e.target.value)}
+                        />
+                        <span className="text-xs text-muted-foreground">
+                          Comma-separated list of allowed model IDs. Leave empty for all models.
+                        </span>
+                      </div>
+                      <div>
+                        <Button type="submit" disabled={creating}>{creating ? "Creating…" : "Create Key"}</Button>
+                      </div>
+                    </form>
+                  </Card>
+                </FadeIn>
+              ) : null}
+
+              {loadingKeys ? null : keys.length === 0 ? (
+                <Card className="p-8 text-center text-sm text-muted-foreground">
+                  {canReadCustomers ? "No API keys for this customer." : "No API keys."}
+                </Card>
+              ) : (
+                <>
+                <FadeIn>
+                  <Card className="overflow-hidden p-0">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Name</TableHead>
+                          <TableHead>Prefix</TableHead>
+                          <TableHead>Status</TableHead>
+                          <TableHead>Model Whitelist</TableHead>
+                          <TableHead>Last Used</TableHead>
+                          <TableHead className="text-right">Actions</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {keys.map((k) => (
+                          <TableRow key={k._id}>
+                            <TableCell className="font-medium">{k.name}</TableCell>
+                            <TableCell><code className="font-mono text-xs">{k.prefix}…</code></TableCell>
+                            <TableCell>
+                              <Badge variant={k.status === "active" ? "success" : "destructive"}>{k.status}</Badge>
+                            </TableCell>
+                            <TableCell>
+                              {k.modelWhitelist && k.modelWhitelist.length > 0 ? (
+                                <div className="flex flex-wrap gap-1">
+                                  {k.modelWhitelist.map((m) => (
+                                    <span key={m} className={cn("rounded border border-border bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground")}>{m}</span>
+                                  ))}
+                                </div>
+                              ) : (
+                                <span className="text-xs text-muted-foreground">All models</span>
+                              )}
+                            </TableCell>
+                            <TableCell className="text-muted-foreground">{formatRelative(k.lastUsedAt)}</TableCell>
+                            <TableCell className="text-right">
+                              {canWrite && k.status !== "revoked" ? (
+                                <Button variant="destructive" size="sm" disabled={revokingId === k._id} onClick={() => void onRevoke(k._id, k.name)}>
+                                  {revokingId === k._id ? "Revoking…" : "Revoke"}
+                                </Button>
+                              ) : null}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </Card>
+                </FadeIn>
+                <div className="flex items-center justify-between gap-3">
+                  <div className="text-sm text-muted-foreground">
+                    {total} key{total === 1 ? "" : "s"}
+                  </div>
+                  <div className="flex gap-2">
+                    <Button variant="outline" size="sm" disabled={skip === 0 || loadingKeys} onClick={() => setSkip(Math.max(0, skip - PAGE_SIZE))}>
+                      <ChevronLeft className="size-4" />
+                      Previous
+                    </Button>
+                    <Button variant="outline" size="sm" disabled={skip + PAGE_SIZE >= total || loadingKeys} onClick={() => setSkip(skip + PAGE_SIZE)}>
+                      Next
+                      <ChevronRight className="size-4" />
+                    </Button>
+                  </div>
+                </div>
+                </>
+              )}
+            </div>
           ) : null}
         </>
       )}

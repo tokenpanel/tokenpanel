@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { getJson, patchJson, postJson, deleteJson } from "../api/client.ts";
 import type {
   ManagementKey,
@@ -26,7 +26,7 @@ import { KeyRound, Copy, Check, Plus, ShieldCheck } from "lucide-react";
 import { PageHeader } from "@/components/PageHeader";
 import { EmptyState } from "@/components/EmptyState";
 import { FadeIn } from "@/components/anim";
-import { MANAGEMENT_SCOPE_DEFINITIONS } from "@tokenpanel/contracts";
+import { MANAGEMENT_SCOPE_DEFINITIONS, requiredPanelPermissionForScope } from "@tokenpanel/contracts";
 
 function groupBy<T, K extends string>(items: readonly T[], key: (t: T) => K): Record<K, T[]> {
   const out = {} as Record<K, T[]>;
@@ -37,14 +37,31 @@ function groupBy<T, K extends string>(items: readonly T[], key: (t: T) => K): Re
   return out;
 }
 
-/** Create/edit scope checkboxes — static product contract (not an API fetch). */
-const SCOPES_BY_GROUP = groupBy(MANAGEMENT_SCOPE_DEFINITIONS, (s) => s.group);
+/** All scope definitions grouped — filtered at render time by actor permissions. */
+const ALL_SCOPES_BY_GROUP = groupBy(MANAGEMENT_SCOPE_DEFINITIONS, (s) => s.group);
+
+/** Scope definition lookup by value, for resolving locked-scope labels. */
+const SCOPE_BY_VALUE = new Map<string, (typeof MANAGEMENT_SCOPE_DEFINITIONS)[number]>(
+  MANAGEMENT_SCOPE_DEFINITIONS.map((s) => [s.value, s]),
+);
 
 export default function ManagementKeysPage(): React.ReactElement {
   const { user } = useAuth();
   const canRead = hasPermission(user, "management_keys:read");
   const canWrite = hasPermission(user, "management_keys:write");
   const activeOrgId = user?.activeOrganizationId;
+
+  const grantableScopeValues = useMemo(
+    () =>
+      new Set<string>(
+        MANAGEMENT_SCOPE_DEFINITIONS.filter(
+          (s) =>
+            user?.role === "admin" ||
+            hasPermission(user, requiredPanelPermissionForScope(s.value)),
+        ).map((s) => s.value),
+      ),
+    [user],
+  );
 
   const [keys, setKeys] = useState<ManagementKey[]>([]);
   const [loading, setLoading] = useState(true);
@@ -121,7 +138,18 @@ export default function ManagementKeysPage(): React.ReactElement {
     if (!name.trim()) return;
     setSaving(true);
     setError(null);
-    const scopesArr = Array.from(selected).sort();
+    let scopesArr = Array.from(selected).sort();
+    // When editing, preserve scopes already on the key that this actor
+    // can't grant (prevents inadvertent stripping of elevated scopes).
+    if (editingId) {
+      const existing = keys.find((k) => k._id === editingId);
+      if (existing) {
+        const locked = existing.scopes.filter(
+          (s) => !grantableScopeValues.has(s),
+        );
+        scopesArr = [...new Set([...scopesArr, ...locked])].sort();
+      }
+    }
     try {
       if (editingId) {
         const updated = await patchJson<{ managementKey?: ManagementKey } & ManagementKey>(
@@ -149,6 +177,8 @@ export default function ManagementKeysPage(): React.ReactElement {
   }
 
   async function onRevoke(id: string) {
+    const key = keys.find((k) => k._id === id);
+    if (!confirm(`Revoke management key "${key?.name ?? id}"? This cannot be undone.`)) return;
     setRevokingId(id);
     setError(null);
     try {
@@ -179,6 +209,12 @@ export default function ManagementKeysPage(): React.ReactElement {
       return next;
     });
   }
+
+  const lockedScopes = editingId
+    ? Array.from(selected)
+        .filter((s) => !grantableScopeValues.has(s))
+        .sort()
+    : [];
 
   return (
     <div className="flex flex-col gap-6 p-6 lg:p-8">
@@ -255,12 +291,49 @@ export default function ManagementKeysPage(): React.ReactElement {
                   Each scope is independent — grant only what the integration needs.
                 </p>
                 <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                  {Object.entries(SCOPES_BY_GROUP).map(([group, items]) => (
+                  {lockedScopes.length > 0 ? (
+                    <div className="flex flex-col gap-2 rounded-md border border-border bg-muted/30 p-3 sm:col-span-2 lg:col-span-3">
+                      <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                        Locked scopes
+                      </div>
+                      <p className="text-[11px] text-muted-foreground">
+                        Granted on this key but not modifiable by your role. Preserved on save.
+                      </p>
+                      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                        {lockedScopes.map((s) => {
+                          const def = SCOPE_BY_VALUE.get(s);
+                          return (
+                            <label
+                              key={s}
+                              className="flex cursor-not-allowed items-start gap-2 text-sm opacity-70"
+                              title="Cannot be modified by your role"
+                            >
+                              <Checkbox checked disabled className="mt-0.5" />
+                              <span className="flex flex-col">
+                                <span className="font-medium leading-tight">
+                                  {def?.description ?? s}
+                                </span>
+                                <code className="font-mono text-[10px] text-muted-foreground">
+                                  {s}
+                                </code>
+                              </span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ) : null}
+                  {Object.entries(ALL_SCOPES_BY_GROUP).map(([group, items]) => {
+                    const grantable = items.filter((s) =>
+                      grantableScopeValues.has(s.value),
+                    );
+                    if (grantable.length === 0) return null;
+                    return (
                     <div key={group} className="flex flex-col gap-2 rounded-md border border-border p-3">
                       <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                         {group}
                       </div>
-                      {items.map((s) => (
+                      {grantable.map((s) => (
                         <label
                           key={s.value}
                           className="flex cursor-pointer items-start gap-2 text-sm"
@@ -278,7 +351,8 @@ export default function ManagementKeysPage(): React.ReactElement {
                         </label>
                       ))}
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
               <div>

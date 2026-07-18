@@ -15,7 +15,9 @@ import {
   closeCustomer,
   adjustCustomerBalance,
   listBalanceHistory,
+  redactCustomerBalance,
 } from "../domains/customers/operations.ts";
+import { hasPanelPermission } from "@tokenpanel/contracts";
 import {
   subscribeCustomer,
   getActiveSubscription,
@@ -61,6 +63,16 @@ const app = new Hono<{ Variables: AuthVariables }>();
 
 app.use("*", requireAuth);
 
+/** Whether the current admin session may read customer balances. */
+function sessionCanReadBalances(c: {
+  get: {
+    (k: "role"): AuthVariables["role"];
+    (k: "permissions"): AuthVariables["permissions"];
+  };
+}): boolean {
+  return hasPanelPermission(c.get("role"), c.get("permissions"), "balances:read");
+}
+
 app.get(
   "/",
   requirePermission("customers:read"),
@@ -68,6 +80,7 @@ app.get(
   async (c) => {
     const orgId = c.get("orgId");
     const q = c.req.valid("query");
+    const canReadBalances = sessionCanReadBalances(c);
     return runAdminEffect(
       c,
       listCustomers({
@@ -76,7 +89,14 @@ app.get(
         ...(q.q !== undefined ? { q: q.q } : {}),
         limit: q.limit,
         skip: q.skip,
-      }),
+      }).pipe(
+        Effect.map((page) => ({
+          ...page,
+          items: page.items.map((item) =>
+            canReadBalances ? item : redactCustomerBalance(item),
+          ),
+        })),
+      ),
       { operation: "listCustomers" },
     );
   },
@@ -89,6 +109,7 @@ app.post(
   async (c) => {
     const orgId = c.get("orgId");
     const body = c.req.valid("json");
+    const canReadBalances = sessionCanReadBalances(c);
     return runAdminEffect(
       c,
       createCustomer({
@@ -96,9 +117,12 @@ app.post(
         name: body.name,
         externalId: body.externalId,
         email: body.email,
-        startingBalance: body.startingBalance,
         metadata: body.metadata,
-      }),
+      }).pipe(
+        Effect.map((doc) =>
+          canReadBalances ? doc : redactCustomerBalance(doc),
+        ),
+      ),
       { operation: "createCustomer", successStatus: 201 },
     );
   },
@@ -108,9 +132,14 @@ app.get("/:id", requirePermission("customers:read"), async (c) => {
   const orgId = c.get("orgId");
   const id = c.req.param("id");
   if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
+  const canReadBalances = sessionCanReadBalances(c);
   return runAdminEffect(
     c,
-    getCustomer({ organizationId: orgId.toHexString(), customerId: id }),
+    getCustomer({ organizationId: orgId.toHexString(), customerId: id }).pipe(
+      Effect.map((doc) =>
+        canReadBalances ? doc : redactCustomerBalance(doc),
+      ),
+    ),
     { operation: "getCustomer" },
   );
 });
@@ -124,13 +153,18 @@ app.patch(
     const id = c.req.param("id");
     if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
     const body = c.req.valid("json");
+    const canReadBalances = sessionCanReadBalances(c);
     return runAdminEffect(
       c,
       updateCustomer({
         organizationId: orgId.toHexString(),
         customerId: id,
         patch: body,
-      }),
+      }).pipe(
+        Effect.map((doc) =>
+          canReadBalances ? doc : redactCustomerBalance(doc),
+        ),
+      ),
       { operation: "updateCustomer" },
     );
   },

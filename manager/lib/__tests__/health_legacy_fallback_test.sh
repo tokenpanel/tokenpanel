@@ -9,6 +9,7 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 printf '%s\n' \
   '#!/usr/bin/env bash' \
   'if [[ "$*" == *"AbortController"* ]]; then exit 1; fi' \
+  'if [[ "$*" == *$'"'"'\n'"'"'* ]]; then exit 1; fi' \
   'if [[ "$*" == *"/ready"* ]]; then exit 1; fi' \
   'if [[ "$*" == *"/health"* ]]; then exit 0; fi' \
   'exit 1' > "$TMP_DIR/docker"

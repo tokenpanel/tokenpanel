@@ -32,11 +32,8 @@ wait_for_health() {
 
     if timeout --preserve-status --kill-after=1s "${outer_s}s" \
       docker compose -f "$APP_YML" exec -T "$service" \
-      bun -e "
-        fetch('http://127.0.0.1:3000${path}')
-          .then(r => process.exit(r.ok ? 0 : 1))
-          .catch(() => process.exit(1));
-      " 2>/dev/null; then
+      bun -e "fetch('http://127.0.0.1:3000${path}').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))" \
+      2>/dev/null; then
       # Probe may have returned ok after the deadline while the shell waited.
       # Never report success past the configured timeout.
       if [ $((SECONDS - start)) -ge "$timeout" ]; then

@@ -77,12 +77,8 @@ promote_new_image_current() {
   ok "promoted tokenpanel/app:${NEW_IMAGE_TAG} to current"
 }
 
-fetch_and_build() {
+checkout_update_target() {
   local target_version="${1:-}"
-
-  # Save current image ID for potential rollback
-  CURRENT_IMAGE_ID="$(docker compose -f "$APP_YML" images api --format '{{.ID}}' 2>/dev/null | head -1)"
-  export CURRENT_IMAGE_ID
 
   # Fetch latest refs — abort on failure instead of swallowing git errors.
   # The old `|| true` let a broken fetch silently proceed to a build of stale
@@ -115,6 +111,14 @@ fetch_and_build() {
     fi
   fi
 
+  return 0
+}
+
+build_update_image() {
+  # Save current image ID for potential rollback before creating any new tags.
+  CURRENT_IMAGE_ID="$(docker compose -f "$APP_YML" images api --format '{{.ID}}' 2>/dev/null | head -1)"
+  export CURRENT_IMAGE_ID
+
   build_current_checkout_image || return 1
 
   # Tag old image as :previous for rollback
@@ -122,6 +126,14 @@ fetch_and_build() {
     docker tag "$CURRENT_IMAGE_ID" tokenpanel/app:previous 2>/dev/null || true
     info "tagged old image as tokenpanel/app:previous"
   fi
+}
+
+# Kept as a compatibility wrapper for callers outside the main CLI. The update
+# command itself checks out the target and re-runs its manager before backup,
+# then calls build_update_image from that refreshed process.
+fetch_and_build() {
+  checkout_update_target "${1:-}" || return 1
+  build_update_image
 }
 
 cleanup_old_images() {

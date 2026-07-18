@@ -126,6 +126,27 @@ installer. All scripts are bash (no node/bun dependency for the manager itself).
 - Config: `/etc/tokenpanel/` (app.yml + .env), Data: `/var/tokenpanel/shared/`
 - Build on host (git clone + docker build) for future plugin support.
 
+### Upgrade Compatibility (Hard Rule)
+
+- Treat every update as a cross-version protocol. Until swap completes, the
+  running API, image, database shape, generated Compose/config, and manager
+  state may come from any supported older release.
+- Never make pre-swap work (preflight, backup restart, pre-migrations, health
+  checks, rollback, or recovery) depend on endpoints, commands, env keys,
+  files, schema semantics, or manager helpers introduced only by the target
+  release.
+- Refresh and re-run the target manager before compatibility-sensitive update
+  work. Probe current/rollback images through a frozen legacy contract or
+  explicit capability detection; reserve strict target-only checks for the new
+  image after swap.
+- Keep old readers and writers valid throughout additive pre-migrations. New
+  config/template requirements need backward-compatible defaults until old
+  generated installations are explicitly upgraded.
+- Test upgrade paths, not only clean installs: at minimum N-1 and oldest
+  supported release to current, including backup restart, failed-swap rollback,
+  missing new capabilities (404/unknown command/missing env), and retry after
+  each phase fails. A fix available only after the failing phase is not a fix.
+
 ## Non-Interactive Shell Commands
 
 **ALWAYS use non-interactive flags** with file operations to avoid hanging on confirmation prompts.

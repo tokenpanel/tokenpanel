@@ -53,6 +53,39 @@ echo "$out" | grep -qi "already running" || fail "peer should report busy: $out"
 echo "$rc_line" | grep -q 'RC:1' || fail "peer should exit 1: $out"
 echo "OK: concurrent acquire blocked"
 
+# --- inherited FD adoption for refreshed update manager ---
+set +e
+out="$(
+  TOKENPANEL_LOCK_FILE="$TOKENPANEL_LOCK_FILE" \
+  CONFIG_DIR="$TMP" \
+  TOKENPANEL_SKIP_MANAGER_LOCK=0 \
+  bash -c '
+    source "'"$ROOT"'/manager/lib/output.sh"
+    source "'"$ROOT"'/manager/lib/lock.sh"
+    adopt_manager_lock "'"$MANAGER_LOCK_FD"'"
+    echo RC:$? FD:$MANAGER_LOCK_FD HELD:$MANAGER_LOCK_HELD
+  '
+)"
+set -e
+echo "$out" | grep -q 'RC:0' || fail "inherited lock adoption failed: $out"
+echo "$out" | grep -q 'HELD:1' || fail "adopted lock not marked held: $out"
+
+set +e
+bad_out="$(
+  TOKENPANEL_LOCK_FILE="$TOKENPANEL_LOCK_FILE" \
+  CONFIG_DIR="$TMP" \
+  TOKENPANEL_SKIP_MANAGER_LOCK=0 \
+  bash -c '
+    source "'"$ROOT"'/manager/lib/output.sh"
+    source "'"$ROOT"'/manager/lib/lock.sh"
+    adopt_manager_lock 9999 2>&1
+    echo RC:$?
+  '
+)"
+set -e
+echo "$bad_out" | grep -q 'RC:1' || fail "invalid inherited lock was accepted: $bad_out"
+echo "OK: inherited lock adoption validated"
+
 # --- release frees lock for peer ---
 release_manager_lock
 [ "${MANAGER_LOCK_HELD:-0}" -eq 0 ] || fail "MANAGER_LOCK_HELD should be 0 after release"

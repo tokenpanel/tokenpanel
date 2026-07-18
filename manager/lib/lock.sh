@@ -84,6 +84,37 @@ acquire_manager_lock() {
   return 0
 }
 
+# Adopt a lock FD inherited from a parent manager process across exec. The FD
+# must still be open, refer to the configured lock file, and carry/acquire its
+# flock. This prevents a stale bootstrap flag from bypassing serialization.
+adopt_manager_lock() {
+  local inherited_fd="${1:-}"
+  local lock_file="${TOKENPANEL_LOCK_FILE:-${CONFIG_DIR:-/etc/tokenpanel}/manager.lock}"
+
+  case "$inherited_fd" in
+    ''|*[!0-9]*)
+      err "invalid inherited manager lock"
+      return 1
+      ;;
+  esac
+
+  if [ ! -e "/proc/$$/fd/${inherited_fd}" ] \
+    || [ ! "$lock_file" -ef "/proc/$$/fd/${inherited_fd}" ]; then
+    err "inherited manager lock does not match $lock_file"
+    return 1
+  fi
+
+  if ! flock -n "$inherited_fd"; then
+    err "inherited manager lock is not held"
+    return 1
+  fi
+
+  MANAGER_LOCK_FILE="$lock_file"
+  MANAGER_LOCK_FD="$inherited_fd"
+  MANAGER_LOCK_HELD=1
+  return 0
+}
+
 # Explicit release (mainly for tests). Normal CLI holds until process exit.
 release_manager_lock() {
   if [ "${TOKENPANEL_SKIP_MANAGER_LOCK:-0}" = "1" ]; then

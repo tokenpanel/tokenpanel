@@ -37,4 +37,22 @@ wait_for_health api 3 /ready 1 || {
   exit 1
 }
 
+# Only an explicit 404 proves endpoint absence. A 503/network-style failure
+# must keep retrying /ready and must not weaken readiness to /health.
+printf '%s\n' \
+  '#!/usr/bin/env bash' \
+  'if [[ "$*" == *"/ready"* ]]; then exit 1; fi' \
+  'if [[ "$*" == *"/health"* ]]; then exit 0; fi' \
+  'exit 1' > "$TMP_DIR/docker"
+chmod +x "$TMP_DIR/docker"
+
+set +e
+wait_for_health api 1 /ready 1
+failure_rc=$?
+set -e
+if [ "$failure_rc" -eq 0 ]; then
+  echo "FAIL: non-404 readiness failure incorrectly used /health" >&2
+  exit 1
+fi
+
 echo "OK: legacy /health fallback is bootstrap-only"

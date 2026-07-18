@@ -368,7 +368,12 @@ cmd_update() {
 
   # Hold lock for the full update (backup → build → migrate → swap → post).
   # create_backup re-acquires re-entrantly and will not self-deadlock.
-  acquire_manager_lock "update" || die "could not acquire manager lock"
+  if [ "${TOKENPANEL_UPDATE_BOOTSTRAPPED:-0}" = "1" ]; then
+    adopt_manager_lock "${TOKENPANEL_UPDATE_LOCK_FD:-}" \
+      || die "refreshed manager did not inherit update lock"
+  else
+    acquire_manager_lock "update" || die "could not acquire manager lock"
+  fi
 
   echo -e "${BOLD}TokenPanel Update${NC}"
   echo
@@ -378,7 +383,7 @@ cmd_update() {
   preflight_full || die "preflight failed — aborting (nothing changed)"
 
   local current_version
-  current_version="$(cd "$INSTALL_DIR" 2>/dev/null && git describe --tags 2>/dev/null || echo 'unknown')"
+  current_version="${TOKENPANEL_UPDATE_FROM_VERSION:-$(cd "$INSTALL_DIR" 2>/dev/null && git describe --tags 2>/dev/null || echo 'unknown')}"
   if [ -n "$target_version" ]; then
     info "target: $target_version (current: $current_version)"
     if [ "$current_version" != "unknown" ]; then
@@ -395,15 +400,38 @@ cmd_update() {
   fi
   ok "preflight passed"
 
+  # The installed manager may be older than the target API. Load the target
+  # manager before touching the current container so compatibility fixes in the
+  # target release govern backup, migration, swap, and rollback behavior.
+  # Parent retains the manager lock while the refreshed child runs.
+  if [ "${TOKENPANEL_UPDATE_BOOTSTRAPPED:-0}" != "1" ]; then
+    step "bootstrap" "refreshing update manager..."
+    checkout_update_target "$target_version" \
+      || die "manager refresh failed — aborting (app unchanged)"
+    ok "target manager loaded"
+
+    local -a update_args=(update)
+    if [ -n "$target_version" ]; then
+      update_args+=("$target_version")
+    fi
+
+    TOKENPANEL_UPDATE_BOOTSTRAPPED=1 \
+    TOKENPANEL_UPDATE_LOCK_FD="$MANAGER_LOCK_FD" \
+    TOKENPANEL_UPDATE_FROM_VERSION="$current_version" \
+      "$INSTALL_DIR/manager/bin/tokenpanel" "${update_args[@]}"
+    return $?
+  fi
+
   # ── Phase 2: BACKUP ──
   step "2/6" "creating backup..."
   local backup_file
-  backup_file="$(create_backup "pre-update")" || die "backup failed — aborting (nothing changed)"
+  backup_file="$(create_backup "pre-update")" \
+    || die "backup failed — aborting (app unchanged; manager refreshed)"
   ok "backup ready: $(basename "$backup_file")"
 
-  # ── Phase 3: FETCH + BUILD ──
-  step "3/6" "fetching + building new image..."
-  fetch_and_build "$target_version" || die "build failed — aborting (old container still serving, backup available)"
+  # ── Phase 3: BUILD ──
+  step "3/6" "building new image..."
+  build_update_image || die "build failed — aborting (old container still serving, backup available)"
   ok "new image built and tagged"
 
   # ── Phase 4: PRE-MIGRATE ──

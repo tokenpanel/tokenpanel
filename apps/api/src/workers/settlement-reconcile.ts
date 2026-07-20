@@ -134,7 +134,6 @@ export function makeManagedRuntimeWorkerControl(params: {
     environment: params.config.environment ?? ("production" as const),
     port: params.config.port ?? 0,
     jwtSecret: params.config.jwtSecret ?? "x".repeat(32),
-    bootstrapSecret: params.config.bootstrapSecret ?? null,
     corsOrigins: params.config.corsOrigins ?? null,
     database: params.config.database ?? {
       uri: "mongodb://localhost",

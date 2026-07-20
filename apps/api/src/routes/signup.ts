@@ -31,7 +31,6 @@ signupRoutes.post(
         adminEmail: body.adminEmail,
         adminUsername: body.adminUsername,
         password: body.password,
-        bootstrapSecret: c.req.header("X-Bootstrap-Secret"),
       }),
       {
         operation: "signup",

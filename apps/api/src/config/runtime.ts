@@ -74,8 +74,6 @@ export type ApiRuntimeConfig = Readonly<{
   port: number;
   /** Exact JWT_SECRET bytes as provided — never log or include in errors. */
   jwtSecret: string;
-  /** Deployment-scoped first-run signup secret; never falls back to JWT_SECRET. */
-  bootstrapSecret: string | null;
   /**
    * When null, reflect request Origin (dev default).
    * When empty array in production, no cross-origin clients are allowed.
@@ -235,36 +233,6 @@ function parseJwtSecret(
       variable: "JWT_SECRET",
       reason:
         "rejects known sample/default/weak values in production (generate a random 32+ char secret)",
-    });
-  }
-  return raw;
-}
-
-function parseBootstrapSecret(
-  raw: string | undefined,
-  environment: ApiEnvironment,
-  issues: { variable: string; reason: string }[],
-): string | null {
-  if (!isNonBlank(raw)) {
-    if (environment === "production") {
-      issues.push({
-        variable: "BOOTSTRAP_SECRET",
-        reason: "required in production to authorize first-run signup",
-      });
-    }
-    return null;
-  }
-  if (raw.length < MIN_JWT_SECRET_LEN) {
-    issues.push({
-      variable: "BOOTSTRAP_SECRET",
-      reason: `must be at least ${MIN_JWT_SECRET_LEN} characters`,
-    });
-  }
-  if (environment === "production" && isRejectedProductionSecret(raw)) {
-    issues.push({
-      variable: "BOOTSTRAP_SECRET",
-      reason:
-        "rejects known sample/default/weak values in production (generate random 32+ character secret)",
     });
   }
   return raw;
@@ -587,11 +555,6 @@ export function parseApiRuntimeConfig(
     allowWeakJwtSecret && environment !== "production",
     issues,
   );
-  const bootstrapSecret = parseBootstrapSecret(
-    source.BOOTSTRAP_SECRET,
-    environment,
-    issues,
-  );
   const uri = parseMongoUri(source.MONGODB_URI, issues);
   const name = parseMongoDbName(source.MONGODB_DB, issues);
   const corsOrigins = parseCorsOrigins(source.CORS_ORIGINS, issues);
@@ -640,7 +603,6 @@ export function parseApiRuntimeConfig(
     environment,
     port,
     jwtSecret,
-    bootstrapSecret,
     corsOrigins: resolvedCors === null ? null : Object.freeze([...resolvedCors]),
     database: Object.freeze({ uri, name }),
     operational,

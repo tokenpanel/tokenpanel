@@ -12,7 +12,6 @@ function base(
 ): Record<string, string | undefined> {
   return {
     JWT_SECRET: VALID_SECRET,
-    BOOTSTRAP_SECRET: "bootstrap-secret-for-tests-at-least-32-chars",
     MONGODB_URI: VALID_URI,
     MONGODB_DB: "tokenpanel",
     PORT: "3000",
@@ -30,47 +29,6 @@ describe("parseApiRuntimeConfig", () => {
     expect(cfg.database.name).toBe("tokenpanel");
     expect(cfg.environment).toBe("development");
     expect(cfg.corsOrigins).toBeNull();
-    expect(cfg.bootstrapSecret).toBe(
-      "bootstrap-secret-for-tests-at-least-32-chars",
-    );
-  });
-
-  test("requires a bootstrap secret in production", () => {
-    expect(() =>
-      parseApiRuntimeConfig(
-        base({
-          NODE_ENV: "production",
-          CORS_ORIGINS: "https://admin.example.com",
-          BOOTSTRAP_SECRET: undefined,
-        }),
-      ),
-    ).toThrow(/BOOTSTRAP_SECRET/);
-
-    const cfg = parseApiRuntimeConfig(
-      base({
-        NODE_ENV: "production",
-        CORS_ORIGINS: "https://admin.example.com",
-        BOOTSTRAP_SECRET: "bootstrap-secret-for-production-at-least-32-chars",
-      }),
-    );
-    expect(cfg.bootstrapSecret).toBe(
-      "bootstrap-secret-for-production-at-least-32-chars",
-    );
-  });
-
-  test("rejects short or sample bootstrap secret", () => {
-    expect(() =>
-      parseApiRuntimeConfig(base({ BOOTSTRAP_SECRET: "too-short" })),
-    ).toThrow(/BOOTSTRAP_SECRET/);
-    expect(() =>
-      parseApiRuntimeConfig(
-        base({
-          NODE_ENV: "production",
-          CORS_ORIGINS: "https://admin.example.com",
-          BOOTSTRAP_SECRET: "change_me_to_a_long_random_string_32chars",
-        }),
-      ),
-    ).toThrow(/BOOTSTRAP_SECRET/);
   });
 
   test("preserves exact JWT_SECRET bytes (no trim)", () => {

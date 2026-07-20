@@ -84,7 +84,6 @@ const configLayer = Layer.succeed(AppConfig, {
   environment: "test",
   port: 3000,
   jwtSecret: JWT_SECRET,
-  bootstrapSecret: null,
   corsOrigins: [],
   database: { uri: "mongodb://localhost", name: "test" },
   operational: {

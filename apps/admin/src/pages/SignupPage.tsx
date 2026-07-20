@@ -13,7 +13,6 @@ import { AuthBrandPanel, AuthMobileBrand } from "@/components/AuthBrandPanel";
 interface FirstRunForm {
   adminEmail: string;
   adminUsername: string;
-  bootstrapSecret: string;
   password: string;
   confirmPassword: string;
 }
@@ -27,7 +26,6 @@ interface InviteForm {
 interface FieldErrors {
   adminEmail?: string;
   adminUsername?: string;
-  bootstrapSecret?: string;
   username?: string;
   password?: string;
   confirmPassword?: string;
@@ -36,7 +34,6 @@ interface FieldErrors {
 const EMPTY_FIRST: FirstRunForm = {
   adminEmail: "",
   adminUsername: "",
-  bootstrapSecret: "",
   password: "",
   confirmPassword: "",
 };
@@ -65,10 +62,6 @@ export function validateFirstRun(form: FirstRunForm): FieldErrors {
     errs.adminUsername = "Username must be 3–60 characters.";
   } else if (!USERNAME_RE.test(form.adminUsername)) {
     errs.adminUsername = "Use letters, numbers, dots, hyphens, or underscores only.";
-  }
-
-  if (!form.bootstrapSecret) {
-    errs.bootstrapSecret = "Bootstrap secret is required.";
   }
 
   if (!form.password) {
@@ -207,7 +200,6 @@ export default function SignupPage(): ReactElement {
       await signup({
         adminEmail: firstForm.adminEmail.trim(),
         adminUsername: firstForm.adminUsername.trim(),
-        bootstrapSecret: firstForm.bootstrapSecret,
         password: firstForm.password,
         confirmPassword: firstForm.confirmPassword,
       });
@@ -337,22 +329,6 @@ export default function SignupPage(): ReactElement {
                   autoFocus
                   disabled={submitting}
                   onChange={(e) => updateInvite("username", e.target.value)}
-                />
-              </Field>
-
-              <Field
-                id="signup-bootstrap-secret"
-                label="Bootstrap secret"
-                error={fieldErrors.bootstrapSecret}
-              >
-                <PasswordInput
-                  id="signup-bootstrap-secret"
-                  value={firstForm.bootstrapSecret}
-                  autoComplete="off"
-                  disabled={submitting}
-                  showPassword={showPassword}
-                  onToggleShow={() => setShowPassword((v) => !v)}
-                  onChange={(e) => updateFirst("bootstrapSecret", e.target.value)}
                 />
               </Field>
 

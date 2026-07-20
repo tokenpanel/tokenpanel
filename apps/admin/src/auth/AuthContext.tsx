@@ -85,7 +85,6 @@ interface AuthContextValue {
   signup: (input: {
     adminEmail: string;
     adminUsername: string;
-    bootstrapSecret: string;
     password: string;
     confirmPassword: string;
   }) => Promise<void>;
@@ -214,20 +213,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     async (input: {
       adminEmail: string;
       adminUsername: string;
-      bootstrapSecret: string;
       password: string;
       confirmPassword: string;
     }) => {
-      const res = await postJson<SignupResponse>(
-        "/admin/auth/signup",
-        {
-          adminEmail: input.adminEmail,
-          adminUsername: input.adminUsername,
-          password: input.password,
-          confirmPassword: input.confirmPassword,
-        },
-        { headers: { "X-Bootstrap-Secret": input.bootstrapSecret } },
-      );
+      const res = await postJson<SignupResponse>("/admin/auth/signup", {
+        adminEmail: input.adminEmail,
+        adminUsername: input.adminUsername,
+        password: input.password,
+        confirmPassword: input.confirmPassword,
+      });
       setToken(res.token);
       setUser(normalizeUser(res.user));
       setNeedsSetup(false);

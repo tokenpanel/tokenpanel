@@ -188,36 +188,6 @@ export const needsSetup = (): Effect.Effect<
     return { needsSetup: count === 0 };
   });
 
-/** Dedicated deployment secret for first-run signup; no JWT fallback. */
-export const authorizeBootstrapSignup = (
-  providedSecret: string | undefined,
-): Effect.Effect<void, AuthorizationError, Crypto | AppConfig> =>
-  Effect.gen(function* () {
-    const config = yield* AppConfig;
-    const expectedSecret = config.bootstrapSecret;
-    if (expectedSecret === null) {
-      return yield* Effect.fail(
-        new AuthorizationError({
-          code: "forbidden",
-          message: "Bootstrap signup is unavailable",
-        }),
-      );
-    }
-    const crypto = yield* Crypto;
-    const authorized = yield* crypto.safeHashEqual(
-      providedSecret ?? "",
-      expectedSecret,
-    );
-    if (!authorized) {
-      return yield* Effect.fail(
-        new AuthorizationError({
-          code: "forbidden",
-          message: "Bootstrap signup is unavailable",
-        }),
-      );
-    }
-  });
-
 /**
  * Login with username/password. Issues JWT for active-org membership role.
  * Caller owns brute-force throttle (surface concern).
@@ -299,8 +269,6 @@ export const signup = (
     const orgs = yield* OrganizationRepository;
     const crypto = yield* Crypto;
     const clock = yield* Clock;
-
-    yield* authorizeBootstrapSignup(input.bootstrapSecret);
 
     const count = yield* users.countUsers();
     if (count !== 0) {

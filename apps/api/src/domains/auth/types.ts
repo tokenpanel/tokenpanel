@@ -44,8 +44,6 @@ export type SignupInput = {
   readonly adminEmail: string;
   readonly adminUsername: string;
   readonly password: string;
-  /** Header value; never persisted or logged. */
-  readonly bootstrapSecret: string | undefined;
 };
 
 export type SignupResult = {

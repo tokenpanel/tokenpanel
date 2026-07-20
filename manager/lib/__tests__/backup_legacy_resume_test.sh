@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# Backup restart of a legacy current image must use the frozen /health contract
-# without probing target-only /ready.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
@@ -16,11 +14,10 @@ cat >"$BIN_DIR/docker" <<'EOF'
 printf '%s\n' "$*" >>"$TEST_DOCKER_LOG"
 case "$*" in
   *" ps --status running --services"*) printf 'api\n' ;;
+  *" ps --status healthy --services"*) printf 'api\n' ;;
   *" mongosh "*) printf '{"dataSize":0,"indexSize":0}\n' ;;
   *" mongodump "*) printf 'fake-archive' ;;
   *" mongorestore "*) exit 0 ;;
-  *"/ready"*) exit 42 ;;
-  *"/health"*) exit 0 ;;
 esac
 exit 0
 EOF
@@ -45,10 +42,13 @@ source "$ROOT/manager/lib/backup.sh"
 
 backup_file="$(create_backup legacy-resume)"
 [ -f "$backup_file" ] || { echo "FAIL: backup was not created" >&2; exit 1; }
-grep -q '/health' "$DOCKER_LOG" || { echo "FAIL: /health was not probed" >&2; exit 1; }
-if grep -q '/ready' "$DOCKER_LOG"; then
-  echo "FAIL: backup resume probed target-only /ready" >&2
+grep -q 'ps --status healthy --services' "$DOCKER_LOG" || {
+  echo "FAIL: backup resume did not wait for Docker healthy status" >&2
+  exit 1
+}
+if grep -q 'exec -T api' "$DOCKER_LOG"; then
+  echo "FAIL: backup resume should not exec into the api container" >&2
   exit 1
 fi
 
-echo "OK: backup resumes legacy API through frozen /health contract"
+echo "OK: backup resumes API via Docker healthy status"

@@ -64,7 +64,7 @@ _resume_writers() {
   # only source backup.sh skip readiness (start success is enough).
   if declare -F wait_for_health >/dev/null 2>&1; then
     # /health is the frozen contract present in every released API image.
-    if ! wait_for_health api 60 "/health"; then
+    if ! wait_for_health api 180; then
       err "api started but not ready — check: tokenpanel logs api"
       return 1
     fi
@@ -453,7 +453,7 @@ restore_backup() {
     return 1
   fi
   if declare -F wait_for_health >/dev/null 2>&1; then
-    if ! wait_for_health api 60 "/health"; then
+    if ! wait_for_health api 180; then
       err "api started but not ready after restore — check: tokenpanel logs api"
       return 1
     fi

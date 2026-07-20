@@ -113,23 +113,13 @@ app.use(
   }),
 );
 
-// Legacy combined health (kept for existing probes). Prefer /live + /ready.
-app.get("/health", (c) => c.json({ status: "ok" }));
-
-/** Process liveness only — no dependency checks. */
-app.get("/live", (c) => c.json({ status: "live" }));
-
-/** Readiness: bounded Mongo ping. Used for rollout / compose health. */
-app.get("/ready", async (c) => {
+app.get("/health", async (c) => {
   try {
     const { rawDb } = await resolveMongo();
     await rawDb.command({ ping: 1 });
-    return c.json({ status: "ready" });
+    return c.json({ status: "ok" });
   } catch {
-    return c.json(
-      { status: "not_ready", reason: "dependency_unavailable" },
-      503,
-    );
+    return c.json({ status: "unavailable" }, 503);
   }
 });
 

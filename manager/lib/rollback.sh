@@ -10,8 +10,8 @@ swap_containers() {
   # underlying image ID changed), making the swap a no-op.
   docker compose -f "$APP_YML" up -d --no-deps --force-recreate api
 
-  if ! wait_for_health api 60; then
-    err "new container failed health check within 60s"
+  if ! wait_for_health api 180; then
+    err "new container failed health check within 180s"
     rollback_to_previous || err "ROLLBACK FAILED — manual intervention required"
     return 1
   fi
@@ -33,9 +33,7 @@ rollback_to_previous() {
     docker tag tokenpanel/app:previous tokenpanel/app:current
     docker compose -f "$APP_YML" up -d --no-deps --force-recreate api
 
-    # Previous image may predate /ready. Rollout checks above stay strict for
-    # the target image; recovery uses the frozen legacy /health contract.
-    if wait_for_health api 60 "/health"; then
+    if wait_for_health api 180; then
       warn "rolled back to previous version — app is serving old code"
       warn "investigate the failure, fix, then retry: tokenpanel update"
       return 0

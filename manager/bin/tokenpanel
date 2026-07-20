@@ -127,7 +127,7 @@ cmd_start() {
   docker compose -f "$APP_YML" up -d --remove-orphans
   # `start` may bring up an unknown legacy current image. /health is the
   # frozen contract shared by every supported image.
-  wait_for_health api 60 "/health" || die "api did not become healthy"
+  wait_for_health api 180 || die "api did not become healthy"
   # API boot applies pending pre/ migrations. Post/ (destructive) is not run on
   # boot — apply any pending post/ here so first install and plain restarts still
   # reach a fully-migrated schema. Already-applied ids are skipped via
@@ -265,12 +265,18 @@ cmd_version() {
 
 cmd_rebuild() {
   source "${SCRIPT_DIR}/../lib/build.sh"
+  source "${SCRIPT_DIR}/../lib/config_render.sh"
 
   acquire_manager_lock "rebuild" || die "could not acquire manager lock"
   preflight_quick || die "preflight failed"
   step "rebuild" "building current checkout image..."
   CURRENT_IMAGE_ID="$(docker compose -f "$APP_YML" images api --format '{{.ID}}' 2>/dev/null | head -1)"
   build_current_checkout_image || die "build failed — old container still available"
+
+  ensure_operator_config "$NEW_IMAGE_TAG" || die "operator config migration failed"
+  snapshot_config >/dev/null || die "could not snapshot config"
+  render_config_from_image "$NEW_IMAGE_TAG" || die "config render failed — old container still available"
+
   promote_new_image_current || die "could not promote rebuilt image"
   if [ -n "$CURRENT_IMAGE_ID" ]; then
     docker tag "$CURRENT_IMAGE_ID" tokenpanel/app:previous 2>/dev/null || true
@@ -278,7 +284,7 @@ cmd_rebuild() {
 
   step "rebuild" "force-recreating containers (keeping data)..."
   docker compose -f "$APP_YML" up -d --force-recreate --remove-orphans
-  wait_for_health api 60 || die "api did not become healthy"
+  wait_for_health api 180 || die "api did not become healthy"
   # Same post-deploy step as cmd_start: API boot only runs pre/. Rebuild can
   # ship new post/ files with the new image; apply them now so the live schema
   # matches the rebuilt code. Already-applied ids are skipped (idempotent).

@@ -14,7 +14,8 @@ cat >"$BIN_DIR/docker" <<'EOF'
 printf '%s\n' "$*" >>"$TEST_DOCKER_LOG"
 case "$*" in
   *" ps --status running --services"*) printf 'api\n' ;;
-  *" ps --status healthy --services"*) printf 'api\n' ;;
+  *" ps -q api"*) printf 'abc123\n' ;;
+  inspect\ --format*) printf 'healthy\n' ;;
   *" mongosh "*) printf '{"dataSize":0,"indexSize":0}\n' ;;
   *" mongodump "*) printf 'fake-archive' ;;
   *" mongorestore "*) exit 0 ;;
@@ -42,7 +43,7 @@ source "$ROOT/manager/lib/backup.sh"
 
 backup_file="$(create_backup legacy-resume)"
 [ -f "$backup_file" ] || { echo "FAIL: backup was not created" >&2; exit 1; }
-grep -q 'ps --status healthy --services' "$DOCKER_LOG" || {
+grep -q 'ps -q api' "$DOCKER_LOG" || {
   echo "FAIL: backup resume did not wait for Docker healthy status" >&2
   exit 1
 }

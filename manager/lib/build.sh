@@ -115,8 +115,10 @@ checkout_update_target() {
 }
 
 build_update_image() {
-  # Save current image ID for potential rollback before creating any new tags.
   CURRENT_IMAGE_ID="$(docker compose -f "$APP_YML" images api --format '{{.ID}}' 2>/dev/null | head -1)"
+  if [ -z "$CURRENT_IMAGE_ID" ]; then
+    CURRENT_IMAGE_ID="$(docker image inspect --format '{{.Id}}' tokenpanel/app:current 2>/dev/null || true)"
+  fi
   export CURRENT_IMAGE_ID
 
   build_current_checkout_image || return 1

@@ -1,5 +1,15 @@
 #!/usr/bin/env bash
 
+tp_service_status() {
+  local service="$1"
+  local container_id
+  container_id="$(docker compose -f "$APP_YML" ps -q "$service" 2>/dev/null | head -1)"
+  [ -n "$container_id" ] || return 1
+  local status
+  status="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$container_id" 2>/dev/null)"
+  [ "$status" = "healthy" ] || [ "$status" = "running" ]
+}
+
 wait_for_health() {
   local service="${1:-api}"
   local timeout="${2:-180}"
@@ -8,7 +18,7 @@ wait_for_health() {
 
   step "health" "waiting for $service to become healthy (max ${timeout}s)..."
   while true; do
-    if docker compose -f "$APP_YML" ps --status healthy --services 2>/dev/null | grep -qx "$service"; then
+    if tp_service_status "$service"; then
       ok "$service healthy"
       return 0
     fi

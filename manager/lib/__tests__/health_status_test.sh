@@ -11,9 +11,10 @@ source "$ROOT/manager/lib/output.sh"
 source "$ROOT/manager/lib/health.sh"
 
 docker() {
-  if [[ "$*" == *"ps --status healthy --services"* ]]; then
-    printf 'api\n'
-  fi
+  case "$*" in
+    *"ps -q api"*) printf 'abc123\n' ;;
+    *"inspect --format"*) printf 'healthy\n' ;;
+  esac
   return 0
 }
 
@@ -23,12 +24,28 @@ wait_for_health api 2 >/dev/null || {
 }
 
 docker() {
+  case "$*" in
+    *"ps -q api"*) printf 'abc123\n' ;;
+    *"inspect --format"*) printf 'starting\n' ;;
+  esac
   return 0
 }
 
 if wait_for_health api 1 >/dev/null 2>&1; then
-  echo "FAIL: unhealthy service was accepted" >&2
+  echo "FAIL: starting service was accepted" >&2
   exit 1
 fi
 
-echo "OK: health waits for Docker compose healthy status"
+docker() {
+  case "$*" in
+    *"ps -q api"*) printf '\n' ;;
+  esac
+  return 0
+}
+
+if wait_for_health api 1 >/dev/null 2>&1; then
+  echo "FAIL: missing container was accepted" >&2
+  exit 1
+fi
+
+echo "OK: health waits for Docker container healthy status"

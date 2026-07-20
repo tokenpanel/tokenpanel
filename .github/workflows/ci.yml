@@ -14,12 +14,36 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.2.21
-      - run: bun install --frozen-lockfile
-      - run: bun run test
-      - run: bun run typecheck
-      - run: bun run lint
-      - run: bun run build
+          bun-version: "1.2.21"
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Lint
+        run: bun run lint
+
+      - name: Build
+        run: bun run build
+
+      - name: Unit tests
+        run: bun run test
+
+      - name: Release policy checks
+        run: bun run release:check
+
+      - name: Config policy against main
+        if: github.event_name == 'pull_request'
+        run: |
+          git show origin/main:manager/release/manifest.json > /tmp/base-manifest.json || true
+          if [ -f /tmp/base-manifest.json ]; then
+            bun run packages/config/src/cli.ts policy --root . --baseline /tmp/base-manifest.json
+          fi

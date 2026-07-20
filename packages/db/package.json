@@ -21,7 +21,9 @@
     "migrator": "bun run src/migrator/cli.ts",
     "db:new-migration": "bun run src/migrator/cli.ts new",
     "db:migrate": "bun run src/migrator/cli.ts run",
-    "db:status": "bun run src/migrator/cli.ts status"
+    "db:status": "bun run src/migrator/cli.ts status",
+    "db:schema-snapshot": "bun run scripts/schema-snapshot.ts",
+    "db:schema-check": "bun run scripts/schema-check.ts"
   },
   "dependencies": {
     "@tokenpanel/contracts": "workspace:*",

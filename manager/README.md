@@ -13,18 +13,25 @@ manager/
     tokenpanel           # operator CLI
     tokenpanel-setup     # interactive installer wizard
   lib/
-    config.sh            # path resolution + env loading
+    config.sh            # path resolution + config loading
+    config_render.sh     # operator YAML -> generated deployment artifacts
     output.sh            # colored output helpers
     preflight.sh         # disk / docker / mongo checks
     health.sh            # health-check polling
-    backup.sh            # mongodump wrapper (tokenpanel-wuv)
+    backup.sh            # mongodump wrapper
     lock.sh              # cross-command flock (update/backup/restore/…)
     migrate.sh           # migration runner wrapper
     build.sh             # docker build on host (shared by setup/update/rebuild)
-    rollback.sh          # container swap + rollback (tokenpanel-db3)
+    rollback.sh          # container swap + rollback + config snapshot restore
+  release/
+    manifest.json        # generated config/release manifest
+    manifest.env         # bash-safe manifest fragment
+    defaults.env         # generated defaults
+    allowed-env-keys.txt # generated allowlist
   templates/
-    app.yml.tmpl         # compose template (envsubst)
-    env.tmpl             # .env template
+    app.caddy.yml.tmpl   # compose template with Caddy
+    app.direct.yml.tmpl  # compose template without Caddy
+    env.tmpl             # legacy .env template
     Caddyfile.tmpl       # Caddy reverse proxy config
     tokenpanel.service   # systemd unit template
   VERSION                # manager version (semver)
@@ -51,7 +58,8 @@ tokenpanel status       # container state, version, disk usage
 tokenpanel start        # preflight + up + health + post migrations
 tokenpanel stop         # stop all services
 tokenpanel restart      # stop + start
-tokenpanel update       # 6-phase safe update (pre → swap → post)
+tokenpanel update       # safe update: backup → build → config render → pre → swap → post
+tokenpanel config       # operator config management (status|render|check|migrate)
 tokenpanel backup       # write-quiet mongodump (stops api briefly for consistent snapshot)
 tokenpanel restore <f>  # restore from backup
 tokenpanel migrate      # run pending migrations (default phase: pre)
@@ -63,3 +71,28 @@ tokenpanel destroy      # remove containers (keeps data)
 tokenpanel reset        # WIPE everything (strong confirm)
 tokenpanel version      # manager + app versions
 ```
+
+## Configuration
+
+The only file operators should edit is:
+
+```bash
+/etc/tokenpanel/tokenpanel.yml
+```
+
+Generated deployment artifacts are written to:
+
+```bash
+/etc/tokenpanel/generated/
+```
+
+Do not edit generated files. After changing `tokenpanel.yml`:
+
+```bash
+tokenpanel config render
+tokenpanel restart
+```
+
+`tokenpanel update` renders configuration automatically from the target release.
+Rollback restores the previous generated configuration snapshot from
+`/etc/tokenpanel/snapshots/`.

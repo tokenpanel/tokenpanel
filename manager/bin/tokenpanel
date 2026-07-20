@@ -56,6 +56,9 @@ Updates:
   update       Update to latest stable (backup → build → migrate → swap)
   migrate      Run pending migrations without updating image (default: pre)
 
+Config:
+  config       Manage operator config (status|render|check|migrate)
+
 Backup:
   backup       Create a mongodump backup
   restore <f>  Restore from a backup archive
@@ -367,6 +370,7 @@ cmd_update() {
   source "${SCRIPT_DIR}/../lib/build.sh"
   source "${SCRIPT_DIR}/../lib/migrate.sh"
   source "${SCRIPT_DIR}/../lib/rollback.sh"
+  source "${SCRIPT_DIR}/../lib/config_render.sh"
 
   # Hold lock for the full update (backup → build → migrate → swap → post).
   # create_backup re-acquires re-entrantly and will not self-deadlock.
@@ -381,7 +385,7 @@ cmd_update() {
   echo
 
   # ── Phase 1: PREFLIGHT ──
-  step "1/6" "preflight checks..."
+  step "1/7" "preflight checks..."
   preflight_full || die "preflight failed — aborting (nothing changed)"
 
   local current_version
@@ -425,24 +429,28 @@ cmd_update() {
   fi
 
   # ── Phase 2: BACKUP ──
-  step "2/6" "creating backup..."
+  step "2/7" "creating backup..."
   local backup_file
   backup_file="$(create_backup "pre-update")" \
     || die "backup failed — aborting (app unchanged; manager refreshed)"
   ok "backup ready: $(basename "$backup_file")"
 
   # ── Phase 3: BUILD ──
-  step "3/6" "building new image..."
+  step "3/7" "building new image..."
   build_update_image || die "build failed — aborting (old container still serving, backup available)"
   ok "new image built and tagged"
 
-  # ── Phase 4: PRE-MIGRATE ──
-  # Discourse-style: apply every pending pre/ migration from the NEW image
-  # (tokenpanel/app:${NEW_IMAGE_TAG}) in a one-shot container — the old
-  # container keeps serving but lacks the new migration files, so we must NOT
-  # exec into it. Same compose network/env as the live api; mongo is untouched.
-  # Already-applied migrations are skipped via `_migrations` (id + checksum).
-  step "4/6" "running pre-deploy migrations from new image (old container still serving)..."
+  # ── Phase 4: CONFIG RECONCILE ──
+  step "4/7" "reconciling configuration with target release..."
+  ensure_operator_config "$NEW_IMAGE_TAG" \
+    || die "operator config migration failed — old container still serving"
+  snapshot_config >/dev/null || die "could not snapshot current config"
+  render_config_from_image "$NEW_IMAGE_TAG" "$target_version" \
+    || die "config render failed — old container still serving; snapshot available"
+  ok "configuration rendered to $GENERATED_DIR"
+
+  # ── Phase 5: PRE-MIGRATE ──
+  step "5/7" "running pre-deploy migrations from new image (old container still serving)..."
   run_migrations_image "pre" "$NEW_IMAGE_TAG" || die "pre-migration failed — aborting (old container serving, db rolled back per-txn, backup available)"
   ok "pre-deploy migrations applied (from tokenpanel/app:${NEW_IMAGE_TAG})"
 
@@ -450,17 +458,13 @@ cmd_update() {
   # leaves current pointing at the known-good image for starts/reboots.
   promote_new_image_current || die "could not promote new image — aborting (old container serving)"
 
-  # ── Phase 5: SWAP ──
-  step "5/6" "swapping to new container..."
+  # ── Phase 6: SWAP ──
+  step "6/7" "swapping to new container..."
   swap_containers || die "swap failed — see rollback output above"
   ok "new container is live and healthy"
 
-  # ── Phase 6: POST-MIGRATE ──
-  # Always run post/ after a successful swap. There is no env-var gate: if this
-  # release ships no new post files, the runner reports 0 applied / N skipped.
-  # If a post migration fails, the new code is already live — restore from the
-  # Phase 2 backup if the data rewrite is unsafe to leave half-applied.
-  step "6/6" "running post-deploy migrations..."
+  # ── Phase 7: POST-MIGRATE ──
+  step "7/7" "running post-deploy migrations..."
   run_migrations "post" || {
     err "post-migration failed!"
     err "new code is live but some destructive migrations may not have applied."
@@ -488,6 +492,45 @@ cmd_update() {
   ok "══════════════════════════════════════"
 }
 
+cmd_config() {
+  source "${SCRIPT_DIR}/../lib/config_render.sh"
+  local sub="${1:-status}"
+  [ "$#" -gt 0 ] && shift
+  local image_tag="${1:-current}"
+
+  case "$sub" in
+    status)
+      info "operator config: $OPERATOR_CONFIG"
+      [ -f "$OPERATOR_CONFIG" ] && ok "operator config exists" || warn "operator config missing"
+      info "active compose: $APP_YML"
+      info "active env: $ENV_FILE"
+      if [ -d "$GENERATED_DIR" ]; then
+        ok "generated config: $GENERATED_DIR"
+      else
+        warn "no generated config yet (run: tokenpanel config render)"
+      fi
+      ;;
+    render)
+      acquire_manager_lock "config-render" || die "could not acquire manager lock"
+      ensure_operator_config "$image_tag" || die "operator config migration failed"
+      snapshot_config >/dev/null || die "could not snapshot config"
+      render_config_from_image "$image_tag" || die "config render failed"
+      ok "config rendered"
+      ;;
+    check)
+      check_operator_config "$image_tag" || die "config check failed"
+      ;;
+    migrate)
+      ensure_operator_config "$image_tag" || die "legacy config migration failed"
+      ok "operator config present at $OPERATOR_CONFIG"
+      ;;
+    *)
+      err "usage: tokenpanel config [status|render|check|migrate] [image-tag]"
+      exit 1
+      ;;
+  esac
+}
+
 case "${1:-}" in
   status)   cmd_status ;;
   start)    cmd_start ;;
@@ -500,6 +543,7 @@ case "${1:-}" in
   enter)    shift; cmd_enter "$@" ;;
   doctor)   cmd_doctor ;;
   version)  cmd_version ;;
+  config)   shift; cmd_config "$@" ;;
   update)   shift; cmd_update "$@" ;;
   backup)   source "${SCRIPT_DIR}/../lib/backup.sh"; create_backup "manual" ;;
   restore)  source "${SCRIPT_DIR}/../lib/backup.sh"; restore_backup "${2:-}" ;;

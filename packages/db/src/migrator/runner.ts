@@ -63,10 +63,15 @@ export async function executeMigration(
   });
 }
 
+export interface RunMigrationsOptions {
+  readonly root?: string;
+}
+
 export async function runMigrations(
   client: MongoClient,
   db: Db,
   phase: MigrationPhase,
+  options?: RunMigrationsOptions,
 ): Promise<MigrationReport> {
   const report: MigrationReport = {
     phase,
@@ -86,7 +91,7 @@ export async function runMigrations(
       applied.map((a) => [a._id, a.checksum]),
     );
 
-    const files = (await loadMigrationTree())[phase];
+    const files = (await loadMigrationTree(options?.root))[phase];
 
     for (const m of files) {
       // Abort before starting the next migration if the heartbeat lost the

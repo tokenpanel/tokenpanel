@@ -6,6 +6,8 @@
  * hash). Provider credential encryption depends on those exact bytes.
  */
 
+import { MIN_JWT_SECRET_LEN as CONFIG_MIN_JWT_SECRET_LEN, OPERATIONAL_DEFAULTS } from "@tokenpanel/config";
+
 export type ApiEnvironment = "development" | "test" | "production";
 
 /**
@@ -59,14 +61,13 @@ export type ApiOperationalConfig = Readonly<{
 
 /** Documented operational defaults (single source for parse + tests). */
 export const DEFAULT_OPERATIONAL_CONFIG: ApiOperationalConfig = Object.freeze({
-  settlementReconcileIntervalMs: 15_000,
-  settlementReconcileBatchSizeCount: 20,
-  settlementReconcileInitialDelayMs: 3_000,
-  /** 2 min — protects hung upstreams; set 0 to disable; per-provider override available. */
-  providerHttpTimeoutMs: 120_000,
-  catalogCacheTtlMs: 10 * 60 * 1000,
-  workerConcurrencyCount: 1,
-  shutdownTimeoutMs: 10_000,
+  settlementReconcileIntervalMs: OPERATIONAL_DEFAULTS.settlementReconcileIntervalMs,
+  settlementReconcileBatchSizeCount: OPERATIONAL_DEFAULTS.settlementReconcileBatchSizeCount,
+  settlementReconcileInitialDelayMs: OPERATIONAL_DEFAULTS.settlementReconcileInitialDelayMs,
+  providerHttpTimeoutMs: OPERATIONAL_DEFAULTS.providerHttpTimeoutMs,
+  catalogCacheTtlMs: OPERATIONAL_DEFAULTS.catalogCacheTtlMs,
+  workerConcurrencyCount: OPERATIONAL_DEFAULTS.workerConcurrencyCount,
+  shutdownTimeoutMs: OPERATIONAL_DEFAULTS.shutdownTimeoutMs,
 });
 
 export type ApiRuntimeConfig = Readonly<{
@@ -140,7 +141,7 @@ const PRODUCTION_REJECTED_SECRET_PREFIXES = [
   "todo_secret",
 ] as const;
 
-const MIN_JWT_SECRET_LEN = 32;
+const MIN_JWT_SECRET_LEN = CONFIG_MIN_JWT_SECRET_LEN;
 
 function isNonBlank(value: string | undefined): value is string {
   return typeof value === "string" && value.length > 0;

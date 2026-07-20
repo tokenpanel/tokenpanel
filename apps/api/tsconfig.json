@@ -5,6 +5,7 @@
     "types": ["bun"],
     "jsx": "preserve",
     "paths": {
+      "@tokenpanel/config": ["../../packages/config/src/index.ts"],
       "@tokenpanel/contracts": ["../../packages/contracts/src/index.ts"],
       "@tokenpanel/contracts/effect": ["../../packages/contracts/src/effect/index.ts"],
       "@tokenpanel/contracts/*": ["../../packages/contracts/src/*"],

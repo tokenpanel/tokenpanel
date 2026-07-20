@@ -34,13 +34,22 @@ DATA_DIR="${TOKENPANEL_DATA_DIR:-/var/tokenpanel/shared}"
 LOG_DIR="${TOKENPANEL_LOG_DIR:-/var/tokenpanel/logs}"
 BACKUP_DIR="${DATA_DIR}/backups"
 
-APP_YML="${CONFIG_DIR}/app.yml"
-ENV_FILE="${CONFIG_DIR}/.env"
+GENERATED_DIR="${CONFIG_DIR}/generated"
+OPERATOR_CONFIG="${CONFIG_DIR}/tokenpanel.yml"
+CONFIG_SNAPSHOT_DIR="${CONFIG_DIR}/snapshots"
 TEMPLATE_DIR="${MANAGER_DIR}/templates"
 
-# Keys that may legally appear in .env and be exported into the manager's
-# environment. Anything else in .env is silently ignored — this prevents
-# arbitrary command execution from a tampered .env (which is sourced as root).
+tp_select_active_config() {
+  if [ -f "${GENERATED_DIR}/compose.yml" ]; then
+    APP_YML="${GENERATED_DIR}/compose.yml"
+    ENV_FILE="${GENERATED_DIR}/manager.env"
+  else
+    APP_YML="${CONFIG_DIR}/app.yml"
+    ENV_FILE="${CONFIG_DIR}/.env"
+  fi
+}
+tp_select_active_config
+
 ALLOWED_ENV_KEYS=(
   MONGO_USER MONGO_PASS MONGO_USER_URI MONGO_PASS_URI
   MONGODB_DB DOMAIN ADMIN_EMAIL JWT_SECRET TZ API_PORT
@@ -48,6 +57,29 @@ ALLOWED_ENV_KEYS=(
   TRUST_PROXY TRUST_CLOUDFLARE TRUSTED_PROXIES
   SMTP_HOST SMTP_PORT SMTP_USER SMTP_PASS SMTP_FROM
 )
+
+tp_load_allowed_env_keys() {
+  local key_file=""
+  if [ -f "${GENERATED_DIR}/allowed-env-keys.txt" ]; then
+    key_file="${GENERATED_DIR}/allowed-env-keys.txt"
+  elif [ -f "${MANAGER_DIR}/release/allowed-env-keys.txt" ]; then
+    key_file="${MANAGER_DIR}/release/allowed-env-keys.txt"
+  fi
+  [ -n "$key_file" ] || return 0
+  local keys=()
+  local line
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in '' | \#*) continue ;; esac
+    case "$line" in
+      *[!A-Za-z0-9_]*) continue ;;
+    esac
+    keys+=("$line")
+  done < "$key_file"
+  if [ "${#keys[@]}" -gt 0 ]; then
+    ALLOWED_ENV_KEYS=("${keys[@]}")
+  fi
+}
+tp_load_allowed_env_keys
 
 # Parse .env as strict KEY=VALUE lines and export only allowlisted keys.
 # Never `source` .env — a malicious value like $(rm -rf /) would execute.

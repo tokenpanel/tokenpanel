@@ -122,6 +122,52 @@ tokenpanel update
 tokenpanel logs -f
 ```
 
+## Production Configuration
+
+TokenPanel uses one operator-edited config file:
+
+```bash
+/etc/tokenpanel/tokenpanel.yml
+```
+
+Example:
+
+```yaml
+domain: panel.example.com
+adminEmail: admin@example.com
+timezone: UTC
+
+proxy:
+  mode: caddy
+  trustProxy: true
+  trustCloudflare: false
+
+database:
+  user: tokenpanel
+  password: change-me
+  name: tokenpanel
+
+api:
+  jwtSecret: change-me-to-a-long-random-secret
+```
+
+After editing it, apply the change:
+
+```bash
+tokenpanel config render
+tokenpanel restart
+```
+
+During updates, `tokenpanel update` re-renders configuration automatically.
+
+Generated deployment files live in:
+
+```bash
+/etc/tokenpanel/generated/
+```
+
+Do not edit generated files. Edit `tokenpanel.yml` instead.
+
 ## Use The API
 
 Create a customer and API key in the dashboard, then point OpenAI-compatible clients at your TokenPanel domain:

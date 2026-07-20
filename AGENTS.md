@@ -24,19 +24,23 @@ apps/
   admin/      @tokenpanel/admin   Vite + React admin panel
 packages/
   contracts/  @tokenpanel/contracts  Browser-safe shared product contracts (Effect Schema)
+  config/     @tokenpanel/config  Runtime/deploy config registry, renderer, release policy
   db/         @tokenpanel/db      MongoDB driver + Effect Schema schemas
+manager/
+  release/                        generated release manifest + bash-safe config fragments
 tsconfig.base.json                shared TS config
 turbo.json                       task pipeline (build/dev/lint/typecheck/clean)
 ```
 
 ### Conventions
 
-- Workspace package names are scoped: `@tokenpanel/{api,admin,db,contracts}`.
-- Cross-package imports use `workspace:*` in `package.json` and path aliases in `tsconfig.json` (`@tokenpanel/db`, `@tokenpanel/contracts`).
+- Workspace package names are scoped: `@tokenpanel/{api,admin,db,contracts,config}`.
+- Cross-package imports use `workspace:*` in `package.json` and path aliases in `tsconfig.json` (`@tokenpanel/db`, `@tokenpanel/contracts`, `@tokenpanel/config`).
+- **`@tokenpanel/config`** is the single source of truth for runtime/deploy config keys (`packages/config/src/fields.ts`). Never add env vars or operator settings manually to templates, `.env.example`, manager allowlists, or preflight lists. Add the field definition, then run `bun run config:generate`. Generated files under `manager/release/` must be committed.
 - **`@tokenpanel/contracts`**: pure TypeScript/Effect Schema product contracts (model modality/status/metadata policy, management scopes). No env, I/O, Node, Mongo, or UI. Admin may import it; never import `@tokenpanel/db` into admin. Migrations must not import live contracts (keep frozen snapshots).
 - DB schemas live in `packages/db/src/schemas/*.ts`. Each domain exports `…Doc` (stored shape, with `_id`, `createdAt`, `updatedAt`) and `…CreateInput` (input shape, ObjectId as string → coerced). Use `getDb()` to get a `TypedDb` whose collections are already typed; never call `db.collection("string")` directly outside `packages/db`. Call `configureDb({ uri, databaseName })` before `getDb()` from executables (API boot, migrator CLI).
 - Money is stored as integer units (`amountUnits`) + ISO currency code, never floats.
-- Env: Bun auto-loads `.env`; no dotenv import. API parses once via `parseApiRuntimeConfig` (`apps/api/src/config/runtime.ts`). Required: `JWT_SECRET`, `MONGODB_URI`; optional `MONGODB_DB` (default `tokenpanel`), `PORT`, `CORS_ORIGINS`, `NODE_ENV`. See `.env.example`.
+- Env/config: Bun auto-loads `.env` for local dev; no dotenv import. API parses once via `parseApiRuntimeConfig` (`apps/api/src/config/runtime.ts`). Production deployments use operator config `/etc/tokenpanel/tokenpanel.yml`; `tokenpanel-setup` and `tokenpanel update` render `/etc/tokenpanel/generated/{compose.yml,.env,manager.env,Caddyfile,release.json}` from the target release. Legacy `/etc/tokenpanel/.env` is auto-migrated to `tokenpanel.yml`. Required API config still includes `JWT_SECRET` and a MongoDB URI (generated from `database.*` unless overridden).
 - API fail-fast: server exits if config invalid or MongoDB is unreachable on boot.
 - **Migrations**: ordered, timestamped migration files in `packages/db/migrations/{pre,post}/`.
   Discourse-style deploy flow (manager `tokenpanel update`):
@@ -79,6 +83,9 @@ bun run dev                 # turbo dev (api + admin in parallel; needs local mo
 bun run build               # turbo build (respects ^build deps)
 bun run typecheck           # turbo typecheck
 bun run lint                # turbo lint
+bun run config:generate     # regenerate manager/release manifest fragments
+bun run release:check       # config manifest + policy + DB schema snapshot checks
+bun run schema:snapshot     # refresh DB schema snapshot after intentional schema changes
 bun --filter @tokenpanel/api dev    # run one workspace's dev
 ```
 
@@ -119,11 +126,13 @@ bun run docker:ps       # container status
 after Discourse's `discourse_docker`). Installed to `/opt/tokenpanel` via curl
 installer. All scripts are bash (no node/bun dependency for the manager itself).
 
-- `manager/bin/tokenpanel` — operator CLI (status, start, stop, update, backup, etc.)
+- `manager/bin/tokenpanel` — operator CLI (status, start, stop, update, config, backup, etc.)
 - `manager/bin/tokenpanel-setup` — interactive installer wizard
-- `manager/lib/*.sh` — shared library (config, output, preflight, health, backup, etc.)
+- `manager/lib/*.sh` — shared library (config, output, preflight, health, backup, config_render, etc.)
 - `manager/templates/*.tmpl` — parameterized compose/Caddyfile/systemd templates
-- Config: `/etc/tokenpanel/` (app.yml + .env), Data: `/var/tokenpanel/shared/`
+- `manager/release/` — generated release manifest (`manifest.json`) and bash-safe fragments (`manifest.env`, `defaults.env`, `allowed-env-keys.txt`)
+- Operator config: `/etc/tokenpanel/tokenpanel.yml`; generated deployment config: `/etc/tokenpanel/generated/`; snapshots: `/etc/tokenpanel/snapshots/`; data: `/var/tokenpanel/shared/`
+- `tokenpanel update` reconciles config from the target image before pre-migrations/swap: migrate legacy `.env` if needed, snapshot current config, render target templates, then use the generated compose. Rollback restores the previous config snapshot and image.
 - Build on host (git clone + docker build) for future plugin support.
 
 ### Upgrade Compatibility (Hard Rule)
@@ -146,6 +155,40 @@ installer. All scripts are bash (no node/bun dependency for the manager itself).
   supported release to current, including backup restart, failed-swap rollback,
   missing new capabilities (404/unknown command/missing env), and retry after
   each phase fails. A fix available only after the failing phase is not a fix.
+
+## Development Process (Automated Release Safety)
+
+Manual release steps fail. Prefer generated artifacts and policy checks.
+
+### Adding or changing config
+
+1. Edit `packages/config/src/fields.ts`.
+2. Run `bun run config:generate`.
+3. Commit the code change and the regenerated `manager/release/` files together.
+4. Run `bun run config:policy` (CI also runs it against `origin/main`).
+
+Policy rules enforced by `@tokenpanel/config`:
+- New required config must have a default or be introduced as optional first.
+- Removing a config key requires `deprecatedSince` in a prior release.
+- Changing kind or secret flag is treated as a breaking change.
+- Default/validation changes produce warnings because existing installs may break.
+
+### Adding or changing DB schemas
+
+1. Change Effect Schemas under `packages/db/src/schemas/`.
+2. Run `bun run schema:check`. If drift is detected, create the needed migration:
+   `bun run --filter @tokenpanel/db db:new-migration`.
+3. Run `bun run schema:snapshot` and commit the updated
+   `packages/db/generated/schema-snapshot.json` with the schema/migration change.
+
+### Release readiness
+
+Run `bun run release:check` before pushing. It verifies:
+- generated config manifest fragments are up to date
+- config policy passes
+- DB schema snapshot is up to date
+
+CI runs typecheck, lint, unit tests, manager tests, and release checks on every commit/PR.
 
 ## Non-Interactive Shell Commands
 

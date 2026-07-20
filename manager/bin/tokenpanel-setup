@@ -165,13 +165,19 @@ validate_env_value() {
   local leftover
   leftover="$(printf '%s' "$val" | LC_ALL=C tr -d 'A-Za-z0-9!@%^&*()_+=,./:;<>?~-')"
   if [ -n "$leftover" ]; then
-    err "$name contains characters that are unsafe in .env:"
+    err "$name contains characters that are unsafe for config values:"
     err "  disallowed: spaces, #, \$, quotes, backslash, backtick, and other specials"
     err "  allowed:    letters, digits, and !@%^&*()-_=+.,:/~;<>?"
     err "  (leave the secret blank to auto-generate a safe value)"
     return 1
   fi
   return 0
+}
+
+yaml_quote() {
+  local raw="${1:-}"
+  raw="${raw//\'/\'\'}"
+  printf "'%s'" "$raw"
 }
 
 prompt_yn() {
@@ -376,7 +382,7 @@ if [ "$TRUST_PROXY_YN" = "y" ]; then
     info "  (CF-Connecting-IP when peer is Cloudflare, else TCP remote)."
   fi
   info "  Trusted peers default to private/loopback CIDRs (Docker-safe)."
-  info "  Override later in ${ENV_FILE}: TRUSTED_PROXIES=..."
+  info "  Override later in ${OPERATOR_CONFIG} under proxy.trustedProxies"
 else
   TRUST_CLOUDFLARE="false"
   info "  Using TCP peer IP only (headers ignored)."
@@ -396,12 +402,12 @@ if [ -z "$MONGO_PASS_PROMPT" ]; then
     info "  keeping existing Mongo password"
   else
     MONGO_PASS="$(generate_secret 24)"
-    info "  generated Mongo password (saved to ${ENV_FILE})"
+    info "  generated Mongo password (saved to ${OPERATOR_CONFIG})"
     SHOW_MONGO_PASS="$(prompt_yn '  Display the generated password now?' 'n')"
     if [ "$SHOW_MONGO_PASS" = "y" ]; then
       echo "  Mongo password: ${MONGO_PASS}"
     else
-      info "  (kept hidden — view later: sudo cat ${ENV_FILE})"
+      info "  (kept hidden — view later: sudo cat ${OPERATOR_CONFIG})"
     fi
   fi
 else
@@ -424,7 +430,7 @@ if [ -z "$JWT_SECRET_PROMPT" ]; then
     info "  keeping existing JWT secret"
   else
     JWT_SECRET="$(generate_secret 48)"
-    info "  generated (48 bytes, saved to ${ENV_FILE})"
+    info "  generated (48 bytes, saved to ${OPERATOR_CONFIG})"
   fi
 else
   JWT_SECRET="$JWT_SECRET_PROMPT"
@@ -479,14 +485,14 @@ for var in DOMAIN ADMIN_EMAIL MONGO_USER MONGO_PASS MONGODB_DB JWT_SECRET; do
   val="${!var:-}"
   [ -n "$val" ] || die "$var is required and must not be empty"
   validate_env_value "$val" "$var" \
-    || die "aborting: unsafe characters in $var (see .env rules above)"
+    || die "aborting: unsafe characters in $var (see allowed characters above)"
 done
 # SMTP values are optional but, if configured, are written raw into .env too.
 if [ "${USE_SMTP:-n}" = "y" ]; then
   for var in SMTP_HOST SMTP_PORT SMTP_USER SMTP_PASS SMTP_FROM; do
     val="${!var:-}"
     validate_env_value "$val" "$var" \
-      || die "aborting: unsafe characters in $var (see .env rules above)"
+      || die "aborting: unsafe characters in $var (see allowed characters above)"
   done
 fi
 # ── Render config ──
@@ -496,11 +502,54 @@ umask 077
 
 mkdir -p "$CONFIG_DIR" "$DATA_DIR/mongo" "$DATA_DIR/caddy" "$DATA_DIR/backups" "$LOG_DIR"
 
+APP_YML="${CONFIG_DIR}/app.yml"
+ENV_FILE="${CONFIG_DIR}/.env"
+
 # Backup existing config
 if [ -f "$ENV_FILE" ]; then
   cp -f "$ENV_FILE" "${ENV_FILE}.bak.$(date +%s)"
   info "backed up existing .env"
 fi
+if [ -f "$APP_YML" ]; then
+  cp -f "$APP_YML" "${APP_YML}.bak.$(date +%s)"
+  info "backed up existing app.yml"
+fi
+if [ -f "$OPERATOR_CONFIG" ]; then
+  cp -f "$OPERATOR_CONFIG" "${OPERATOR_CONFIG}.bak.$(date +%s)"
+  info "backed up existing tokenpanel.yml"
+fi
+
+{
+  echo "version: 1"
+  echo "domain: $(yaml_quote "$DOMAIN")"
+  echo "adminEmail: $(yaml_quote "$ADMIN_EMAIL")"
+  echo "timezone: $(yaml_quote "$TIMEZONE")"
+  echo "proxy:"
+  if [ "$USE_CADDY" = "y" ]; then
+    echo "  mode: caddy"
+  else
+    echo "  mode: direct"
+    echo "  apiPort: ${API_PORT}"
+  fi
+  echo "  trustProxy: ${TRUST_PROXY}"
+  echo "  trustCloudflare: ${TRUST_CLOUDFLARE}"
+  echo "database:"
+  echo "  user: $(yaml_quote "$MONGO_USER")"
+  echo "  password: $(yaml_quote "$MONGO_PASS")"
+  echo "  name: $(yaml_quote "$MONGODB_DB")"
+  echo "api:"
+  echo "  jwtSecret: $(yaml_quote "$JWT_SECRET")"
+  if [ "${USE_SMTP:-n}" = "y" ]; then
+    echo "smtp:"
+    echo "  host: $(yaml_quote "${SMTP_HOST:-}")"
+    echo "  port: ${SMTP_PORT:-587}"
+    echo "  user: $(yaml_quote "${SMTP_USER:-}")"
+    echo "  pass: $(yaml_quote "${SMTP_PASS:-}")"
+    echo "  from: $(yaml_quote "${SMTP_FROM:-}")"
+  fi
+} > "$OPERATOR_CONFIG"
+chmod 600 "$OPERATOR_CONFIG"
+ok "operator config written to ${OPERATOR_CONFIG}"
 
 # Export all variables for envsubst (env.tmpl expands everything — it's the
 # .env file itself, so secrets belong here).
@@ -515,7 +564,7 @@ if [ -n "$SMTP_BLOCK" ]; then
   echo "$SMTP_BLOCK" >> "$ENV_FILE"
 fi
 chmod 600 "$ENV_FILE"
-ok ".env written to ${ENV_FILE}"
+ok "bootstrap config written to ${ENV_FILE}"
 
 # Render app.yml. Whitelist envsubst to ONLY expand structural path vars
 # (DATA_DIR, CONFIG_DIR). Secrets (MONGO_USER, MONGO_PASS, etc.) are left as
@@ -572,6 +621,11 @@ source "${SCRIPT_DIR}/../lib/build.sh"
 build_current_checkout_image || die "docker build failed — check Dockerfile and code"
 promote_new_image_current || die "could not promote built image"
 
+source "${SCRIPT_DIR}/../lib/config_render.sh"
+render_config_from_image "$NEW_IMAGE_TAG" || die "config render failed — legacy config still present"
+rm -f "${CONFIG_DIR}/app.yml" "${CONFIG_DIR}/Caddyfile" "${CONFIG_DIR}/.env"
+ok "generated deployment config from ${OPERATOR_CONFIG}"
+
 step "5/5" "starting app..."
 docker compose -f "$APP_YML" up -d
 wait_for_health api 60 || die "api did not become healthy"
@@ -616,6 +670,7 @@ cat <<EOF
 ║  URL:      ${local_scheme}://${DOMAIN}${local_port}$(printf '%*s' $((20 - ${#DOMAIN} - ${#local_port})) '')║
 ║  Signup:   ${local_scheme}://${DOMAIN}${local_port}$(printf '%*s' $((20 - ${#DOMAIN} - ${#local_port})) '')║
 ║                                            ║
+║  Config:   ${CONFIG_DIR}/tokenpanel.yml$(printf '%*s' $((20 - ${#CONFIG_DIR} - 14)) '')║
 ║  Manage:   tokenpanel status               ║
 ║            tokenpanel update               ║
 ║            tokenpanel backup               ║

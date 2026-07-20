@@ -1,0 +1,370 @@
+{
+  "schema": 1,
+  "minManagerVersion": "0.1.0",
+  "fields": [
+    {
+      "key": "ADMIN_EMAIL",
+      "kind": "email",
+      "scope": "deploy",
+      "required": true,
+      "secret": false,
+      "derived": false,
+      "yamlPath": "adminEmail"
+    },
+    {
+      "key": "ALLOW_WEAK_JWT_SECRET",
+      "kind": "boolean",
+      "scope": "api",
+      "required": false,
+      "secret": false,
+      "derived": false,
+      "yamlPath": "api.allowWeakJwtSecret",
+      "default": false
+    },
+    {
+      "key": "API_PORT",
+      "kind": "integer",
+      "scope": "deploy",
+      "required": false,
+      "secret": false,
+      "derived": false,
+      "yamlPath": "proxy.apiPort",
+      "default": 3000,
+      "validation": {
+        "min": 1,
+        "max": 65535
+      }
+    },
+    {
+      "key": "CATALOG_CACHE_TTL_MS",
+      "kind": "integer",
+      "scope": "api",
+      "required": false,
+      "secret": false,
+      "derived": false,
+      "yamlPath": "api.operational.catalogCacheTtlMs",
+      "default": 600000,
+      "runtimeKey": "catalogCacheTtlMs",
+      "validation": {
+        "min": 0,
+        "max": 86400000
+      }
+    },
+    {
+      "key": "CORS_ORIGINS",
+      "kind": "originList",
+      "scope": "api",
+      "required": false,
+      "secret": false,
+      "derived": false,
+      "yamlPath": "api.corsOrigins",
+      "default": []
+    },
+    {
+      "key": "CSP_CONNECT_SRC",
+      "kind": "stringList",
+      "scope": "deploy",
+      "required": false,
+      "secret": false,
+      "derived": false,
+      "yamlPath": "csp.connectSrc"
+    },
+    {
+      "key": "DOMAIN",
+      "kind": "domain",
+      "scope": "deploy",
+      "required": true,
+      "secret": false,
+      "derived": false,
+      "yamlPath": "domain"
+    },
+    {
+      "key": "JWT_SECRET",
+      "kind": "secret",
+      "scope": "api",
+      "required": true,
+      "secret": true,
+      "derived": false,
+      "yamlPath": "api.jwtSecret",
+      "validation": {
+        "minLength": 32
+      }
+    },
+    {
+      "key": "MONGO_PASS",
+      "kind": "secret",
+      "scope": "deploy",
+      "required": true,
+      "secret": true,
+      "derived": false,
+      "yamlPath": "database.password"
+    },
+    {
+      "key": "MONGO_PASS_URI",
+      "kind": "secret",
+      "scope": "deploy",
+      "required": false,
+      "secret": true,
+      "derived": true
+    },
+    {
+      "key": "MONGO_USER",
+      "kind": "string",
+      "scope": "deploy",
+      "required": true,
+      "secret": false,
+      "derived": false,
+      "yamlPath": "database.user"
+    },
+    {
+      "key": "MONGO_USER_URI",
+      "kind": "string",
+      "scope": "deploy",
+      "required": false,
+      "secret": false,
+      "derived": true
+    },
+    {
+      "key": "MONGODB_DB",
+      "kind": "mongoDbName",
+      "scope": "shared",
+      "required": false,
+      "secret": false,
+      "derived": false,
+      "yamlPath": "database.name",
+      "default": "tokenpanel",
+      "validation": {
+        "maxLength": 63,
+        "pattern": "^[A-Za-z0-9_-]+$"
+      }
+    },
+    {
+      "key": "MONGODB_URI",
+      "kind": "mongoUri",
+      "scope": "api",
+      "required": false,
+      "secret": false,
+      "derived": true,
+      "yamlPath": "database.uri"
+    },
+    {
+      "key": "NODE_ENV",
+      "kind": "environment",
+      "scope": "api",
+      "required": false,
+      "secret": false,
+      "derived": false,
+      "yamlPath": "api.environment",
+      "default": "production",
+      "validation": {
+        "choices": [
+          "development",
+          "test",
+          "production"
+        ]
+      }
+    },
+    {
+      "key": "PORT",
+      "kind": "integer",
+      "scope": "api",
+      "required": false,
+      "secret": false,
+      "derived": false,
+      "yamlPath": "api.port",
+      "default": 3000,
+      "validation": {
+        "min": 1,
+        "max": 65535
+      }
+    },
+    {
+      "key": "PROVIDER_HTTP_TIMEOUT_MS",
+      "kind": "integer",
+      "scope": "api",
+      "required": false,
+      "secret": false,
+      "derived": false,
+      "yamlPath": "api.operational.providerHttpTimeoutMs",
+      "default": 120000,
+      "runtimeKey": "providerHttpTimeoutMs",
+      "validation": {
+        "min": 0,
+        "max": 3600000
+      }
+    },
+    {
+      "key": "SETTLEMENT_RECONCILE_BATCH_SIZE",
+      "kind": "integer",
+      "scope": "api",
+      "required": false,
+      "secret": false,
+      "derived": false,
+      "yamlPath": "api.operational.settlementReconcileBatchSizeCount",
+      "default": 20,
+      "runtimeKey": "settlementReconcileBatchSizeCount",
+      "validation": {
+        "min": 1,
+        "max": 10000
+      }
+    },
+    {
+      "key": "SETTLEMENT_RECONCILE_INITIAL_DELAY_MS",
+      "kind": "integer",
+      "scope": "api",
+      "required": false,
+      "secret": false,
+      "derived": false,
+      "yamlPath": "api.operational.settlementReconcileInitialDelayMs",
+      "default": 3000,
+      "runtimeKey": "settlementReconcileInitialDelayMs",
+      "validation": {
+        "min": 0,
+        "max": 86400000
+      }
+    },
+    {
+      "key": "SETTLEMENT_RECONCILE_INTERVAL_MS",
+      "kind": "integer",
+      "scope": "api",
+      "required": false,
+      "secret": false,
+      "derived": false,
+      "yamlPath": "api.operational.settlementReconcileIntervalMs",
+      "default": 15000,
+      "runtimeKey": "settlementReconcileIntervalMs",
+      "validation": {
+        "min": 0,
+        "max": 86400000
+      }
+    },
+    {
+      "key": "SHUTDOWN_TIMEOUT_MS",
+      "kind": "integer",
+      "scope": "api",
+      "required": false,
+      "secret": false,
+      "derived": false,
+      "yamlPath": "api.operational.shutdownTimeoutMs",
+      "default": 10000,
+      "runtimeKey": "shutdownTimeoutMs",
+      "validation": {
+        "min": 0,
+        "max": 600000
+      }
+    },
+    {
+      "key": "SMTP_FROM",
+      "kind": "string",
+      "scope": "deploy",
+      "required": false,
+      "secret": false,
+      "derived": false,
+      "yamlPath": "smtp.from"
+    },
+    {
+      "key": "SMTP_HOST",
+      "kind": "string",
+      "scope": "deploy",
+      "required": false,
+      "secret": false,
+      "derived": false,
+      "yamlPath": "smtp.host"
+    },
+    {
+      "key": "SMTP_PASS",
+      "kind": "secret",
+      "scope": "deploy",
+      "required": false,
+      "secret": true,
+      "derived": false,
+      "yamlPath": "smtp.pass"
+    },
+    {
+      "key": "SMTP_PORT",
+      "kind": "integer",
+      "scope": "deploy",
+      "required": false,
+      "secret": false,
+      "derived": false,
+      "yamlPath": "smtp.port",
+      "validation": {
+        "min": 1,
+        "max": 65535
+      }
+    },
+    {
+      "key": "SMTP_USER",
+      "kind": "string",
+      "scope": "deploy",
+      "required": false,
+      "secret": false,
+      "derived": false,
+      "yamlPath": "smtp.user"
+    },
+    {
+      "key": "TRUST_CLOUDFLARE",
+      "kind": "boolean",
+      "scope": "shared",
+      "required": false,
+      "secret": false,
+      "derived": false,
+      "yamlPath": "proxy.trustCloudflare",
+      "default": false
+    },
+    {
+      "key": "TRUST_PROXY",
+      "kind": "boolean",
+      "scope": "shared",
+      "required": false,
+      "secret": false,
+      "derived": false,
+      "yamlPath": "proxy.trustProxy"
+    },
+    {
+      "key": "TRUSTED_PROXIES",
+      "kind": "proxyList",
+      "scope": "shared",
+      "required": false,
+      "secret": false,
+      "derived": false,
+      "yamlPath": "proxy.trustedProxies",
+      "default": []
+    },
+    {
+      "key": "TZ",
+      "kind": "timezone",
+      "scope": "deploy",
+      "required": false,
+      "secret": false,
+      "derived": false,
+      "yamlPath": "timezone",
+      "default": "UTC"
+    },
+    {
+      "key": "USE_CADDY",
+      "kind": "boolean",
+      "scope": "deploy",
+      "required": false,
+      "secret": false,
+      "derived": false,
+      "yamlPath": "proxy.caddy",
+      "default": "y"
+    },
+    {
+      "key": "WORKER_CONCURRENCY",
+      "kind": "integer",
+      "scope": "api",
+      "required": false,
+      "secret": false,
+      "derived": false,
+      "yamlPath": "api.operational.workerConcurrencyCount",
+      "default": 1,
+      "runtimeKey": "workerConcurrencyCount",
+      "validation": {
+        "min": 1,
+        "max": 256
+      }
+    }
+  ]
+}

@@ -62,6 +62,16 @@
         "@types/bun": "latest",
       },
     },
+    "packages/config": {
+      "name": "@tokenpanel/config",
+      "version": "0.0.0",
+      "dependencies": {
+        "yaml": "^2.6.1",
+      },
+      "devDependencies": {
+        "@types/bun": "latest",
+      },
+    },
     "packages/contracts": {
       "name": "@tokenpanel/contracts",
       "version": "0.0.0",
@@ -300,6 +310,8 @@
 
     "@tokenpanel/api": ["@tokenpanel/api@workspace:apps/api"],
 
+    "@tokenpanel/config": ["@tokenpanel/config@workspace:packages/config"],
+
     "@tokenpanel/contracts": ["@tokenpanel/contracts@workspace:packages/contracts"],
 
     "@tokenpanel/db": ["@tokenpanel/db@workspace:packages/db"],
@@ -477,6 +489,8 @@
     "webidl-conversions": ["webidl-conversions@7.0.0", "", {}, "sha512-VwddBukDzu71offAQR975unBIGqfKZpM+8ZX6ySk8nYhVoo5CYaZyzt3YBvYtRtO+aoGlqxPg/B87NGVZ/fu6g=="],
 
     "whatwg-url": ["whatwg-url@14.2.0", "", { "dependencies": { "tr46": "^5.1.0", "webidl-conversions": "^7.0.0" } }, "sha512-De72GdQZzNTUBBChsXueQUnPKDkg/5A5zp7pFDuQAj5UFoENpiACU0wlCvzpAGnTkj++ihpKwKyYewn/XNUbKw=="],
+
+    "yaml": ["yaml@2.9.0", "", { "bin": { "yaml": "bin.mjs" } }, "sha512-2AvhNX3mb8zd6Zy7INTtSpl1F15HW6Wnqj0srWlkKLcpYl/gMIMJiyuGq2KeI2YFxUPjdlB+3Lc10seMLtL4cA=="],
 
     "@tailwindcss/oxide-wasm32-wasi/@emnapi/core": ["@emnapi/core@1.11.1", "", { "dependencies": { "@emnapi/wasi-threads": "1.2.2", "tslib": "^2.4.0" }, "bundled": true }, "sha512-RSvbQmHzdKzNsLYa/wHrbc3KN4sYLKAdPZxqiM2HATqv/SBk2/ENSHpvXGaLOMcsAyz0poEGqkmmKYG3OWiJEQ=="],
 

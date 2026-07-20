@@ -1,0 +1,2591 @@
+{
+  "schema": 1,
+  "collections": {
+    "organizations": "organizations",
+    "users": "users",
+    "invites": "invites",
+    "adminSessions": "admin_sessions",
+    "customers": "customers",
+    "balanceAdjustments": "balance_adjustments",
+    "providers": "providers",
+    "modelCatalog": "model_catalog",
+    "models": "models",
+    "subscriptionPlans": "subscription_plans",
+    "subscriptions": "subscriptions",
+    "customerLimits": "customer_limits",
+    "budgets": "budgets",
+    "usageRecords": "usage_records",
+    "rateLimitCounters": "rate_limit_counters",
+    "apiKeys": "api_keys",
+    "managementApiKeys": "management_api_keys",
+    "settlementOutbox": "settlement_outbox"
+  },
+  "schemas": {
+    "adminSessionDoc": {
+      "kind": "struct",
+      "props": [
+        {
+          "name": "_id",
+          "optional": false,
+          "type": {
+            "kind": "declaration",
+            "id": "unknown"
+          }
+        },
+        {
+          "name": "createdAt",
+          "optional": false,
+          "type": {
+            "kind": "circular"
+          }
+        },
+        {
+          "name": "expiresAt",
+          "optional": false,
+          "type": {
+            "kind": "refinement",
+            "from": {
+              "kind": "declaration",
+              "id": "unknown"
+            }
+          }
+        },
+        {
+          "name": "organizationId",
+          "optional": false,
+          "type": {
+            "kind": "circular"
+          }
+        },
+        {
+          "name": "updatedAt",
+          "optional": false,
+          "type": {
+            "kind": "circular"
+          }
+        },
+        {
+          "name": "userId",
+          "optional": false,
+          "type": {
+            "kind": "circular"
+          }
+        }
+      ]
+    },
+    "apiKeyDoc": {
+      "kind": "transform",
+      "to": {
+        "kind": "struct",
+        "props": [
+          {
+            "name": "_id",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "createdAt",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "customerId",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "keyHash",
+            "optional": false,
+            "type": {
+              "kind": "refinement",
+              "from": {
+                "kind": "circular"
+              }
+            }
+          },
+          {
+            "name": "lastUsedAt",
+            "optional": true,
+            "type": {
+              "kind": "union",
+              "types": [
+                {
+                  "kind": "circular"
+                },
+                {
+                  "kind": "Literal"
+                }
+              ]
+            }
+          },
+          {
+            "name": "modelWhitelist",
+            "optional": false,
+            "type": {
+              "kind": "tuple",
+              "elements": []
+            }
+          },
+          {
+            "name": "name",
+            "optional": false,
+            "type": {
+              "kind": "refinement",
+              "from": {
+                "kind": "refinement",
+                "from": {
+                  "kind": "StringKeyword"
+                }
+              }
+            }
+          },
+          {
+            "name": "organizationId",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "prefix",
+            "optional": false,
+            "type": {
+              "kind": "refinement",
+              "from": {
+                "kind": "refinement",
+                "from": {
+                  "kind": "circular"
+                }
+              }
+            }
+          },
+          {
+            "name": "status",
+            "optional": false,
+            "type": {
+              "kind": "union",
+              "types": [
+                {
+                  "kind": "Literal"
+                },
+                {
+                  "kind": "Literal"
+                }
+              ]
+            }
+          },
+          {
+            "name": "updatedAt",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          }
+        ]
+      }
+    },
+    "balanceAdjustmentDoc": {
+      "kind": "struct",
+      "props": [
+        {
+          "name": "_id",
+          "optional": false,
+          "type": {
+            "kind": "circular"
+          }
+        },
+        {
+          "name": "amountUnits",
+          "optional": false,
+          "type": {
+            "kind": "refinement",
+            "from": {
+              "kind": "refinement",
+              "from": {
+                "kind": "NumberKeyword"
+              }
+            }
+          }
+        },
+        {
+          "name": "createdAt",
+          "optional": false,
+          "type": {
+            "kind": "circular"
+          }
+        },
+        {
+          "name": "currency",
+          "optional": false,
+          "type": {
+            "kind": "refinement",
+            "from": {
+              "kind": "refinement",
+              "from": {
+                "kind": "circular"
+              }
+            }
+          }
+        },
+        {
+          "name": "customerId",
+          "optional": false,
+          "type": {
+            "kind": "circular"
+          }
+        },
+        {
+          "name": "note",
+          "optional": true,
+          "type": {
+            "kind": "union",
+            "types": [
+              {
+                "kind": "refinement",
+                "from": {
+                  "kind": "circular"
+                }
+              },
+              {
+                "kind": "circular"
+              }
+            ]
+          }
+        },
+        {
+          "name": "occurredAt",
+          "optional": false,
+          "type": {
+            "kind": "circular"
+          }
+        },
+        {
+          "name": "organizationId",
+          "optional": false,
+          "type": {
+            "kind": "circular"
+          }
+        },
+        {
+          "name": "reason",
+          "optional": false,
+          "type": {
+            "kind": "union",
+            "types": [
+              {
+                "kind": "Literal"
+              },
+              {
+                "kind": "Literal"
+              },
+              {
+                "kind": "Literal"
+              },
+              {
+                "kind": "Literal"
+              },
+              {
+                "kind": "Literal"
+              }
+            ]
+          }
+        },
+        {
+          "name": "updatedAt",
+          "optional": false,
+          "type": {
+            "kind": "circular"
+          }
+        },
+        {
+          "name": "usageRecordId",
+          "optional": true,
+          "type": {
+            "kind": "union",
+            "types": [
+              {
+                "kind": "circular"
+              },
+              {
+                "kind": "circular"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "budgetDoc": {
+      "kind": "transform",
+      "to": {
+        "kind": "struct",
+        "props": [
+          {
+            "name": "_id",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "alertThresholds",
+            "optional": false,
+            "type": {
+              "kind": "tuple",
+              "elements": []
+            }
+          },
+          {
+            "name": "amountUnits",
+            "optional": false,
+            "type": {
+              "kind": "refinement",
+              "from": {
+                "kind": "refinement",
+                "from": {
+                  "kind": "circular"
+                }
+              }
+            }
+          },
+          {
+            "name": "createdAt",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "currency",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "customerId",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "organizationId",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "periodEnd",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "periodStart",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "updatedAt",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          }
+        ]
+      }
+    },
+    "customerDoc": {
+      "kind": "transform",
+      "to": {
+        "kind": "struct",
+        "props": [
+          {
+            "name": "_id",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "balance",
+            "optional": false,
+            "type": {
+              "kind": "struct",
+              "props": [
+                {
+                  "name": "amountUnits",
+                  "optional": false,
+                  "type": {
+                    "kind": "refinement",
+                    "from": {
+                      "kind": "circular"
+                    }
+                  }
+                },
+                {
+                  "name": "currency",
+                  "optional": false,
+                  "type": {
+                    "kind": "circular"
+                  }
+                },
+                {
+                  "name": "reservedUnits",
+                  "optional": false,
+                  "type": {
+                    "kind": "circular"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "name": "createdAt",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "email",
+            "optional": true,
+            "type": {
+              "kind": "union",
+              "types": [
+                {
+                  "kind": "refinement",
+                  "from": {
+                    "kind": "refinement",
+                    "from": {
+                      "kind": "circular"
+                    }
+                  }
+                },
+                {
+                  "kind": "circular"
+                }
+              ]
+            }
+          },
+          {
+            "name": "externalId",
+            "optional": true,
+            "type": {
+              "kind": "union",
+              "types": [
+                {
+                  "kind": "refinement",
+                  "from": {
+                    "kind": "circular"
+                  }
+                },
+                {
+                  "kind": "circular"
+                }
+              ]
+            }
+          },
+          {
+            "name": "metadata",
+            "optional": false,
+            "type": {
+              "kind": "struct",
+              "props": []
+            }
+          },
+          {
+            "name": "name",
+            "optional": false,
+            "type": {
+              "kind": "refinement",
+              "from": {
+                "kind": "refinement",
+                "from": {
+                  "kind": "circular"
+                }
+              }
+            }
+          },
+          {
+            "name": "organizationId",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "status",
+            "optional": false,
+            "type": {
+              "kind": "union",
+              "types": [
+                {
+                  "kind": "Literal"
+                },
+                {
+                  "kind": "Literal"
+                },
+                {
+                  "kind": "Literal"
+                }
+              ]
+            }
+          },
+          {
+            "name": "updatedAt",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          }
+        ]
+      }
+    },
+    "customerLimitDoc": {
+      "kind": "transform",
+      "to": {
+        "kind": "struct",
+        "props": [
+          {
+            "name": "_id",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "createdAt",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "customerId",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "organizationId",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "rules",
+            "optional": false,
+            "type": {
+              "kind": "tuple",
+              "elements": []
+            }
+          },
+          {
+            "name": "updatedAt",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          }
+        ]
+      }
+    },
+    "inviteDoc": {
+      "kind": "transform",
+      "to": {
+        "kind": "struct",
+        "props": [
+          {
+            "name": "_id",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "acceptedAt",
+            "optional": true,
+            "type": {
+              "kind": "union",
+              "types": [
+                {
+                  "kind": "circular"
+                },
+                {
+                  "kind": "circular"
+                }
+              ]
+            }
+          },
+          {
+            "name": "createdAt",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "email",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "expiresAt",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "invitedBy",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "organizationId",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "permissions",
+            "optional": false,
+            "type": {
+              "kind": "tuple",
+              "elements": []
+            }
+          },
+          {
+            "name": "role",
+            "optional": false,
+            "type": {
+              "kind": "union",
+              "types": [
+                {
+                  "kind": "Literal"
+                },
+                {
+                  "kind": "Literal"
+                }
+              ]
+            }
+          },
+          {
+            "name": "status",
+            "optional": false,
+            "type": {
+              "kind": "union",
+              "types": [
+                {
+                  "kind": "Literal"
+                },
+                {
+                  "kind": "Literal"
+                },
+                {
+                  "kind": "Literal"
+                }
+              ]
+            }
+          },
+          {
+            "name": "tokenHash",
+            "optional": false,
+            "type": {
+              "kind": "refinement",
+              "from": {
+                "kind": "circular"
+              }
+            }
+          },
+          {
+            "name": "updatedAt",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          }
+        ]
+      }
+    },
+    "managementApiKeyDoc": {
+      "kind": "transform",
+      "to": {
+        "kind": "struct",
+        "props": [
+          {
+            "name": "_id",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "createdAt",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "keyHash",
+            "optional": false,
+            "type": {
+              "kind": "refinement",
+              "from": {
+                "kind": "circular"
+              }
+            }
+          },
+          {
+            "name": "lastUsedAt",
+            "optional": true,
+            "type": {
+              "kind": "union",
+              "types": [
+                {
+                  "kind": "circular"
+                },
+                {
+                  "kind": "circular"
+                }
+              ]
+            }
+          },
+          {
+            "name": "name",
+            "optional": false,
+            "type": {
+              "kind": "refinement",
+              "from": {
+                "kind": "refinement",
+                "from": {
+                  "kind": "circular"
+                }
+              }
+            }
+          },
+          {
+            "name": "organizationId",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "prefix",
+            "optional": false,
+            "type": {
+              "kind": "refinement",
+              "from": {
+                "kind": "refinement",
+                "from": {
+                  "kind": "circular"
+                }
+              }
+            }
+          },
+          {
+            "name": "scopes",
+            "optional": false,
+            "type": {
+              "kind": "tuple",
+              "elements": []
+            }
+          },
+          {
+            "name": "status",
+            "optional": false,
+            "type": {
+              "kind": "union",
+              "types": [
+                {
+                  "kind": "Literal"
+                },
+                {
+                  "kind": "Literal"
+                }
+              ]
+            }
+          },
+          {
+            "name": "updatedAt",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          }
+        ]
+      }
+    },
+    "membershipDoc": {
+      "kind": "transform",
+      "to": {
+        "kind": "struct",
+        "props": [
+          {
+            "name": "organizationId",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "permissions",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "role",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          }
+        ]
+      }
+    },
+    "modelCatalogDoc": {
+      "kind": "transform",
+      "to": {
+        "kind": "struct",
+        "props": [
+          {
+            "name": "_id",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "attachment",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "cost",
+            "optional": true,
+            "type": {
+              "kind": "struct",
+              "props": [
+                {
+                  "name": "cacheReadUnitsPerMillion",
+                  "optional": true,
+                  "type": {
+                    "kind": "circular"
+                  }
+                },
+                {
+                  "name": "cacheWriteUnitsPerMillion",
+                  "optional": true,
+                  "type": {
+                    "kind": "circular"
+                  }
+                },
+                {
+                  "name": "inputAudioUnitsPerMillion",
+                  "optional": true,
+                  "type": {
+                    "kind": "circular"
+                  }
+                },
+                {
+                  "name": "inputUnitsPerMillion",
+                  "optional": false,
+                  "type": {
+                    "kind": "circular"
+                  }
+                },
+                {
+                  "name": "outputAudioUnitsPerMillion",
+                  "optional": true,
+                  "type": {
+                    "kind": "circular"
+                  }
+                },
+                {
+                  "name": "outputUnitsPerMillion",
+                  "optional": false,
+                  "type": {
+                    "kind": "circular"
+                  }
+                },
+                {
+                  "name": "reasoningUnitsPerMillion",
+                  "optional": true,
+                  "type": {
+                    "kind": "circular"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "name": "createdAt",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "discoveredAt",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "displayName",
+            "optional": false,
+            "type": {
+              "kind": "refinement",
+              "from": {
+                "kind": "refinement",
+                "from": {
+                  "kind": "circular"
+                }
+              }
+            }
+          },
+          {
+            "name": "interleaved",
+            "optional": true,
+            "type": {
+              "kind": "union",
+              "types": [
+                {
+                  "kind": "struct",
+                  "props": [
+                    {
+                      "name": "field",
+                      "optional": false,
+                      "type": {
+                        "kind": "union",
+                        "types": [
+                          {
+                            "kind": "Literal"
+                          },
+                          {
+                            "kind": "Literal"
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                },
+                {
+                  "kind": "circular"
+                }
+              ]
+            }
+          },
+          {
+            "name": "limits",
+            "optional": false,
+            "type": {
+              "kind": "struct",
+              "props": [
+                {
+                  "name": "context",
+                  "optional": false,
+                  "type": {
+                    "kind": "refinement",
+                    "from": {
+                      "kind": "refinement",
+                      "from": {
+                        "kind": "circular"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "input",
+                  "optional": true,
+                  "type": {
+                    "kind": "circular"
+                  }
+                },
+                {
+                  "name": "output",
+                  "optional": true,
+                  "type": {
+                    "kind": "circular"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "name": "modalities",
+            "optional": false,
+            "type": {
+              "kind": "struct",
+              "props": [
+                {
+                  "name": "input",
+                  "optional": false,
+                  "type": {
+                    "kind": "tuple",
+                    "elements": []
+                  }
+                },
+                {
+                  "name": "output",
+                  "optional": false,
+                  "type": {
+                    "kind": "tuple",
+                    "elements": []
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "name": "organizationId",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "providerId",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "raw",
+            "optional": false,
+            "type": {
+              "kind": "struct",
+              "props": []
+            }
+          },
+          {
+            "name": "reasoning",
+            "optional": false,
+            "type": {
+              "kind": "BooleanKeyword"
+            }
+          },
+          {
+            "name": "status",
+            "optional": true,
+            "type": {
+              "kind": "union",
+              "types": [
+                {
+                  "kind": "Literal"
+                },
+                {
+                  "kind": "Literal"
+                },
+                {
+                  "kind": "Literal"
+                },
+                {
+                  "kind": "Literal"
+                }
+              ]
+            }
+          },
+          {
+            "name": "structuredOutput",
+            "optional": true,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "temperature",
+            "optional": true,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "toolCall",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "updatedAt",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "upstreamModelId",
+            "optional": false,
+            "type": {
+              "kind": "refinement",
+              "from": {
+                "kind": "refinement",
+                "from": {
+                  "kind": "circular"
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    "modelDoc": {
+      "kind": "transform",
+      "to": {
+        "kind": "struct",
+        "props": [
+          {
+            "name": "_id",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "active",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "aliasId",
+            "optional": false,
+            "type": {
+              "kind": "refinement",
+              "from": {
+                "kind": "refinement",
+                "from": {
+                  "kind": "refinement",
+                  "from": {
+                    "kind": "circular"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "name": "attachment",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "createdAt",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "currency",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "description",
+            "optional": true,
+            "type": {
+              "kind": "union",
+              "types": [
+                {
+                  "kind": "refinement",
+                  "from": {
+                    "kind": "circular"
+                  }
+                },
+                {
+                  "kind": "circular"
+                }
+              ]
+            }
+          },
+          {
+            "name": "displayName",
+            "optional": false,
+            "type": {
+              "kind": "refinement",
+              "from": {
+                "kind": "refinement",
+                "from": {
+                  "kind": "circular"
+                }
+              }
+            }
+          },
+          {
+            "name": "entries",
+            "optional": false,
+            "type": {
+              "kind": "refinement",
+              "from": {
+                "kind": "tuple",
+                "elements": []
+              }
+            }
+          },
+          {
+            "name": "interleaved",
+            "optional": true,
+            "type": {
+              "kind": "union",
+              "types": [
+                {
+                  "kind": "circular"
+                },
+                {
+                  "kind": "circular"
+                }
+              ]
+            }
+          },
+          {
+            "name": "limits",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "marginBps",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "metadata",
+            "optional": false,
+            "type": {
+              "kind": "UnknownKeyword"
+            }
+          },
+          {
+            "name": "modalities",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "organizationId",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "price",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "reasoning",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "status",
+            "optional": true,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "structuredOutput",
+            "optional": true,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "temperature",
+            "optional": true,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "toolCall",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "updatedAt",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          }
+        ]
+      }
+    },
+    "modelEntryDoc": {
+      "kind": "transform",
+      "to": {
+        "kind": "struct",
+        "props": [
+          {
+            "name": "active",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "cost",
+            "optional": true,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "id",
+            "optional": false,
+            "type": {
+              "kind": "refinement",
+              "from": {
+                "kind": "refinement",
+                "from": {
+                  "kind": "circular"
+                }
+              }
+            }
+          },
+          {
+            "name": "price",
+            "optional": true,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "priority",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "providerId",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "upstreamModelId",
+            "optional": false,
+            "type": {
+              "kind": "refinement",
+              "from": {
+                "kind": "refinement",
+                "from": {
+                  "kind": "circular"
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    "organizationDoc": {
+      "kind": "struct",
+      "props": [
+        {
+          "name": "_id",
+          "optional": false,
+          "type": {
+            "kind": "circular"
+          }
+        },
+        {
+          "name": "createdAt",
+          "optional": false,
+          "type": {
+            "kind": "circular"
+          }
+        },
+        {
+          "name": "defaultCurrency",
+          "optional": false,
+          "type": {
+            "kind": "circular"
+          }
+        },
+        {
+          "name": "name",
+          "optional": false,
+          "type": {
+            "kind": "refinement",
+            "from": {
+              "kind": "refinement",
+              "from": {
+                "kind": "circular"
+              }
+            }
+          }
+        },
+        {
+          "name": "ownerId",
+          "optional": false,
+          "type": {
+            "kind": "circular"
+          }
+        },
+        {
+          "name": "slug",
+          "optional": false,
+          "type": {
+            "kind": "refinement",
+            "from": {
+              "kind": "refinement",
+              "from": {
+                "kind": "refinement",
+                "from": {
+                  "kind": "circular"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "updatedAt",
+          "optional": false,
+          "type": {
+            "kind": "circular"
+          }
+        }
+      ]
+    },
+    "providerDoc": {
+      "kind": "transform",
+      "to": {
+        "kind": "struct",
+        "props": [
+          {
+            "name": "_id",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "active",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "apiKeyEncrypted",
+            "optional": false,
+            "type": {
+              "kind": "refinement",
+              "from": {
+                "kind": "circular"
+              }
+            }
+          },
+          {
+            "name": "baseUrl",
+            "optional": false,
+            "type": {
+              "kind": "refinement",
+              "from": {
+                "kind": "refinement",
+                "from": {
+                  "kind": "circular"
+                }
+              }
+            }
+          },
+          {
+            "name": "createdAt",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "headers",
+            "optional": false,
+            "type": {
+              "kind": "struct",
+              "props": []
+            }
+          },
+          {
+            "name": "httpTimeoutMs",
+            "optional": true,
+            "type": {
+              "kind": "union",
+              "types": [
+                {
+                  "kind": "refinement",
+                  "from": {
+                    "kind": "circular"
+                  }
+                },
+                {
+                  "kind": "circular"
+                }
+              ]
+            }
+          },
+          {
+            "name": "metadata",
+            "optional": false,
+            "type": {
+              "kind": "struct",
+              "props": []
+            }
+          },
+          {
+            "name": "name",
+            "optional": false,
+            "type": {
+              "kind": "refinement",
+              "from": {
+                "kind": "refinement",
+                "from": {
+                  "kind": "circular"
+                }
+              }
+            }
+          },
+          {
+            "name": "organizationId",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "providerOrg",
+            "optional": true,
+            "type": {
+              "kind": "union",
+              "types": [
+                {
+                  "kind": "refinement",
+                  "from": {
+                    "kind": "circular"
+                  }
+                },
+                {
+                  "kind": "circular"
+                }
+              ]
+            }
+          },
+          {
+            "name": "sdkType",
+            "optional": false,
+            "type": {
+              "kind": "refinement",
+              "from": {
+                "kind": "refinement",
+                "from": {
+                  "kind": "refinement",
+                  "from": {
+                    "kind": "circular"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "name": "updatedAt",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          }
+        ]
+      }
+    },
+    "rateLimitCounterDoc": {
+      "kind": "transform",
+      "to": {
+        "kind": "struct",
+        "props": [
+          {
+            "name": "_id",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "bucketStart",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "count",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "createdAt",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "customerId",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "dimension",
+            "optional": false,
+            "type": {
+              "kind": "union",
+              "types": [
+                {
+                  "kind": "Literal"
+                },
+                {
+                  "kind": "Literal"
+                },
+                {
+                  "kind": "Literal"
+                }
+              ]
+            }
+          },
+          {
+            "name": "organizationId",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "scopeTarget",
+            "optional": true,
+            "type": {
+              "kind": "union",
+              "types": [
+                {
+                  "kind": "refinement",
+                  "from": {
+                    "kind": "circular"
+                  }
+                },
+                {
+                  "kind": "circular"
+                }
+              ]
+            }
+          },
+          {
+            "name": "updatedAt",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "windowSeconds",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          }
+        ]
+      }
+    },
+    "settlementOutboxDoc": {
+      "kind": "transform",
+      "to": {
+        "kind": "struct",
+        "props": [
+          {
+            "name": "_id",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "attempts",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "claimedAt",
+            "optional": true,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "claimToken",
+            "optional": true,
+            "type": {
+              "kind": "refinement",
+              "from": {
+                "kind": "refinement",
+                "from": {
+                  "kind": "circular"
+                }
+              }
+            }
+          },
+          {
+            "name": "context",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "createdAt",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "customerId",
+            "optional": true,
+            "type": {
+              "kind": "union",
+              "types": [
+                {
+                  "kind": "circular"
+                },
+                {
+                  "kind": "circular"
+                }
+              ]
+            }
+          },
+          {
+            "name": "gatewayRequestId",
+            "optional": false,
+            "type": {
+              "kind": "refinement",
+              "from": {
+                "kind": "refinement",
+                "from": {
+                  "kind": "circular"
+                }
+              }
+            }
+          },
+          {
+            "name": "modelAliasId",
+            "optional": false,
+            "type": {
+              "kind": "refinement",
+              "from": {
+                "kind": "refinement",
+                "from": {
+                  "kind": "circular"
+                }
+              }
+            }
+          },
+          {
+            "name": "nextAttemptAt",
+            "optional": true,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "organizationId",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "protocol",
+            "optional": true,
+            "type": {
+              "kind": "union",
+              "types": [
+                {
+                  "kind": "Literal"
+                },
+                {
+                  "kind": "Literal"
+                }
+              ]
+            }
+          },
+          {
+            "name": "providerId",
+            "optional": true,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "providerRequestId",
+            "optional": true,
+            "type": {
+              "kind": "refinement",
+              "from": {
+                "kind": "circular"
+              }
+            }
+          },
+          {
+            "name": "reason",
+            "optional": false,
+            "type": {
+              "kind": "refinement",
+              "from": {
+                "kind": "refinement",
+                "from": {
+                  "kind": "circular"
+                }
+              }
+            }
+          },
+          {
+            "name": "status",
+            "optional": false,
+            "type": {
+              "kind": "union",
+              "types": [
+                {
+                  "kind": "Literal"
+                },
+                {
+                  "kind": "Literal"
+                },
+                {
+                  "kind": "Literal"
+                },
+                {
+                  "kind": "Literal"
+                },
+                {
+                  "kind": "Literal"
+                }
+              ]
+            }
+          },
+          {
+            "name": "updatedAt",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "upstreamModelId",
+            "optional": true,
+            "type": {
+              "kind": "refinement",
+              "from": {
+                "kind": "circular"
+              }
+            }
+          }
+        ]
+      }
+    },
+    "subscriptionDoc": {
+      "kind": "struct",
+      "props": [
+        {
+          "name": "_id",
+          "optional": false,
+          "type": {
+            "kind": "circular"
+          }
+        },
+        {
+          "name": "canceledAt",
+          "optional": true,
+          "type": {
+            "kind": "union",
+            "types": [
+              {
+                "kind": "circular"
+              },
+              {
+                "kind": "circular"
+              }
+            ]
+          }
+        },
+        {
+          "name": "createdAt",
+          "optional": false,
+          "type": {
+            "kind": "circular"
+          }
+        },
+        {
+          "name": "customerId",
+          "optional": false,
+          "type": {
+            "kind": "circular"
+          }
+        },
+        {
+          "name": "organizationId",
+          "optional": false,
+          "type": {
+            "kind": "circular"
+          }
+        },
+        {
+          "name": "periodEnd",
+          "optional": false,
+          "type": {
+            "kind": "circular"
+          }
+        },
+        {
+          "name": "periodStart",
+          "optional": false,
+          "type": {
+            "kind": "circular"
+          }
+        },
+        {
+          "name": "planId",
+          "optional": false,
+          "type": {
+            "kind": "circular"
+          }
+        },
+        {
+          "name": "status",
+          "optional": false,
+          "type": {
+            "kind": "union",
+            "types": [
+              {
+                "kind": "Literal"
+              },
+              {
+                "kind": "Literal"
+              },
+              {
+                "kind": "Literal"
+              },
+              {
+                "kind": "Literal"
+              }
+            ]
+          }
+        },
+        {
+          "name": "updatedAt",
+          "optional": false,
+          "type": {
+            "kind": "circular"
+          }
+        }
+      ]
+    },
+    "subscriptionPlanDoc": {
+      "kind": "transform",
+      "to": {
+        "kind": "struct",
+        "props": [
+          {
+            "name": "_id",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "active",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "createdAt",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "description",
+            "optional": true,
+            "type": {
+              "kind": "union",
+              "types": [
+                {
+                  "kind": "refinement",
+                  "from": {
+                    "kind": "circular"
+                  }
+                },
+                {
+                  "kind": "circular"
+                }
+              ]
+            }
+          },
+          {
+            "name": "includedCredit",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "includedTokens",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "interval",
+            "optional": false,
+            "type": {
+              "kind": "union",
+              "types": [
+                {
+                  "kind": "Literal"
+                },
+                {
+                  "kind": "Literal"
+                },
+                {
+                  "kind": "Literal"
+                },
+                {
+                  "kind": "Literal"
+                }
+              ]
+            }
+          },
+          {
+            "name": "intervalCount",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "name",
+            "optional": false,
+            "type": {
+              "kind": "refinement",
+              "from": {
+                "kind": "refinement",
+                "from": {
+                  "kind": "circular"
+                }
+              }
+            }
+          },
+          {
+            "name": "organizationId",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "price",
+            "optional": false,
+            "type": {
+              "kind": "struct",
+              "props": [
+                {
+                  "name": "amountUnits",
+                  "optional": false,
+                  "type": {
+                    "kind": "circular"
+                  }
+                },
+                {
+                  "name": "currency",
+                  "optional": false,
+                  "type": {
+                    "kind": "circular"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "name": "rateLimits",
+            "optional": false,
+            "type": {
+              "kind": "tuple",
+              "elements": []
+            }
+          },
+          {
+            "name": "updatedAt",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          }
+        ]
+      }
+    },
+    "usageRecordDoc": {
+      "kind": "transform",
+      "to": {
+        "kind": "struct",
+        "props": [
+          {
+            "name": "_id",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "actorKind",
+            "optional": false,
+            "type": {
+              "kind": "union",
+              "types": [
+                {
+                  "kind": "Literal"
+                },
+                {
+                  "kind": "Literal"
+                },
+                {
+                  "kind": "Literal"
+                }
+              ]
+            }
+          },
+          {
+            "name": "apiKeyId",
+            "optional": true,
+            "type": {
+              "kind": "union",
+              "types": [
+                {
+                  "kind": "circular"
+                },
+                {
+                  "kind": "circular"
+                }
+              ]
+            }
+          },
+          {
+            "name": "billed",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "cacheReadTokens",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "cacheWriteTokens",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "completionTokens",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "costUnits",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "createdAt",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "currency",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "customerEmail",
+            "optional": true,
+            "type": {
+              "kind": "union",
+              "types": [
+                {
+                  "kind": "refinement",
+                  "from": {
+                    "kind": "circular"
+                  }
+                },
+                {
+                  "kind": "circular"
+                }
+              ]
+            }
+          },
+          {
+            "name": "customerId",
+            "optional": true,
+            "type": {
+              "kind": "union",
+              "types": [
+                {
+                  "kind": "circular"
+                },
+                {
+                  "kind": "circular"
+                }
+              ]
+            }
+          },
+          {
+            "name": "durationMs",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "errorCode",
+            "optional": true,
+            "type": {
+              "kind": "union",
+              "types": [
+                {
+                  "kind": "refinement",
+                  "from": {
+                    "kind": "circular"
+                  }
+                },
+                {
+                  "kind": "circular"
+                }
+              ]
+            }
+          },
+          {
+            "name": "gatewayRequestId",
+            "optional": true,
+            "type": {
+              "kind": "union",
+              "types": [
+                {
+                  "kind": "refinement",
+                  "from": {
+                    "kind": "refinement",
+                    "from": {
+                      "kind": "circular"
+                    }
+                  }
+                },
+                {
+                  "kind": "circular"
+                }
+              ]
+            }
+          },
+          {
+            "name": "managementKeyId",
+            "optional": true,
+            "type": {
+              "kind": "union",
+              "types": [
+                {
+                  "kind": "circular"
+                },
+                {
+                  "kind": "circular"
+                }
+              ]
+            }
+          },
+          {
+            "name": "modelAliasId",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "occurredAt",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "organizationId",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "priceUnits",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "promptTokens",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "protocol",
+            "optional": false,
+            "type": {
+              "kind": "union",
+              "types": [
+                {
+                  "kind": "Literal"
+                },
+                {
+                  "kind": "Literal"
+                }
+              ]
+            }
+          },
+          {
+            "name": "providerId",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "providerRequestId",
+            "optional": true,
+            "type": {
+              "kind": "union",
+              "types": [
+                {
+                  "kind": "refinement",
+                  "from": {
+                    "kind": "circular"
+                  }
+                },
+                {
+                  "kind": "circular"
+                }
+              ]
+            }
+          },
+          {
+            "name": "reasoningTokens",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "status",
+            "optional": false,
+            "type": {
+              "kind": "refinement",
+              "from": {
+                "kind": "circular"
+              }
+            }
+          },
+          {
+            "name": "totalTokens",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "updatedAt",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "upstreamModelId",
+            "optional": false,
+            "type": {
+              "kind": "refinement",
+              "from": {
+                "kind": "refinement",
+                "from": {
+                  "kind": "circular"
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    "userDoc": {
+      "kind": "transform",
+      "to": {
+        "kind": "struct",
+        "props": [
+          {
+            "name": "_id",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "activeOrganizationId",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "createdAt",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "email",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "memberships",
+            "optional": false,
+            "type": {
+              "kind": "refinement",
+              "from": {
+                "kind": "tuple",
+                "elements": []
+              }
+            }
+          },
+          {
+            "name": "passwordHash",
+            "optional": false,
+            "type": {
+              "kind": "refinement",
+              "from": {
+                "kind": "circular"
+              }
+            }
+          },
+          {
+            "name": "status",
+            "optional": false,
+            "type": {
+              "kind": "union",
+              "types": [
+                {
+                  "kind": "Literal"
+                },
+                {
+                  "kind": "Literal"
+                }
+              ]
+            }
+          },
+          {
+            "name": "updatedAt",
+            "optional": false,
+            "type": {
+              "kind": "circular"
+            }
+          },
+          {
+            "name": "username",
+            "optional": false,
+            "type": {
+              "kind": "refinement",
+              "from": {
+                "kind": "refinement",
+                "from": {
+                  "kind": "refinement",
+                  "from": {
+                    "kind": "circular"
+                  }
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  }
+}

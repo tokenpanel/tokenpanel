@@ -167,29 +167,28 @@ describe.skipIf(!connected)("migration immutability guarantee", () => {
   test("runMigrations throws checksum-mismatch error when file edited after apply", async () => {
     const db = client!.db(TEST_DB);
     const BOOTSTRAP_ID = "2026-07-18T00-00-00Z__checksum-enforcement-test";
-
-    await db.collection<{ _id: string; phase: string; appliedAt: Date; checksum: string }>("_migrations").insertOne({
-      _id: BOOTSTRAP_ID,
-      phase: "pre",
-      appliedAt: new Date(),
-      checksum: "0".repeat(64),
-    });
+    const root = await mkdtemp(join(tmpdir(), "tokenpanel-imm-run-"));
 
     try {
-      await runMigrations(client!, db, "pre");
+      await mkdir(join(root, "pre"));
+      await mkdir(join(root, "post"));
+      await writeFile(join(root, "pre", `${BOOTSTRAP_ID}.ts`), MIGRATION_SOURCE(BOOTSTRAP_ID));
+
+      await db.collection<{ _id: string; phase: string; appliedAt: Date; checksum: string }>("_migrations").insertOne({
+        _id: BOOTSTRAP_ID,
+        phase: "pre",
+        appliedAt: new Date(),
+        checksum: "0".repeat(64),
+      });
+
+      await runMigrations(client!, db, "pre", { root });
       expect.unreachable("runMigrations should have thrown");
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      if (msg.includes("Invalid migration tree")) {
-        console.warn(
-          "[immutability.test] Migration tree validation failed — " +
-            "likely due to customers-perf-indexes.ts lint (cross-agent dependency). " +
-            "The executeMigration test above covers the checksum mismatch logic.",
-        );
-        return;
-      }
       expect(msg).toContain("already applied with a different checksum");
       expect(msg).toContain(BOOTSTRAP_ID);
+    } finally {
+      await rm(root, { recursive: true, force: true });
     }
   });
 });

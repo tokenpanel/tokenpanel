@@ -1,16 +1,30 @@
 #!/usr/bin/env bash
 # Pre-flight checks — sourced by bin/tokenpanel.
 
-# Validate that required configuration values are present and non-empty.
-# Catches a mis-rendered .env (e.g. MONGO_USER/MONGO_PASS omitted) before any
-# docker command runs, with a clear actionable error.
 require_config() {
+  local required_csv=""
+  local manifest_env="${GENERATED_DIR:-${CONFIG_DIR}/generated}/manifest.env"
+  if [ ! -f "$manifest_env" ]; then
+    manifest_env="${MANAGER_DIR}/release/manifest.env"
+  fi
+  if [ -f "$manifest_env" ]; then
+    required_csv="$(grep -E '^REQUIRED_KEYS=' "$manifest_env" 2>/dev/null | head -1 | cut -d= -f2-)"
+  fi
+
+  local -a required
+  if [ -n "$required_csv" ]; then
+    IFS=',' read -r -a required <<< "$required_csv"
+  else
+    required=(MONGO_USER MONGO_PASS MONGODB_DB DOMAIN ADMIN_EMAIL JWT_SECRET)
+  fi
+
   local missing=0
-  for var in MONGO_USER MONGO_PASS MONGODB_DB DOMAIN ADMIN_EMAIL JWT_SECRET; do
-    local val
+  local var val
+  for var in "${required[@]}"; do
+    [ -n "$var" ] || continue
     val="${!var:-}"
     if [ -z "$val" ]; then
-      err "config missing: $var is not set. Check $ENV_FILE (re-run tokenpanel-setup to fix)."
+      err "config missing: $var is not set. Check $ENV_FILE or run: tokenpanel config render"
       missing=1
     fi
   done
@@ -21,7 +35,7 @@ preflight_quick() {
   [ "$(id -u)" -eq 0 ] || { err "must run as root"; return 1; }
   docker info >/dev/null 2>&1 || { err "docker not running"; return 1; }
   [ -f "$APP_YML" ] || { err "config not found at $APP_YML. Run tokenpanel-setup first."; return 1; }
-  [ -f "$ENV_FILE" ] || { err ".env not found at $ENV_FILE. Run tokenpanel-setup first."; return 1; }
+  [ -f "$ENV_FILE" ] || { err "config not found at $ENV_FILE. Run tokenpanel-setup or tokenpanel config render."; return 1; }
   require_config || return 1
   return 0
 }

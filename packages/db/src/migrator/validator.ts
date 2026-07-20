@@ -180,8 +180,8 @@ export async function validateMigrationTree(
 }
 
 /** Load migrations or throw one error containing every policy violation. */
-export async function loadMigrationTree(): Promise<MigrationTree> {
-  const result = await validateMigrationTree();
+export async function loadMigrationTree(root?: string): Promise<MigrationTree> {
+  const result = await validateMigrationTree(root);
   if (result.errors.length > 0) {
     throw new Error(
       "Invalid migration tree:\n" + result.errors.map((error) => `  ✗ ${error}`).join("\n"),

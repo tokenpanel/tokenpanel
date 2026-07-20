@@ -25,6 +25,10 @@ rollback_to_previous() {
 
   docker compose -f "$APP_YML" stop api 2>/dev/null || true
 
+  if declare -F restore_previous_config >/dev/null 2>&1; then
+    restore_previous_config || warn "could not restore previous config snapshot"
+  fi
+
   if docker image inspect tokenpanel/app:previous >/dev/null 2>&1; then
     docker tag tokenpanel/app:previous tokenpanel/app:current
     docker compose -f "$APP_YML" up -d --no-deps --force-recreate api

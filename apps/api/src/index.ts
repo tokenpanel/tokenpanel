@@ -144,11 +144,12 @@ app.use("/v1/*", requirePublicPrincipal);
 app.route("/", publicOpenAI);
 app.route("/", publicAnthropic);
 
-// Management server-to-server surface.
+// Management server-to-server surface. Middleware runs first (registration
+// order) to resolve the principal, then the sub-apps serve /api/management/*.
 app.use("/api/management/*", requirePublicPrincipal);
 app.use("/api/management/*", requireManagementPrincipal);
-app.route("/", managementRead);
-app.route("/", managementWrite);
+app.route("/api/management", managementRead);
+app.route("/api/management", managementWrite);
 
 // --- Static admin SPA ---
 const adminDistDir = resolve(import.meta.dirname, "../../admin/dist");

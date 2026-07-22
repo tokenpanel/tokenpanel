@@ -28,7 +28,9 @@ import {
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
@@ -47,6 +49,14 @@ import {
 import { PageHeader } from "@/components/PageHeader";
 import { EmptyState } from "@/components/EmptyState";
 import { FadeIn } from "@/components/anim";
+import {
+  PROVIDER_PRESET_CATEGORY_LABELS,
+  PROVIDER_PRESET_CATEGORY_ORDER,
+  PROVIDER_PRESETS,
+  applyProviderPreset,
+  getDefaultProviderPresetId,
+  getProviderPreset,
+} from "../config/provider-presets.ts";
 
 interface Provider {
   _id: string;
@@ -223,6 +233,7 @@ export default function ProvidersPage(): React.ReactElement {
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<Provider | null>(null);
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
+  const [presetId, setPresetId] = useState("");
   const [formError, setFormError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -261,14 +272,56 @@ export default function ProvidersPage(): React.ReactElement {
     void loadAdapters();
   }, [loadProviders, loadAdapters]);
 
+  const visiblePresets = useMemo(() => {
+    if (adapters.length === 0) return PROVIDER_PRESETS;
+    return PROVIDER_PRESETS.filter((preset) =>
+      adapters.includes(preset.sdkType),
+    );
+  }, [adapters]);
+
+  const presetGroups = useMemo(() => {
+    return PROVIDER_PRESET_CATEGORY_ORDER.map((category) => ({
+      category,
+      label: PROVIDER_PRESET_CATEGORY_LABELS[category],
+      items: visiblePresets.filter((preset) => preset.category === category),
+    })).filter((group) => group.items.length > 0);
+  }, [visiblePresets]);
+
+  const selectedPreset = useMemo(() => getProviderPreset(presetId), [presetId]);
+
+  useEffect(() => {
+    if (!modalOpen || editing) return;
+    if (visiblePresets.length === 0) return;
+    if (presetId && visiblePresets.some((preset) => preset.id === presetId)) {
+      return;
+    }
+    const defaultId = getDefaultProviderPresetId(visiblePresets);
+    setPresetId(defaultId);
+    setForm((prev) => applyProviderPreset(getProviderPreset(defaultId), prev));
+  }, [modalOpen, editing, visiblePresets, presetId]);
+
   function updateField<K extends keyof FormState>(key: K, value: string) {
     setForm((prev) => ({ ...prev, [key]: value }));
   }
 
+  function onPresetChange(id: string) {
+    setPresetId(id);
+    setForm((prev) => applyProviderPreset(getProviderPreset(id), prev));
+    setFormError(null);
+  }
+
   function openCreate() {
     if (!canWrite) return;
+    const defaultId = getDefaultProviderPresetId(visiblePresets);
+    const preset = getProviderPreset(defaultId);
     setEditing(null);
-    setForm({ ...EMPTY_FORM, sdkType: adapters[0] ?? "" });
+    setPresetId(defaultId);
+    setForm(
+      applyProviderPreset(preset, {
+        ...EMPTY_FORM,
+        sdkType: adapters[0] ?? "",
+      }),
+    );
     setFormError(null);
     setModalOpen(true);
   }
@@ -276,6 +329,7 @@ export default function ProvidersPage(): React.ReactElement {
   function openEdit(p: Provider) {
     if (!canWrite) return;
     setEditing(p);
+    setPresetId("");
     setForm(fromProvider(p));
     setFormError(null);
     setModalOpen(true);
@@ -285,6 +339,7 @@ export default function ProvidersPage(): React.ReactElement {
     if (saving) return;
     setModalOpen(false);
     setEditing(null);
+    setPresetId("");
     setForm(EMPTY_FORM);
     setFormError(null);
   }
@@ -550,6 +605,27 @@ export default function ProvidersPage(): React.ReactElement {
                   <AlertDescription>{formError}</AlertDescription>
                 </Alert>
               ) : null}
+              {!editing && visiblePresets.length > 0 ? (
+                <Field id="prov-preset" label="Provider preset" hint={selectedPreset?.hint}>
+                  <Select value={presetId} onValueChange={onPresetChange} disabled={saving}>
+                    <SelectTrigger id="prov-preset">
+                      <SelectValue placeholder="Select a provider preset" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {presetGroups.map((group) => (
+                        <SelectGroup key={group.category}>
+                          <SelectLabel>{group.label}</SelectLabel>
+                          {group.items.map((preset) => (
+                            <SelectItem key={preset.id} value={preset.id}>
+                              {preset.label}
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </Field>
+              ) : null}
               <Field id="prov-name" label="Name">
                 <Input
                   id="prov-name"
@@ -603,7 +679,7 @@ export default function ProvidersPage(): React.ReactElement {
                   disabled={saving}
                   onChange={(e) => updateField("apiKey", e.target.value)}
                   autoComplete="off"
-                  placeholder={editing ? "Leave blank to keep current key" : "sk-…"}
+                  placeholder={editing ? "Leave blank to keep current key" : (selectedPreset?.apiKeyPlaceholder ?? "API key")}
                 />
               </Field>
               <Field id="prov-org" label="Provider org (optional)">

@@ -22,7 +22,7 @@ services:
       - "${MONGO_HOST_PORT:-27017}:27017"
     volumes:
       - tokenpanel-mongo:/data/db
-    restart: unless-stopped
+    restart: "no"
     healthcheck:
       test: ["CMD", "mongosh", "--quiet", "--eval", "db.runCommand({ping:1}).ok"]
       interval: 10s
@@ -70,7 +70,7 @@ services:
       # host (installed via `bun install`) and is shared into the container —
       # no anonymous volumes, so dep changes on host are picked up immediately.
       - .:/app
-    restart: unless-stopped
+    restart: "no"
     profiles: ["dev"]
     depends_on:
       mongo:
@@ -101,7 +101,7 @@ services:
       # host (installed via `bun install`) and is shared into the container —
       # no anonymous volumes, so dep changes on host are picked up immediately.
       - .:/app
-    restart: unless-stopped
+    restart: "no"
     profiles: ["dev"]
     depends_on:
       api:
@@ -124,7 +124,7 @@ services:
       - "${PORT:-3000}"
     ports:
       - "${PORT:-3000}:${PORT:-3000}"
-    restart: unless-stopped
+    restart: "no"
     profiles: ["prod"]
     depends_on:
       mongo:

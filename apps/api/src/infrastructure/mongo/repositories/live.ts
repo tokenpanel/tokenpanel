@@ -1182,7 +1182,7 @@ export const ModelRepositoryLive = Layer.effect(
             attachment: record.attachment,
             limits: record.limits,
             modalities: record.modalities,
-            status: record.status,
+            ...(record.status !== undefined ? { status: record.status } : {}),
             price: record.price,
             marginBps: record.marginBps,
             currency: record.currency,

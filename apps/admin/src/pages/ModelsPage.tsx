@@ -131,14 +131,27 @@ export default function ModelsPage(): React.ReactElement {
     let cancelled = false;
     setLoading(true);
     setError(null);
+    // Models list is the load contract; the providers fetch is best-effort.
+    // The page only requires `models:read`, but `/admin/providers` needs
+    // `providers:read` — a models-only member would otherwise 403 here and
+    // reject the whole Promise.all, blanking the list with "Failed to load
+    // models". Provider labels degrade to the raw id when unavailable.
     Promise.all([
       modelsApi.listModels(),
-      modelsApi.listProviders(),
+      modelsApi.listProviders().catch(() => ({ items: [] as modelsApi.AdminProviderSummary[] })),
     ])
       .then(([mRes, pRes]) => {
         if (cancelled) return;
-        setModels(mRes.items as unknown as Model[]);
+        const items = mRes.items as unknown as Model[];
+        setModels(items);
         setProviders(pRes.items as unknown as Provider[]);
+        // Keep the open editor in sync with the fresh list so entry mutations
+        // (add / remove / reorder / toggle) surfaced via reload() update the
+        // live fallback chain instead of leaving a stale `editing` snapshot.
+        setEditing((prev) => {
+          if (!prev) return prev;
+          return items.find((m) => m._id === prev._id) ?? prev;
+        });
       })
       .catch((err) => {
         if (cancelled) return;

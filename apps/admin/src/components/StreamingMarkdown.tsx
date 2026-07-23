@@ -172,13 +172,19 @@ export function ReasoningPanel({ reasoning, streaming, defaultOpen = true, reaso
   );
 }
 
-export function useRafBuffer<T>(initial: T): [T, (updater: T | ((prev: T) => T)) => void, () => void] {
+export function useRafBuffer<T>(initial: T): [T, (updater: T | ((prev: T) => T)) => void, () => void, () => void] {
   const [state, setState] = useState(initial);
   const pendingRef = useRef<Array<T | ((prev: T) => T)> | null>(null);
   const rafRef = useRef<number | null>(null);
 
   const flush = useCallback((): void => {
-    rafRef.current = null;
+    // Cancel any scheduled frame so a manual flush (e.g. on stream completion)
+    // does not leave a dangling RAF that re-fires flush later. Safe when invoked
+    // as the RAF callback itself (cancel of an already-fired id is a no-op).
+    if (rafRef.current !== null) {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    }
     const queue = pendingRef.current;
     pendingRef.current = null;
     if (queue === null || queue.length === 0) return;
@@ -215,7 +221,7 @@ export function useRafBuffer<T>(initial: T): [T, (updater: T | ((prev: T) => T))
     };
   }, []);
 
-  return [state, update, cancel];
+  return [state, update, flush, cancel];
 }
 
 export function useAutoScroll(deps: unknown[]): {

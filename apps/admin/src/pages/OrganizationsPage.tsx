@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { hasPermission, useAuth } from "../auth/AuthContext.tsx";
-import { ApiError, deleteJson, getJson, patchJson, postJson } from "../api/client.ts";
+import { ApiError, deleteJson, getJson, patchJson, postJson, setToken } from "../api/client.ts";
 import type {
   Organization,
   OrganizationCreateRequest,
@@ -132,8 +132,13 @@ export default function OrganizationsPage(): React.ReactElement {
       };
       if (slug) body.slug = slug;
       const res = await postJson<OrganizationCreateResponse>("/admin/organizations", body);
-      await load();
+      // Create already switched the session to the new org and rotated the
+      // token server-side. Adopt the fresh token BEFORE any further request:
+      // presenting the now-stale JWT (e.g. to /organizations or /switch) can
+      // 401 and bounce the session to /login.
+      setToken(res.token);
       await switchOrganization(res.organization.id);
+      await load();
       setActiveId(res.organization.id);
       setCreateOpen(false);
       toast.success(`Created "${res.organization.name}". Now active.`);

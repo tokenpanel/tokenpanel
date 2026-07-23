@@ -1,7 +1,7 @@
 /**
  * Domain API client for /admin/models (+ provider catalog used by model forms).
  */
-import { deleteJson, getJson, patchJson, postJson } from "./client.ts";
+import { deleteJson, getJson, patchJson, postJson, putJson } from "./client.ts";
 
 export type TokenPriceSchedule = {
   inputUnitsPerMillion: number;
@@ -86,7 +86,7 @@ export function reorderFallbacks(
   modelId: string,
   payload: unknown,
 ): Promise<AdminModel> {
-  return patchJson<AdminModel>(`/admin/models/${modelId}/fallbacks`, payload);
+  return putJson<AdminModel>(`/admin/models/${modelId}/fallbacks`, payload);
 }
 
 export function deleteModelEntry(

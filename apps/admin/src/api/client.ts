@@ -112,6 +112,10 @@ export function patchJson<T>(path: string, body?: unknown, options?: FetchOption
   return apiFetch<T>(path, { ...options, method: "PATCH", body: body ?? {} });
 }
 
+export function putJson<T>(path: string, body?: unknown, options?: FetchOptions): Promise<T> {
+  return apiFetch<T>(path, { ...options, method: "PUT", body: body ?? {} });
+}
+
 export function deleteJson<T>(path: string, options?: FetchOptions): Promise<T> {
   return apiFetch<T>(path, { ...options, method: "DELETE" });
 }

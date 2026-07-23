@@ -155,15 +155,16 @@ export const createModel = (input: {
       const e = input.entries[i]!;
       const id =
         e.id ?? genEntryIdFromToken(yield* crypto.randomToken(6));
-      entries.push({
+      const entry: ModelEntryDoc = {
         id,
         providerId: e.providerId as ModelEntryDoc["providerId"],
         upstreamModelId: e.upstreamModelId,
-        cost: e.cost,
-        price: e.price,
         priority: e.priority ?? i,
         active: e.active ?? true,
-      });
+      };
+      if (e.cost !== undefined) entry.cost = e.cost;
+      if (e.price !== undefined) entry.price = e.price;
+      entries.push(entry);
     }
     entries.sort((a, b) => a.priority - b.priority);
 
@@ -243,15 +244,16 @@ export const updateModel = (input: {
         const e = input.entries[i]!;
         const id =
           e.id ?? genEntryIdFromToken(yield* crypto.randomToken(6));
-        entries.push({
+        const entry: ModelEntryDoc = {
           id,
           providerId: e.providerId as ModelEntryDoc["providerId"],
           upstreamModelId: e.upstreamModelId,
-          cost: e.cost,
-          price: e.price,
           priority: e.priority ?? i,
           active: e.active ?? true,
-        });
+        };
+        if (e.cost !== undefined) entry.cost = e.cost;
+        if (e.price !== undefined) entry.price = e.price;
+        entries.push(entry);
       }
       entries.sort((a, b) => a.priority - b.priority);
       $set.entries = entries;
@@ -398,11 +400,11 @@ export const addModelEntry = (input: {
       id,
       providerId: input.entry.providerId as ModelEntryDoc["providerId"],
       upstreamModelId: input.entry.upstreamModelId,
-      cost: input.entry.cost,
-      price: input.entry.price,
       priority: input.entry.priority ?? maxPriority + 1,
       active: input.entry.active ?? true,
     };
+    if (input.entry.cost !== undefined) newEntry.cost = input.entry.cost;
+    if (input.entry.price !== undefined) newEntry.price = input.entry.price;
     const entries = [...existing.entries, newEntry].sort(
       (a, b) => a.priority - b.priority,
     );

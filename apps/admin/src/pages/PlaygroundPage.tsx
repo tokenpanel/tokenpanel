@@ -124,7 +124,7 @@ export default function PlaygroundPage(): React.ReactElement {
   const [params, setParams] = useState<Params>(DEFAULT_PARAMS);
   const [showParams, setShowParams] = useState(true);
   const [streaming, setStreaming] = useState(false);
-  const [streamStates, setStreamStates] = useRafBuffer<StreamState>({});
+  const [streamStates, setStreamStates, flushStreamStates] = useRafBuffer<StreamState>({});
   const [loadError, setLoadError] = useState<string | null>(null);
 
   const abortRef = useRef<AbortController | null>(null);
@@ -167,7 +167,10 @@ export default function PlaygroundPage(): React.ReactElement {
       }
       return next;
     });
-  }, [setStreamStates]);
+    // Commit the aborted terminal state immediately; a paint RAF may never fire
+    // once the tab is idle/headless, which would strand the "done" badge.
+    flushStreamStates();
+  }, [setStreamStates, flushStreamStates]);
 
   useEffect(() => {
     return () => abortRef.current?.abort();
@@ -261,6 +264,7 @@ export default function PlaygroundPage(): React.ReactElement {
         const msg = await safeErr(res);
         st = { ...st, done: true, error: msg };
         sync();
+        flushStreamStates();
         return st;
       }
       const reader = res.body.getReader();
@@ -290,6 +294,7 @@ export default function PlaygroundPage(): React.ReactElement {
       }
       st = { ...st, done: true };
       sync();
+      flushStreamStates();
       return st;
     } catch (err) {
       if (signal.aborted) {
@@ -304,6 +309,7 @@ export default function PlaygroundPage(): React.ReactElement {
             : "stream failed";
       st = { ...st, done: true, error: msg };
       sync();
+      flushStreamStates();
       return st;
     }
   }

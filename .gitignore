@@ -21,3 +21,8 @@ node_modules/.tmp/
 
 # Logs
 *.log
+
+# E2E (Playwright) artifacts
+apps/e2e/.auth/
+apps/e2e/test-results/
+apps/e2e/playwright-report/

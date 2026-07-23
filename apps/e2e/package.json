@@ -1,0 +1,12 @@
+{
+  "name": "@tokenpanel/e2e",
+  "description": "End-to-end tests (Playwright) for the production single-port build. Run via `bun run e2e` from the repo root.",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "e2e": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.0"
+  }
+}

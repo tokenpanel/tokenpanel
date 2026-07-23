@@ -1,0 +1,114 @@
+# Isolated, throwaway stack for end-to-end tests.
+#
+# Launched ONLY by `bun run e2e` (scripts/e2e.sh) under its own compose project
+# (`-p tokenpanel-e2e`) with a dedicated mongo volume + host ports, so it never
+# touches the dev stack or dev data. Torn down with `down -v` after the run.
+#
+# Tests the PRODUCTION single-port image (docker/prod.Dockerfile): the api
+# serves the built admin SPA + API on one port (host :3099). A mock
+# OpenAI-compatible provider (`mock-provider`) backs provider discovery,
+# playground chat, the /v1 gateway, and usage/analytics — no real upstream.
+services:
+  mongo:
+    image: mongo:8
+    entrypoint:
+      - sh
+      - -c
+      - |
+        if [ ! -f /data/db/replica-key ]; then
+          head -c 756 /dev/urandom | base64 | tr -d '\n' > /data/db/replica-key
+          chmod 400 /data/db/replica-key
+        fi
+        exec docker-entrypoint.sh mongod --replSet rs0 --keyFile /data/db/replica-key
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: tokenpanel
+      MONGO_INITDB_ROOT_PASSWORD: tokenpanel_dev
+      MONGO_INITDB_DATABASE: tokenpanel
+    expose:
+      - "27017"
+    ports:
+      - "27099:27017"
+    volumes:
+      - tokenpanel-e2e-mongo:/data/db
+    restart: "no"
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.runCommand({ping:1}).ok"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 5s
+
+  mongo-init:
+    image: mongo:8
+    depends_on:
+      mongo:
+        condition: service_healthy
+    restart: "no"
+    command:
+      - sh
+      - -c
+      - |
+        MONGO_URI="mongodb://tokenpanel:tokenpanel_dev@mongo:27017/admin?authSource=admin"
+        mongosh "$$MONGO_URI" --eval 'try { rs.status().ok; print("replica set already initiated") } catch(e) { rs.initiate({_id:"rs0",members:[{_id:0,host:"mongo:27017"}]}); print("replica set initiated") }'
+        for i in 1 2 3 4 5 6 7 8 9 10; do
+          sleep 1
+          mongosh "$$MONGO_URI" --quiet --eval 'db.hello().isWritablePrimary' 2>/dev/null | grep -q true && exit 0
+        done
+        echo "ERROR: mongo primary not writable after 10s — api must not start"
+        exit 1
+
+  # Mock OpenAI-compatible upstream. Reachable from the api container at
+  # http://mock-provider:8080/v1 (host :3098 for local debugging).
+  mock-provider:
+    image: oven/bun:1.2.21-alpine
+    working_dir: /mock
+    command: ["bun", "run", "server.ts"]
+    volumes:
+      - ./apps/e2e/mock-provider:/mock:ro
+    environment:
+      MOCK_PORT: "8080"
+    expose:
+      - "8080"
+    ports:
+      - "3098:8080"
+    restart: "no"
+    healthcheck:
+      test: ["CMD", "bun", "-e", "const r = await fetch('http://127.0.0.1:8080/health'); process.exit(r.ok ? 0 : 1)"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 3s
+
+  app:
+    build:
+      context: .
+      dockerfile: docker/prod.Dockerfile
+    environment:
+      NODE_ENV: production
+      MONGODB_URI: mongodb://tokenpanel:tokenpanel_dev@mongo:27017/tokenpanel?authSource=admin&directConnection=true
+      MONGODB_DB: tokenpanel
+      PORT: 3000
+      # Strong fixed 64-hex secret. Hex-only chars never match the weak/sample
+      # blocklist, and length ≥32 satisfies the all-environment minimum.
+      JWT_SECRET: a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90
+      # CORS left unset in production → fail-closed same-origin only. Correct
+      # here: the SPA is served from the same origin as the API.
+    ports:
+      - "3099:3000"
+    restart: "no"
+    depends_on:
+      mongo:
+        condition: service_healthy
+      mongo-init:
+        condition: service_completed_successfully
+      mock-provider:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "bun", "-e", "const r = await fetch('http://127.0.0.1:3000/health'); process.exit(r.ok ? 0 : 1)"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 10s
+
+volumes:
+  tokenpanel-e2e-mongo:

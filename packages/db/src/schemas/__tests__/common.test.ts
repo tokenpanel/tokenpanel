@@ -121,13 +121,13 @@ test("tokenPriceSchedule requires input+output, optional rest", () => {
   ).toBe(false);
 });
 
-test("tokenLimits requires positive context, optional positive input/output", () => {
+test("tokenLimits: context optional, positive when present; input/output optional positive", () => {
   expect(tokenLimits.safeParse({ context: 128000 }).success).toBe(true);
   expect(tokenLimits.safeParse({ context: 128000, input: 127000, output: 4096 }).success).toBe(true);
   expect(tokenLimits.safeParse({ context: 0 }).success).toBe(false);
   expect(tokenLimits.safeParse({ context: -1 }).success).toBe(false);
   expect(tokenLimits.safeParse({ context: 128000, input: 0 }).success).toBe(false);
-  expect(tokenLimits.safeParse({}).success).toBe(false);
+  expect(tokenLimits.safeParse({}).success).toBe(true);
 });
 
 test("modalitySchema only accepts known modalities", () => {

@@ -23,12 +23,8 @@ import { mergeAbortTimeout } from "../infrastructure/provider-http/abort-timeout
 import { httpFailureToProviderError } from "./map-http-error.ts";
 
 import {
-  OPENAI_DEFAULT_CONTEXT_TOKENS,
   OPENAI_SSE_DONE_PAYLOAD,
 } from "./openai-protocol.ts";
-
-/** Unknown context is omitted (not a positive sentinel). Historical name kept for grep. */
-const OPENAI_DEFAULT_CONTEXT = OPENAI_DEFAULT_CONTEXT_TOKENS;
 
 type OpenAiModel = {
   id: string;
@@ -208,7 +204,9 @@ export function createOpenAICompatibleAdapter(): ProviderAdapter {
             upstreamModelId: m.id,
             displayName: m.id,
             limits: {
-              context: contextWindow ?? OPENAI_DEFAULT_CONTEXT,
+              ...(contextWindow !== undefined && contextWindow > 0
+                ? { context: contextWindow }
+                : {}),
               ...(maxOut !== undefined ? { output: maxOut } : {}),
             },
             modalities: { input: ["text"], output: ["text"] },

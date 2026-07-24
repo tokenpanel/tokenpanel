@@ -95,7 +95,7 @@ interface ModelCatalog {
   upstreamModelId: string;
   displayName: string;
   modalities: { input: string[]; output: string[] };
-  limits: { context: number; input?: number; output?: number };
+  limits: { context?: number; input?: number; output?: number };
   status?: string;
 }
 
@@ -111,7 +111,7 @@ interface DiscoveredModel {
   structuredOutput?: boolean;
   temperature?: boolean;
   attachment?: boolean;
-  limits: { context: number; input?: number; output?: number };
+  limits: { context?: number; input?: number; output?: number };
   modalities: { input: string[]; output: string[] };
   status?: string;
   cost?: unknown;
@@ -241,6 +241,7 @@ export default function ProvidersPage(): React.ReactElement {
   const [discovering, setDiscovering] = useState(false);
   const [catalogByProvider, setCatalogByProvider] = useState<Record<string, ModelCatalog[]>>({});
   const [catalogLoadingFor, setCatalogLoadingFor] = useState<string | null>(null);
+  const [catalogErrorByProvider, setCatalogErrorByProvider] = useState<Record<string, string>>({});
 
   const [deleting, setDeleting] = useState<Provider | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
@@ -357,11 +358,18 @@ export default function ProvidersPage(): React.ReactElement {
 
   async function loadCatalog(p: Provider) {
     setCatalogLoadingFor(p._id);
+    setCatalogErrorByProvider((prev) => {
+      const copy = { ...prev };
+      delete copy[p._id];
+      return copy;
+    });
     try {
       const res = await getJson<CatalogResponse>(`/admin/providers/${p._id}/models`);
       setCatalogByProvider((prev) => ({ ...prev, [p._id]: res.items }));
     } catch (err) {
-      toast.error(err instanceof ApiError ? err.message : "Failed to load cached models.");
+      const msg = err instanceof ApiError ? err.message : "Failed to load cached models.";
+      setCatalogErrorByProvider((prev) => ({ ...prev, [p._id]: msg }));
+      toast.error(msg);
     } finally {
       setCatalogLoadingFor(null);
     }
@@ -576,6 +584,7 @@ export default function ProvidersPage(): React.ReactElement {
                     discovering={discovering && discoverFor?._id === p._id}
                     catalog={catalogByProvider[p._id]}
                     catalogLoading={catalogLoadingFor === p._id}
+                    catalogError={catalogErrorByProvider[p._id]}
                     onEdit={() => openEdit(p)}
                     onDiscover={() => void onDiscover(p)}
                     onDelete={() => {
@@ -808,6 +817,7 @@ interface ProviderRowProps {
   discovering: boolean;
   catalog: ModelCatalog[] | undefined;
   catalogLoading: boolean;
+  catalogError: string | undefined;
   onEdit: () => void;
   onDiscover: () => void;
   onDelete: () => void;
@@ -821,6 +831,7 @@ function ProviderRow({
   discovering,
   catalog,
   catalogLoading,
+  catalogError,
   onEdit,
   onDiscover,
   onDelete,
@@ -830,10 +841,10 @@ function ProviderRow({
   const [expanded, setExpanded] = useState(false);
 
   useEffect(() => {
-    if (expanded && !catalog && !catalogLoading) {
+    if (expanded && catalog === undefined && !catalogLoading && !catalogError) {
       onLoadCatalog();
     }
-  }, [expanded, catalog, catalogLoading, onLoadCatalog]);
+  }, [expanded, catalog, catalogLoading, catalogError, onLoadCatalog]);
 
   return (
     <>
@@ -911,8 +922,10 @@ function ProviderRow({
             <ModelsPanel
               loading={catalogLoading}
               items={catalog}
+              error={catalogError}
               canWrite={canWrite}
               onRefresh={onDiscover}
+              onRetry={onLoadCatalog}
             />
           </TableCell>
         </TableRow>
@@ -924,15 +937,19 @@ function ProviderRow({
 interface ModelsPanelProps {
   loading: boolean;
   items: ModelCatalog[] | undefined;
+  error: string | undefined;
   canWrite: boolean;
   onRefresh: () => void;
+  onRetry: () => void;
 }
 
 function ModelsPanel({
   loading,
   items,
+  error,
   canWrite,
   onRefresh,
+  onRetry,
 }: ModelsPanelProps): React.ReactElement {
   return (
     <div className="flex flex-col border-t border-border bg-muted/20">
@@ -947,7 +964,16 @@ function ModelsPanel({
           ) : null}
         </span>
       </div>
-      {!loading && (!items || items.length === 0) ? (
+      {!loading && error ? (
+        <div className="px-6 py-10 text-center text-sm text-destructive">
+          <p>{error}</p>
+          {canWrite ? (
+            <Button variant="outline" size="sm" className="mt-3" onClick={onRetry}>
+              Retry
+            </Button>
+          ) : null}
+        </div>
+      ) : !loading && (!items || items.length === 0) ? (
         <div className="px-6 py-10 text-center text-sm text-muted-foreground">
           {canWrite
             ? "No models cached. Click Discover to fetch from upstream."
@@ -979,7 +1005,7 @@ function ModelsPanel({
                   </div>
                 </TableCell>
                 <TableCell className="font-mono text-xs text-muted-foreground">
-                  {m.limits.context.toLocaleString()}
+                  {m.limits.context !== undefined ? m.limits.context.toLocaleString() : "—"}
                 </TableCell>
                 <TableCell>
                   {m.status ? <Badge variant="secondary">{m.status}</Badge> : "—"}

@@ -17,8 +17,3 @@ export const OPENAI_CHAT_COMPLETION_ID_PREFIX = "chatcmpl-" as const;
 /** SSE Content-Type for streamed completions. */
 export const OPENAI_SSE_CONTENT_TYPE = "text/event-stream" as const;
 
-/**
- * Discovery-only context fallback when upstream omits context_window.
- * Unit: tokens. 0 means "unknown / omit" (not a billing sentinel).
- */
-export const OPENAI_DEFAULT_CONTEXT_TOKENS = 0;

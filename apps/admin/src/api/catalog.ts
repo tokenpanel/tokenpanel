@@ -22,7 +22,7 @@ export type FetchedModel = {
   structuredOutput?: boolean;
   temperature?: boolean;
   attachment?: boolean;
-  limits: { context: number; input?: number; output?: number };
+  limits: { context?: number; input?: number; output?: number };
   modalities: { input: string[]; output: string[] };
   status?: FetchedModelStatus;
   cost?: FetchedModelCost;

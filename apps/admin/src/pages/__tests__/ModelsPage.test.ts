@@ -109,10 +109,16 @@ test("buildModelPayload: empty displayName → error", () => {
   expect(buildModelPayload(validForm({ displayName: "" }), true).ok).toBe(false);
 });
 
-test("buildModelPayload: context not positive int → error", () => {
-  expect(buildModelPayload(validForm({ contextLimit: "0" }), true).ok).toBe(false);
-  expect(buildModelPayload(validForm({ contextLimit: "" }), true).ok).toBe(false);
-  expect(buildModelPayload(validForm({ contextLimit: "1.5" }), true).ok).toBe(false);
+test("buildModelPayload: context optional — empty/zero/non-int omits context", () => {
+  const r0 = buildModelPayload(validForm({ contextLimit: "0" }), true);
+  expect(r0.ok).toBe(true);
+  if (r0.ok) expect((r0.payload.limits as Record<string, unknown>).context).toBeUndefined();
+  const rEmpty = buildModelPayload(validForm({ contextLimit: "" }), true);
+  expect(rEmpty.ok).toBe(true);
+  if (rEmpty.ok) expect((rEmpty.payload.limits as Record<string, unknown>).context).toBeUndefined();
+  const rFloat = buildModelPayload(validForm({ contextLimit: "1.5" }), true);
+  expect(rFloat.ok).toBe(true);
+  if (rFloat.ok) expect((rFloat.payload.limits as Record<string, unknown>).context).toBeUndefined();
 });
 
 test("buildModelPayload: price not non-neg int → error", () => {

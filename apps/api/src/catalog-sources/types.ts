@@ -36,7 +36,7 @@ export type FetchedModel = {
   structuredOutput?: boolean | undefined;
   temperature?: boolean | undefined;
   attachment?: boolean | undefined;
-  limits: { context: number; input?: number; output?: number };
+  limits: { context?: number | undefined; input?: number | undefined; output?: number | undefined };
   modalities: { input: string[]; output: string[] };
   status?: FetchedModelStatus | undefined;
   cost?: FetchedModelCost | undefined;

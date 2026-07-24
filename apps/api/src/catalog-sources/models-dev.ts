@@ -76,7 +76,7 @@ function normalizeStatus(s: string | undefined): FetchedModelStatus | undefined 
 export function mapModel(subProviderId: string, m: ModelsDevModel): FetchedModel | null {
   const id = typeof m.id === "string" && m.id.length > 0 ? m.id : null;
   if (!id) return null;
-  const ctx = num(m.limit?.context) ?? 0;
+  const ctx = num(m.limit?.context);
   const input = num(m.limit?.input);
   const output = num(m.limit?.output);
   const cost = m.cost;
@@ -104,7 +104,7 @@ export function mapModel(subProviderId: string, m: ModelsDevModel): FetchedModel
     ...(m.temperature !== undefined ? { temperature: m.temperature } : {}),
     attachment: m.attachment ?? false,
     limits: {
-      context: ctx,
+      ...(ctx !== undefined && ctx > 0 ? { context: ctx } : {}),
       ...(input !== undefined ? { input } : {}),
       ...(output !== undefined ? { output } : {}),
     },

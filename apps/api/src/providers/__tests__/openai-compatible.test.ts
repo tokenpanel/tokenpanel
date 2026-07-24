@@ -216,6 +216,7 @@ test("adapter.listModels: mocks fetch, parses data array, skips entries missing 
         data: [
           { id: "gpt-4o", context_window: 128000, max_output_tokens: 4096 },
           { id: "gpt-4o-mini", max_input_tokens: 128000 },
+          { id: "no-ctx-model" },
           { id: "", context_window: 1000 },
           { context_window: 1000 },
         ],
@@ -226,11 +227,12 @@ test("adapter.listModels: mocks fetch, parses data array, skips entries missing 
   try {
     const adapter = createOpenAICompatibleAdapter();
     const models = await Effect.runPromise(adapter.listModels(ctx()));
-    expect(models).toHaveLength(2);
+    expect(models).toHaveLength(3);
     expect(models[0]?.upstreamModelId).toBe("gpt-4o");
     expect(models[0]?.limits.context).toBe(128000);
     expect(models[0]?.limits.output).toBe(4096);
     expect(models[1]?.limits.context).toBe(128000);
+    expect(models[2]?.limits.context).toBeUndefined();
     expect(calls[0]).toContain("/models");
   } finally {
     globalThis.fetch = origFetch;

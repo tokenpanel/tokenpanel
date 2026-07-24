@@ -36,7 +36,7 @@ export type AdminModel = {
   temperature?: boolean;
   attachment: boolean;
   interleaved?: { field: "reasoning_content" | "reasoning_details" } | null;
-  limits: { context: number; input?: number; output?: number };
+  limits: { context?: number; input?: number; output?: number };
   modalities: { input: string[]; output: string[] };
   status?: string;
   price: TokenPriceSchedule;

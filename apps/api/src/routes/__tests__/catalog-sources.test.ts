@@ -67,6 +67,17 @@ test("mapModel: empty modalities → empty arrays", () => {
   expect(m?.modalities).toEqual({ input: [], output: [] });
 });
 
+test("mapModel: missing context → limits.context omitted (not 0)", () => {
+  const m = mapModel("p", { id: "no-ctx" });
+  expect(m?.limits.context).toBeUndefined();
+  expect(m?.limits).toEqual({});
+});
+
+test("mapModel: zero context → limits.context omitted", () => {
+  const m = mapModel("p", { id: "zero-ctx", limit: { context: 0 } });
+  expect(m?.limits.context).toBeUndefined();
+});
+
 test("registry: built-in models-dev source registered + listed", () => {
   const items = listSources();
   expect(items.some((s) => s.id === "models-dev")).toBe(true);

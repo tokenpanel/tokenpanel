@@ -31,7 +31,7 @@ export type DiscoveredModel = {
   temperature?: boolean | undefined;
   attachment?: boolean | undefined;
   limits: {
-    context: number;
+    context?: number | undefined;
     input?: number | undefined;
     output?: number | undefined;
   };

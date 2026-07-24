@@ -1009,7 +1009,7 @@
               "props": [
                 {
                   "name": "context",
-                  "optional": false,
+                  "optional": true,
                   "type": {
                     "kind": "refinement",
                     "from": {

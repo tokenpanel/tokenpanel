@@ -147,7 +147,7 @@ export const TokenPriceSchedule = Schema.Struct({
 export type TokenPriceSchedule = Schema.Schema.Type<typeof TokenPriceSchedule>;
 
 export const TokenLimits = Schema.Struct({
-  context: PositiveSafeInt,
+  context: exactOptional(PositiveSafeInt),
   input: exactOptional(PositiveSafeInt),
   output: exactOptional(PositiveSafeInt),
 });

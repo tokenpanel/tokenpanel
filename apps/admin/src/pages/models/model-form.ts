@@ -37,7 +37,7 @@ export interface ModelEntry {
 }
 
 export interface ModelLimits {
-  context: number;
+  context?: number;
   input?: number;
   output?: number;
 }
@@ -344,7 +344,7 @@ export function formFromModel(m: Model): FormState {
     structuredOutput: m.structuredOutput ?? false,
     temperature: m.temperature ?? false,
     attachment: m.attachment,
-    contextLimit: String(m.limits.context),
+    contextLimit: m.limits.context !== undefined ? String(m.limits.context) : "",
     inputLimit: m.limits.input !== undefined ? String(m.limits.input) : "",
     outputLimit: m.limits.output !== undefined ? String(m.limits.output) : "",
     inputModalities: modalitiesToText(m.modalities.input),
@@ -387,7 +387,7 @@ export function formFromFetched(m: FetchedModel, base: FormState): FormState {
     structuredOutput: m.structuredOutput ?? false,
     temperature: m.temperature ?? false,
     attachment: m.attachment ?? false,
-    contextLimit: m.limits.context > 0 ? String(m.limits.context) : base.contextLimit,
+    contextLimit: m.limits.context !== undefined && m.limits.context > 0 ? String(m.limits.context) : base.contextLimit,
     inputLimit: m.limits.input !== undefined && m.limits.input > 0 ? String(m.limits.input) : base.inputLimit,
     outputLimit: m.limits.output !== undefined && m.limits.output > 0 ? String(m.limits.output) : base.outputLimit,
     inputModalities: m.modalities.input.length > 0 ? modalitiesToText(m.modalities.input as Modality[]) : base.inputModalities,
@@ -412,8 +412,6 @@ export function buildModelPayload(f: FormState, isCreate: boolean):
   if (!displayName) return { ok: false, error: "Display name required." };
 
   const context = toPositiveInt(f.contextLimit);
-  if (context === undefined)
-    return { ok: false, error: "Context limit must be a positive integer." };
 
   const inputUnits = toNonNegInt(f.inputUnits);
   const outputUnits = toNonNegInt(f.outputUnits);
@@ -428,7 +426,8 @@ export function buildModelPayload(f: FormState, isCreate: boolean):
   if (!/^[A-Z]{3}$/.test(currency))
     return { ok: false, error: "Currency must be a 3-letter code (e.g. USD)." };
 
-  const limits: Record<string, unknown> = { context };
+  const limits: Record<string, unknown> = {};
+  if (context !== undefined) limits.context = context;
   const inputLimit = toPositiveInt(f.inputLimit);
   if (inputLimit !== undefined) limits.input = inputLimit;
   const outputLimit = toPositiveInt(f.outputLimit);

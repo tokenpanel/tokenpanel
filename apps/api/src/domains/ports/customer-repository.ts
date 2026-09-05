@@ -10,6 +10,8 @@ export type CustomerListFilter = {
   readonly organizationId: HexId;
   readonly status?: CustomerStatus | undefined;
   readonly q?: string | undefined;
+  /** Exact lowercased email match (stored emails are lowercase). */
+  readonly email?: string | undefined;
 };
 
 export type NewCustomerRecord = {
@@ -33,6 +35,8 @@ export type BalanceAdjustInput = {
   readonly currency: string;
   readonly reason: "topup" | "adjustment" | "refund";
   readonly note: string | null;
+  /** Stable caller key; repeated requests return the original adjustment. */
+  readonly idempotencyKey?: string | undefined;
   /** Currency currently stored on the customer (optimistic concurrency). */
   readonly expectedBalanceCurrency: string;
   /** When true, also set balance.currency (zero-balance currency switch). */

@@ -114,6 +114,12 @@ function decodeCustomers(raws: readonly unknown[]) {
     Effect.map((d) => asDoc(d as readonly CustomerDoc[])),
   );
 }
+function decodeAdjustment(raw: unknown | null) {
+  return readOne(BalanceAdjustmentDocSchema, collections.balanceAdjustments, raw).pipe(
+    Effect.map((d) => asDoc(d as BalanceAdjustmentDoc | null)),
+  );
+}
+
 function decodeAdjustments(raws: readonly unknown[]) {
   return readMany(BalanceAdjustmentDocSchema, collections.balanceAdjustments, raws).pipe(
     Effect.map((d) => asDoc(d as readonly BalanceAdjustmentDoc[])),
@@ -710,6 +716,11 @@ export const CustomerRepositoryLive = Layer.effect(
             organizationId: toObjectId(filter.organizationId),
           };
           if (filter.status !== undefined) q.status = filter.status;
+          // The customers email index is partial on `email $type string`.
+          // Plain equality does not imply that predicate, so spell it out to
+          // keep the planner on the partial index (else full scan).
+          if (filter.email !== undefined)
+            q.email = { $eq: filter.email, $type: "string" };
           if (filter.q !== undefined && filter.q.length > 0) {
             const esc = escapeRegExp(filter.q);
             q.$or = [
@@ -872,6 +883,9 @@ export const CustomerRepositoryLive = Layer.effect(
             reason: input.reason,
             usageRecordId: null,
             note: input.note,
+            ...(input.idempotencyKey !== undefined
+              ? { idempotencyKey: input.idempotencyKey }
+              : {}),
             occurredAt: now,
             createdAt: now,
             updatedAt: now,
@@ -884,6 +898,7 @@ export const CustomerRepositoryLive = Layer.effect(
           const result = yield* tryMongo(async () => {
             const session = client().startSession();
             let updated: CustomerDoc | null = null;
+            let duplicateIdempotency = false;
             try {
               await session.withTransaction(async () => {
                 await db().balanceAdjustments.insertOne(
@@ -968,25 +983,50 @@ export const CustomerRepositoryLive = Layer.effect(
               });
             } catch (err) {
               if (
+                input.idempotencyKey !== undefined &&
+                isDuplicateKeyError(err)
+              ) {
+                duplicateIdempotency = true;
+              } else if (
                 err instanceof Error &&
                 err.message === "BalanceCustomerGone"
               ) {
                 return null;
+              } else {
+                throw err;
               }
-              throw err;
             } finally {
               await session.endSession();
             }
+
+            if (duplicateIdempotency) {
+              const existing = await db().balanceAdjustments.findOne({
+                organizationId: orgId,
+                // Partial index on {organizationId, idempotencyKey} requires
+                // an explicit $type guard for planner eligibility.
+                idempotencyKey: {
+                  $eq: input.idempotencyKey,
+                  $type: "string",
+                },
+              });
+              if (!existing) throw new Error("BalanceIdempotencyRecordMissing");
+              const existingCustomer = await db().customers.findOne({
+                _id: existing.customerId,
+                organizationId: orgId,
+              });
+              if (!existingCustomer) return null;
+              return { customer: existingCustomer, adjustment: existing };
+            }
+
             if (!updated) return null;
             return { customer: updated, adjustment: validatedAdj as BalanceAdjustmentDoc };
           });
           if (!result) return null;
           const customer = yield* decodeCustomer(result.customer);
           if (!customer) return null;
-          return {
-            customer,
-            adjustment: asDoc(result.adjustment),
-          };
+          const decodedAdjustment = yield* decodeAdjustment(result.adjustment);
+          if (!decodedAdjustment) return null;
+          return { customer, adjustment: decodedAdjustment };
         }),
       listBalanceHistory: (organizationId, customerId, page) =>
         Effect.gen(function* () {

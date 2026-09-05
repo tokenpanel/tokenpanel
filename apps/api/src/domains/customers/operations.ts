@@ -35,6 +35,8 @@ export const listCustomers = (input: {
   readonly organizationId: HexId;
   readonly status?: CustomerStatus | undefined;
   readonly q?: string | undefined;
+  /** Exact (lowercased) email match — email-only lookups return 0 or 1 row. */
+  readonly email?: string | undefined;
   readonly limit?: number | undefined;
   readonly skip?: number | undefined;
 }): Effect.Effect<
@@ -53,6 +55,7 @@ export const listCustomers = (input: {
         organizationId: input.organizationId,
         ...(input.status !== undefined ? { status: input.status } : {}),
         ...(input.q !== undefined ? { q: input.q } : {}),
+        ...(input.email !== undefined ? { email: input.email } : {}),
       },
       page,
     );
@@ -248,6 +251,8 @@ export const adjustCustomerBalance = (input: {
   readonly currency?: string | undefined;
   readonly reason?: "topup" | "adjustment" | "refund" | undefined;
   readonly note?: string | null | undefined;
+  /** Repeated requests with the same key return the original adjustment. */
+  readonly idempotencyKey?: string | undefined;
 }): Effect.Effect<
   { customer: CustomerDoc; adjustment: BalanceAdjustmentDoc },
   CustomerDomainError,
@@ -273,14 +278,17 @@ export const adjustCustomerBalance = (input: {
     // Single-currency org: always adjust in the customer's existing currency
     // (aligned with org via create/convert). Client-sent currency is ignored.
     const currency = customer.balance.currency;
+    const reason = input.reason ?? "topup";
+    const note = input.note ?? null;
 
     const result = yield* customers.adjustBalance({
       organizationId: input.organizationId,
       customerId: input.customerId,
       amountMicros: input.amountMicros,
       currency,
-      reason: input.reason ?? "topup",
-      note: input.note ?? null,
+      reason,
+      note,
+      idempotencyKey: input.idempotencyKey,
       expectedBalanceCurrency: customer.balance.currency,
       setCurrency: false,
     });
@@ -294,6 +302,31 @@ export const adjustCustomerBalance = (input: {
         }),
       );
     }
+
+    if (input.idempotencyKey !== undefined) {
+      const adjustment = result.adjustment;
+      // The note is audit metadata, not the monetary request. Retries may use
+      // a different diagnostic note while the original adjustment is returned.
+      const sameRequest =
+        adjustment.idempotencyKey === input.idempotencyKey &&
+        // ObjectId#equals is hex-canonical and case-insensitive for string
+        // input: stored ObjectIds are lowercase hex, but a valid uppercase
+        // retry must still match the original request.
+        adjustment.customerId.equals(input.customerId) &&
+        adjustment.amountMicros === input.amountMicros &&
+        adjustment.currency === currency &&
+        adjustment.reason === reason;
+      if (!sameRequest) {
+        return yield* Effect.fail(
+          new ConflictError({
+            code: "idempotency_key_reused",
+            message: "Idempotency key was already used for a different balance adjustment",
+            fields: ["idempotencyKey"],
+          }),
+        );
+      }
+    }
+
     return result;
   });
 

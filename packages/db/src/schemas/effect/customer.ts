@@ -111,6 +111,8 @@ export const BalanceAdjustmentDoc = Schema.Struct({
   reason: BalanceAdjustmentReason,
   usageRecordId: exactNullish(ObjectIdFromSelf),
   note: exactNullish(maxString(280)),
+  /** Optional management idempotency key; unique per organization when present. */
+  idempotencyKey: exactOptional(maxString(128)),
   occurredAt: DateFromSelf,
   ...TimestampFields,
 });

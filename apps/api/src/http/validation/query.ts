@@ -8,6 +8,7 @@ import {
   PaginationLimit,
   PaginationSkip,
   Email,
+  LowercaseEmail,
   exactOptional,
   maxString,
   CurrencyCode,
@@ -21,6 +22,8 @@ export const CustomerListQuery = Schema.Struct({
     Schema.Literal("active", "suspended", "closed"),
   ),
   q: exactOptional(maxString(160)),
+  /** Exact email match; validated + lowercased like stored customer emails. */
+  email: exactOptional(LowercaseEmail),
 });
 export type CustomerListQuery = Schema.Schema.Type<typeof CustomerListQuery>;
 

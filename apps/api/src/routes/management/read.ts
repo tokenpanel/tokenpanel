@@ -91,6 +91,7 @@ app.get(
         organizationId: orgId.toHexString(),
         ...(q.status !== undefined ? { status: q.status } : {}),
         ...(q.q !== undefined ? { q: q.q } : {}),
+        ...(q.email !== undefined ? { email: q.email } : {}),
         limit: q.limit,
         skip: q.skip,
       }).pipe(

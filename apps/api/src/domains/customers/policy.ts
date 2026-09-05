@@ -35,3 +35,6 @@ export const BALANCE_NOTE_MAX_CHARS = 280;
 
 /** Customer email max length. Unit: count (chars). */
 export const CUSTOMER_EMAIL_MAX_CHARS = 254;
+
+/** Management balance idempotency key max length. */
+export const BALANCE_IDEMPOTENCY_KEY_MAX_CHARS = 128;

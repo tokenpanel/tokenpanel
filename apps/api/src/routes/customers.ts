@@ -86,6 +86,7 @@ app.get(
       listCustomers({
         organizationId: orgId.toHexString(),
         ...(q.status !== undefined ? { status: q.status } : {}),
+        ...(q.email !== undefined ? { email: q.email } : {}),
         ...(q.q !== undefined ? { q: q.q } : {}),
         limit: q.limit,
         skip: q.skip,

@@ -248,6 +248,16 @@
           }
         },
         {
+          "name": "idempotencyKey",
+          "optional": true,
+          "type": {
+            "kind": "refinement",
+            "from": {
+              "kind": "circular"
+            }
+          }
+        },
+        {
           "name": "note",
           "optional": true,
           "type": {

@@ -14,6 +14,7 @@ import {
   adjustCustomerBalance,
   redactCustomerBalance,
 } from "../../domains/customers/operations.ts";
+import { BALANCE_IDEMPOTENCY_KEY_MAX_CHARS } from "../../domains/customers/policy.ts";
 import { subscribeCustomer } from "../../domains/plans/operations.ts";
 import { runManagementEffect } from "../../http/adapters/boundary.ts";
 import { sValidator } from "../../http/validation/validator.ts";
@@ -132,6 +133,14 @@ app.post(
     const orgId = c.get("orgId");
     const id = c.req.param("id");
     if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
+    const idempotencyKey = c.req.header("Idempotency-Key");
+    if (
+      idempotencyKey !== undefined &&
+      (idempotencyKey.trim().length === 0 ||
+        idempotencyKey.length > BALANCE_IDEMPOTENCY_KEY_MAX_CHARS)
+    ) {
+      return c.json({ error: "invalid_idempotency_key" }, 400);
+    }
     const body = c.req.valid("json");
     const canReadBalances = hasBalancesRead(c);
     return runManagementEffect(
@@ -143,6 +152,7 @@ app.post(
         currency: body.currency,
         reason: body.reason,
         note: body.note ?? "management_api",
+        idempotencyKey,
       }).pipe(
         Effect.map((result) => ({
           customer: canReadBalances

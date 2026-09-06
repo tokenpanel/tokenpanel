@@ -495,7 +495,7 @@ function ModelEditor({
       >
         <SectionTitle>Identity</SectionTitle>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <Field id="m-alias" label="Alias ID" hint="Lowercase slug: a-z, 0-9, _ or -." tooltip="The model identifier customers use in API requests (e.g. 'gpt-4o'). Maps to one or more upstream provider entries.">
+          <Field id="m-alias" label="Alias ID" hint="Lowercase: a-z, 0-9, _, - or ." tooltip="The model identifier customers use in API requests (e.g. 'gpt-4o'). Maps to one or more upstream provider entries.">
             <Input
               id="m-alias"
               type="text"

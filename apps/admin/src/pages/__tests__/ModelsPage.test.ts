@@ -113,9 +113,9 @@ test("buildModelPayload: empty aliasId → error", () => {
   expect(buildModelPayload(validForm({ aliasId: "" }), true).ok).toBe(false);
 });
 
-test("buildModelPayload: bad aliasId regex → error", () => {
+test("buildModelPayload: aliasId allows dots but rejects uppercase", () => {
+  expect(buildModelPayload(validForm({ aliasId: "gpt-5.6-luna" }), true).ok).toBe(true);
   expect(buildModelPayload(validForm({ aliasId: "MY-GPT" }), true).ok).toBe(false);
-  expect(buildModelPayload(validForm({ aliasId: "my.gpt" }), true).ok).toBe(false);
 });
 
 test("buildModelPayload: empty displayName → error", () => {

@@ -1,21 +1,33 @@
 /**
- * Integration test for settleUsage against a live replica set.
+ * Integration test for settleUsage against the in-memory replica set.
  *
  * Verifies the settlement transaction: normal settle (balance debit +
  * adjustment + usage record + counter), exactly-once idempotency on
  * gatewayRequestId, and atomic guard failure (no partial charge when the
- * balance guard refuses). Skips when Mongo is unreachable.
+ * balance guard refuses).
  */
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { Cause, Exit, Layer } from "effect";
-import { MongoClient, ObjectId } from "mongodb";
 import {
-  configureDb,
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  test,
+} from "bun:test";
+import { Cause, Exit, Layer } from "effect";
+import { ObjectId } from "mongodb";
+import {
   getDb,
   getClient,
   getRawDb,
-  closeDb,
 } from "@tokenpanel/db";
+import {
+  TEST_DB_START_TIMEOUT_MS,
+  resetTestCollections,
+  startTestDb,
+  stopTestDb,
+} from "@tokenpanel/db/test-support/memory-server";
 import type { AppServices } from "../../runtime/layers/live.ts";
 import { MongoDb, type MongoDbService } from "../../runtime/services/mongo-db.ts";
 import { ValidatedRepositoriesLive } from "../../infrastructure/mongo/repositories/index.ts";
@@ -43,37 +55,16 @@ async function settleUsage(params: SettleUsageParams): Promise<void> {
   if (Exit.isSuccess(exit)) return;
   throw Cause.squash(exit.cause);
 }
-
 const TEST_DB = "tokenpanel_settle_test";
-let connected = false;
-let client: MongoClient | null = null;
-
-async function ensureConnected(): Promise<boolean> {
-  if (connected) return true;
-  try {
-    const uri =
-      process.env.TEST_MONGODB_URI ??
-      "mongodb://tokenpanel:tokenpanel_dev@localhost:27017/?directConnection=true&replicaSet=rs0&authSource=admin";
-    client = await new MongoClient(uri).connect();
-    await client.db("admin").command({ ping: 1 });
-    configureDb({ uri, databaseName: TEST_DB });
-    connected = true;
-    return true;
-  } catch {
-    connected = false;
-    return false;
-  }
-}
 
 async function resetData(): Promise<void> {
-  const db = await getDb();
-  await Promise.all([
-    db.customers.deleteMany({}),
-    db.organizations.deleteMany({}),
-    db.usageRecords.deleteMany({}),
-    db.balanceAdjustments.deleteMany({}),
-    db.rateLimitCounters.deleteMany({}),
-  ]);
+  await resetTestCollections(
+    "customers",
+    "organizations",
+    "usageRecords",
+    "balanceAdjustments",
+    "rateLimitCounters",
+  );
 }
 
 async function installRuntime(): Promise<void> {
@@ -92,8 +83,10 @@ async function installRuntime(): Promise<void> {
   createAppRuntime(layer, { install: true });
 }
 
+beforeAll(() => startTestDb({ databaseName: TEST_DB }), TEST_DB_START_TIMEOUT_MS);
+afterAll(stopTestDb);
+
 beforeEach(async () => {
-  if (!(await ensureConnected())) return;
   await resetData();
   // Unique gatewayRequestId index (sparse so nulls don't collide) — exercises
   // the in-transaction duplicate-key idempotency fallback.
@@ -107,19 +100,11 @@ beforeEach(async () => {
 afterEach(async () => {
   await disposeAppRuntime().catch(() => undefined);
   clearAppRuntimeSingleton();
-  if (connected) await resetData();
+  await resetData();
 });
 
 describe("settleUsage (live replica set)", () => {
-  test("skips when mongo is unreachable", async () => {
-    if (!connected) {
-      console.log("  (skipped: live mongo not available)");
-      return;
-    }
-  });
-
   test("normal settle debits balance, writes usage + adjustment + counter", async () => {
-    if (!connected) return;
     const orgId = new ObjectId();
     const customerId = new ObjectId();
     const db = await getDb();
@@ -243,7 +228,6 @@ describe("settleUsage (live replica set)", () => {
   });
 
   test("exactly-once: second settle with same gatewayRequestId is a no-op", async () => {
-    if (!connected) return;
     const orgId = new ObjectId();
     const customerId = new ObjectId();
     const db = await getDb();
@@ -344,7 +328,6 @@ describe("settleUsage (live replica set)", () => {
   });
 
   test("guard failure: insufficient balance aborts with no partial charge", async () => {
-    if (!connected) return;
     const orgId = new ObjectId();
     const customerId = new ObjectId();
     const db = await getDb();
@@ -448,10 +431,3 @@ describe("settleUsage (live replica set)", () => {
   });
 });
 
-// Keep the shared client alive for the suite; close on process exit.
-process.on("exit", () => {
-  void (async () => {
-    if (client) await client.close().catch(() => undefined);
-    await closeDb().catch(() => undefined);
-  })();
-});

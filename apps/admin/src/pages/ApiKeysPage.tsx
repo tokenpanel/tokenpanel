@@ -38,6 +38,14 @@ import { hasPermission, useAuth } from "../auth/AuthContext.tsx";
 const CUSTOMER_LIMIT = 200;
 const PAGE_SIZE = 50;
 
+/** Parse the comma-separated model whitelist input into a clean list. */
+export function parseWhitelist(raw: string): string[] {
+  return raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+}
+
 export default function ApiKeysPage(): React.ReactElement {
   const { user } = useAuth();
   const canWrite = hasPermission(user, "customer_keys:write");
@@ -139,10 +147,7 @@ export default function ApiKeysPage(): React.ReactElement {
     if (!canWrite || !customerId || !newName.trim()) return;
     setCreating(true);
     setError(null);
-    const whitelist = newWhitelist
-      .split(",")
-      .map((s) => s.trim())
-      .filter((s) => s.length > 0);
+    const whitelist = parseWhitelist(newWhitelist);
     try {
       const res = await postJson<ApiKeyCreateResponse>("/admin/api-keys", {
         customerId,

@@ -54,7 +54,7 @@ interface RenameForm {
 
 const CREATE_EMPTY: CreateForm = { name: "", slug: "", defaultCurrency: "USD" };
 
-function deriveSlug(name: string): string {
+export function deriveSlug(name: string): string {
   return (
     name
       .toLowerCase()

@@ -1,97 +1,58 @@
-import { test, describe, expect, afterAll } from "bun:test";
-import { MongoClient, ObjectId } from "mongodb";
-import { existsSync, readFileSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { test, describe, expect, beforeAll, afterAll } from "bun:test";
+import { ObjectId } from "mongodb";
 import { createMigrationDb } from "../migration-db.ts";
 import { up as preUp } from "../../../migrations/pre/2026-07-29T18-54-05Z__money-micros-dual-fields.ts";
 import { up as postUp } from "../../../migrations/post/2026-07-29T19-00-00Z__money-units-to-micros.ts";
+import {
+  startTestDb,
+  stopTestDb,
+  TEST_DB_START_TIMEOUT_MS,
+  type TestDbHandle,
+} from "../../test-support/memory-server.ts";
 
 /**
  * Integration coverage for the units → micros money migration (pre + post).
  * Verifies currency-aware conversion (USD ×10⁴, JPY ×10⁶, KWD ×10³), spend-cap
  * scaling that leaves tokens/requests caps untouched, and idempotent re-runs.
  *
- * Requires a live MongoDB replica set. Uses a dedicated test database and drops
- * it on cleanup. Skipped when no reachable, authenticated MongoDB is available.
+ * Runs against the shared in-memory MongoDB replica set, in a dedicated test
+ * database that is dropped on cleanup.
  */
-function loadRootEnvIfPresent(): void {
-  let dir = import.meta.dir;
-  for (let i = 0; i < 8; i++) {
-    const candidate = join(dir, ".env");
-    if (existsSync(candidate)) {
-      const text = readFileSync(candidate, "utf8");
-      for (const line of text.split("\n")) {
-        const m = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/.exec(line);
-        if (!m) continue;
-        const key = m[1]!;
-        if (process.env[key] !== undefined) continue;
-        process.env[key] = m[2]!.replace(/^["']|["']$/g, "");
-      }
-      break;
-    }
-    dir = dirname(dir);
-  }
-}
-loadRootEnvIfPresent();
-
 const TEST_DB = "tokenpanel_micros_it";
-const MONGO_USER = process.env.MONGO_USER;
-const MONGO_PASS = process.env.MONGO_PASS;
-const MONGO_HOST = process.env.MONGO_HOST ?? "localhost";
-const MONGO_PORT = process.env.MONGO_PORT ?? "27017";
 
-const uri = MONGO_USER
-  ? `mongodb://${encodeURIComponent(MONGO_USER)}:${encodeURIComponent(MONGO_PASS ?? "")}@${MONGO_HOST}:${MONGO_PORT}/${TEST_DB}?authSource=admin&directConnection=true`
-  : `mongodb://${MONGO_HOST}:${MONGO_PORT}/${TEST_DB}?directConnection=true`;
+let handle: TestDbHandle;
 
-let client: MongoClient | null = null;
-let connected = false;
-{
-  let c: MongoClient | null = null;
-  try {
-    c = new MongoClient(uri, { serverSelectionTimeoutMS: 3000 });
-    await c.connect();
-    const hello = await c.db("admin").command({ hello: 1 });
-    if (!hello?.isWritablePrimary) throw new Error("not writable primary");
-    await c.db(TEST_DB).command({ dbStats: 1 });
-    await c.db(TEST_DB).dropDatabase().catch(() => {});
-    client = c;
-    connected = true;
-    c = null;
-  } catch {
-    connected = false;
-  } finally {
-    if (c) await c.close().catch(() => {});
-  }
-}
+beforeAll(async () => {
+  handle = await startTestDb({ databaseName: TEST_DB });
+  await handle.client.db(TEST_DB).dropDatabase().catch(() => {});
+}, TEST_DB_START_TIMEOUT_MS);
 
 afterAll(async () => {
-  if (client) {
-    await client.db(TEST_DB).dropDatabase().catch(() => {});
-    await client.close().catch(() => {});
-    client = null;
+  if (handle) {
+    await handle.client.db(TEST_DB).dropDatabase().catch(() => {});
   }
+  await stopTestDb();
 });
 
 async function runPre(): Promise<void> {
-  const db = client!.db(TEST_DB);
-  await client!.withSession(async (session) => {
+  const db = handle.rawDb;
+  await handle.client.withSession(async (session) => {
     const mdb = createMigrationDb(db, session);
     await preUp(mdb);
   });
 }
 
 async function runPost(): Promise<void> {
-  const db = client!.db(TEST_DB);
-  await client!.withSession(async (session) => {
+  const db = handle.rawDb;
+  await handle.client.withSession(async (session) => {
     const mdb = createMigrationDb(db, session);
     await postUp(mdb);
   });
 }
 
-describe.skipIf(!connected)("money units → micros migration", () => {
+describe("money units → micros migration", () => {
   test("pre: currency-aware dual-field copy (USD/JPY/KWD)", async () => {
-    const db = client!.db(TEST_DB);
+    const db = handle.rawDb;
     const customers = db.collection("customers");
     await customers.deleteMany({});
     await customers.insertMany([
@@ -113,7 +74,7 @@ describe.skipIf(!connected)("money units → micros migration", () => {
   });
 
   test("pre: spend cap scaled + marker, tokens/requests caps untouched", async () => {
-    const db = client!.db(TEST_DB);
+    const db = handle.rawDb;
     const plans = db.collection("subscription_plans");
     await plans.deleteMany({});
     await plans.insertOne({
@@ -141,7 +102,7 @@ describe.skipIf(!connected)("money units → micros migration", () => {
   });
 
   test("pre: idempotent re-run does not double-scale caps or duplicate micros", async () => {
-    const db = client!.db(TEST_DB);
+    const db = handle.rawDb;
     const plans = db.collection("subscription_plans");
     await plans.deleteMany({});
     await plans.insertOne({
@@ -158,7 +119,7 @@ describe.skipIf(!connected)("money units → micros migration", () => {
   });
 
   test("post: promotes units→micros, drops units, renames spend dim", async () => {
-    const db = client!.db(TEST_DB);
+    const db = handle.rawDb;
     const customers = db.collection("customers");
     const plans = db.collection("subscription_plans");
     const counters = db.collection("rate_limit_counters");
@@ -209,7 +170,7 @@ describe.skipIf(!connected)("money units → micros migration", () => {
   });
 
   test("post: idempotent re-run does not re-scale counters", async () => {
-    const db = client!.db(TEST_DB);
+    const db = handle.rawDb;
     const counters = db.collection("rate_limit_counters");
     const orgs = db.collection("organizations");
     await counters.deleteMany({});

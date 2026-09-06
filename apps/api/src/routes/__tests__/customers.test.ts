@@ -1,16 +1,25 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  expect,
+  test,
+} from "bun:test";
 import { ObjectId } from "mongodb";
 import { Hono } from "hono";
 import { Layer } from "effect";
-import { MongoClient } from "mongodb";
 import {
-  configureDb,
   getDb,
   getClient,
   getRawDb,
-  closeDb,
-  getMongoConnectionConfig,
 } from "@tokenpanel/db";
+import {
+  TEST_DB_START_TIMEOUT_MS,
+  resetTestCollections,
+  startTestDb,
+  stopTestDb,
+  type TestDbHandle,
+} from "@tokenpanel/db/test-support/memory-server";
 import type { AuthVariables } from "../../middleware/auth.ts";
 import {
   clearAppRuntimeSingleton,
@@ -84,20 +93,9 @@ test("addInterval: month overflow from Jan 31 rolls forward (JS month math)", ()
   expect(r.getUTCFullYear()).toBe(2026);
 });
 
-/**
- * Live-replica-set gating (same convention as the customers domain
- * integration suite): no TEST_MONGODB_URI → explicit skip; a supplied URI
- * that cannot connect must FAIL setup, never silently pass.
- */
-const EXPLICIT_URI = process.env.TEST_MONGODB_URI;
-const RUN_LIVE = EXPLICIT_URI !== undefined && EXPLICIT_URI.length > 0;
-const describeLive = RUN_LIVE ? describe : describe.skip;
-
-describeLive("GET /v1/admin/customers email filter (live route)", () => {
-  // Same DB the domain suite uses (single-process serial bun execution).
-  // Fixtures are isolated by fresh per-run orgIds; cleanup is targeted, so
-  // sharing never erases another suite's data and any run order works.
-  const TEST_DB = "tokenpanel_idempotency_test";
+describe("GET /v1/admin/customers email filter (live route)", () => {
+  const TEST_DB = "tokenpanel_customers_route_test";
+  let handle: TestDbHandle | null = null;
   const jwtSecret = "route-email-test-secret-32-chars-min!!";
   let sharedGet: (path: string) => Promise<Response> = async () => {
     throw new Error("not initialized");
@@ -109,35 +107,7 @@ describeLive("GET /v1/admin/customers email filter (live route)", () => {
   let sessionId = new ObjectId();
 
   beforeAll(async () => {
-    // Another suite in this bun process may have opened the shared client
-    // already (single-process serial execution). Reuse it ONLY after proving
-    // the active database is an isolated test DB — never a dev/prod database.
-    let raw: unknown;
-    try {
-      raw = getRawDb();
-    } catch {
-      raw = null;
-    }
-    if (!raw) {
-      const probe = new MongoClient(EXPLICIT_URI as string, {
-        serverSelectionTimeoutMS: 5000,
-      });
-      try {
-        await probe.db("admin").command({ ping: 1 });
-      } finally {
-        await probe.close();
-      }
-      configureDb({ uri: EXPLICIT_URI as string, databaseName: TEST_DB });
-      await getDb();
-    } else {
-      const active = getMongoConnectionConfig().databaseName;
-      if (active !== TEST_DB) {
-        throw new Error(
-          `refusing shared connection: active database "${active}" is not ${TEST_DB}`,
-        );
-      }
-    }
-
+    handle = await startTestDb({ databaseName: TEST_DB });
     const db = getRawDb();
     orgA = new ObjectId();
     orgB = new ObjectId();
@@ -188,12 +158,12 @@ describeLive("GET /v1/admin/customers email filter (live route)", () => {
 
     const config = makeTestConfig({
       jwtSecret,
-      database: { uri: EXPLICIT_URI as string, name: TEST_DB },
+      database: { uri: handle.uri, name: TEST_DB },
     });
     // Full AppServices test graph with real Mongo handles injected. The
     // declared MongoUnavailableError channel is dead in practice (Mongo is
-    // already connected and pinged above); createAppRuntime requires a
-    // never error channel, so assert it away.
+    // already connected via the harness singleton); createAppRuntime requires
+    // a never error channel, so assert it away.
     const layer = makeAppTestLayer({
       config,
       mongo: { db: await getDb(), client: getClient(), rawDb: getRawDb() },
@@ -218,32 +188,18 @@ describeLive("GET /v1/admin/customers email filter (live route)", () => {
         app.request(path, { headers: { Authorization: `Bearer ${t}` } }),
       );
     targetHex = targetId.toHexString();
-  }, 30_000);
+  }, TEST_DB_START_TIMEOUT_MS);
 
   afterAll(async () => {
     await disposeAppRuntime().catch(() => undefined);
     clearAppRuntimeSingleton();
-    // Targeted cleanup only: never dropDatabase — another suite shares this
-    // DB in one process. Fresh orgIds keep fixtures collision-free anyway.
-    const db = getRawDb();
-    await db
-      .collection("customers")
-      .deleteMany({ organizationId: { $in: [orgA, orgB] } });
-    await db.collection("organizations").deleteMany({
-      _id: { $in: [orgA, orgB] },
-    });
-    await db
-      .collection("users")
-      .deleteMany({ _id: adminId });
-    await db
-      .collection("admin_sessions")
-      .deleteMany({ _id: sessionId });
-  });
-
-  process.on("exit", () => {
-    void (async () => {
-      await closeDb().catch(() => undefined);
-    })();
+    await resetTestCollections(
+      "customers",
+      "organizations",
+      "users",
+      "adminSessions",
+    );
+    await stopTestDb();
   });
 
   test("uppercase email query returns exactly the target row", async () => {

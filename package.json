@@ -22,6 +22,7 @@
     "lint": "turbo run lint",
     "typecheck": "turbo run typecheck",
     "test": "turbo run test && bun run test:manager",
+    "test:coverage": "turbo run test:coverage && bun run test:manager",
     "test:manager": "for test_file in manager/lib/__tests__/*_test.sh; do bash \"$test_file\" || exit 1; done",
     "e2e": "bash scripts/e2e.sh",
     "config:generate": "bun run packages/config/src/cli.ts generate --root .",

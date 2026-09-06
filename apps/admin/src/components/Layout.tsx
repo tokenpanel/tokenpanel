@@ -124,7 +124,7 @@ export function pathLabel(pathname: string): string {
   return match ? match.label : "TokenPanel";
 }
 
-function orgInitials(name: string): string {
+export function orgInitials(name: string): string {
   const parts = name.trim().split(/\s+/).filter(Boolean);
   if (parts.length === 0) return "O";
   if (parts.length === 1) return (parts[0]?.slice(0, 2) ?? "O").toUpperCase();

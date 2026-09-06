@@ -94,13 +94,23 @@ bun --filter @tokenpanel/api dev    # run one workspace's dev
 `compose.yml` boots MongoDB 8 (single-node replica set) + api + admin with
 hot-reload bind-mounts. Bun scripts wrap `docker compose`:
 
-> **MongoDB source of truth (hard rule):** ALWAYS use this project's Docker
-> Compose MongoDB for local dev and testing. NEVER connect to, start, or rely on
-> a globally/host-installed `mongod` (e.g. a system service on `:27017`). The
-> compose MongoDB is the only sanctioned instance — it is a single-node replica
-> set with the project credentials, which transactions and the migration runner
+> **MongoDB source of truth (hard rule):** use this project's Docker Compose
+> MongoDB for local dev **runtime** (`bun run dev`, manual API runs). NEVER
+> connect to, start, or rely on a globally/host-installed `mongod` (e.g. a
+> system service on `:27017`) for the running app. The compose MongoDB is the
+> only sanctioned instance for development — it is a single-node replica set
+> with the project credentials, which transactions and the migration runner
 > require. If `:27017` is occupied by a non-compose mongod, stop it or remap
-> `MONGO_HOST_PORT`; do not test against it.
+> `MONGO_HOST_PORT`; do not run the app against it.
+>
+> **Tests are different:** automated tests NEVER touch the compose MongoDB.
+> Integration tests spin up an isolated `mongodb-memory-server` replica set
+> via `@tokenpanel/db/test-support/memory-server` (`startTestDb`/`stopTestDb`,
+> unique `databaseName` per suite, `TEST_MONGODB_URI` env as an opt-in escape
+> hatch for debugging against real compose Mongo). The mongod binary is
+> cached in `~/.cache/mongodb-binary` (CI caches this path); first-ever run
+> downloads it, after which suites start in <1s. Do not gate new integration
+> tests on environment probes — always run them via the harness.
 
 ```bash
 bun run docker:start    # build + up -d (reuses mongo volume)

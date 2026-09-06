@@ -1,73 +1,31 @@
-import { test, describe, expect, afterAll } from "bun:test";
-import { MongoClient } from "mongodb";
-import { existsSync, readFileSync } from "node:fs";
+import { test, describe, expect, beforeAll, afterAll } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, dirname } from "node:path";
+import { join } from "node:path";
 import { runMigrations, executeMigration, isLegacyChecksumMismatch } from "../runner.ts";
 import { validateMigrationTree } from "../validator.ts";
 import type { MigrationFile } from "../types.ts";
-
-function loadRootEnvIfPresent(): void {
-  let dir = import.meta.dir;
-  for (let i = 0; i < 8; i++) {
-    const envPath = join(dir, ".env");
-    if (existsSync(envPath)) {
-      for (const line of readFileSync(envPath, "utf-8").split("\n")) {
-        const trimmed = line.trim();
-        if (!trimmed || trimmed.startsWith("#")) continue;
-        const eq = trimmed.indexOf("=");
-        if (eq < 0) continue;
-        const key = trimmed.slice(0, eq).trim();
-        const val = trimmed.slice(eq + 1).trim().replace(/^["']|["']$/g, "");
-        if (!(key in process.env)) process.env[key] = val;
-      }
-      return;
-    }
-    const parent = dirname(dir);
-    if (parent === dir) break;
-    dir = parent;
-  }
-}
-loadRootEnvIfPresent();
+import {
+  startTestDb,
+  stopTestDb,
+  TEST_DB_START_TIMEOUT_MS,
+  type TestDbHandle,
+} from "../../test-support/memory-server.ts";
 
 const TEST_DB = "tokenpanel_imm_it";
-const MONGO_USER = process.env.MONGO_USER;
-const MONGO_PASS = process.env.MONGO_PASS;
-const MONGO_HOST = process.env.MONGO_HOST ?? "localhost";
-const MONGO_PORT = process.env.MONGO_PORT ?? "27017";
 
-const uri = MONGO_USER
-  ? `mongodb://${encodeURIComponent(MONGO_USER)}:${encodeURIComponent(MONGO_PASS ?? "")}@${MONGO_HOST}:${MONGO_PORT}/${TEST_DB}?authSource=admin&directConnection=true`
-  : `mongodb://${MONGO_HOST}:${MONGO_PORT}/${TEST_DB}?directConnection=true`;
+let handle: TestDbHandle;
 
-let client: MongoClient | null = null;
-let connected = false;
-{
-  let c: MongoClient | null = null;
-  try {
-    c = new MongoClient(uri, { serverSelectionTimeoutMS: 3000 });
-    await c.connect();
-    const hello = await c.db("admin").command({ hello: 1 });
-    if (!hello?.isWritablePrimary) throw new Error("not writable primary");
-    await c.db(TEST_DB).command({ dbStats: 1 });
-    await c.db(TEST_DB).dropDatabase().catch(() => {});
-    client = c;
-    connected = true;
-    c = null;
-  } catch {
-    connected = false;
-  } finally {
-    if (c) await c.close().catch(() => {});
-  }
-}
+beforeAll(async () => {
+  handle = await startTestDb({ databaseName: TEST_DB });
+  await handle.client.db(TEST_DB).dropDatabase().catch(() => {});
+}, TEST_DB_START_TIMEOUT_MS);
 
 afterAll(async () => {
-  if (client) {
-    await client.db(TEST_DB).dropDatabase().catch(() => {});
-    await client.close().catch(() => {});
-    client = null;
+  if (handle) {
+    await handle.client.db(TEST_DB).dropDatabase().catch(() => {});
   }
+  await stopTestDb();
 });
 
 const MIGRATION_SOURCE = (id: string): string =>
@@ -92,8 +50,8 @@ test("checksum changes when migration file body is edited", async () => {
     expect(checksum1).toMatch(/^[0-9a-f]{64}$/);
 
     await writeFile(join(root, "pre", `${id}.ts`), original + "\n");
-
     const result2 = await validateMigrationTree(root);
+
     expect(result2.errors).toEqual([]);
     const checksum2 = result2.migrations.pre[0]!.checksum;
     expect(checksum2).toMatch(/^[0-9a-f]{64}$/);
@@ -117,9 +75,9 @@ test("checksum compatibility exception ends before 2026-07-18", () => {
   expect(isLegacyChecksumMismatch("2026-12-31T00-00-00Z__enforced")).toBe(false);
 });
 
-describe.skipIf(!connected)("migration immutability guarantee", () => {
+describe("migration immutability guarantee", () => {
   test("executeMigration records checksum; mismatch detected on file edit", async () => {
-    const db = client!.db(TEST_DB);
+    const db = handle.rawDb;
     const root = await mkdtemp(join(tmpdir(), "tokenpanel-imm-it-"));
     try {
       await mkdir(join(root, "pre"));
@@ -141,7 +99,7 @@ describe.skipIf(!connected)("migration immutability guarantee", () => {
         transactional: false,
         up: async () => {},
       };
-      await executeMigration(client!, db, m);
+      await executeMigration(handle.client, db, m);
 
       const record = await db
         .collection<{ _id: string; checksum: string }>("_migrations")
@@ -165,7 +123,7 @@ describe.skipIf(!connected)("migration immutability guarantee", () => {
   });
 
   test("runMigrations throws checksum-mismatch error when file edited after apply", async () => {
-    const db = client!.db(TEST_DB);
+    const db = handle.rawDb;
     const BOOTSTRAP_ID = "2026-07-18T00-00-00Z__checksum-enforcement-test";
     const root = await mkdtemp(join(tmpdir(), "tokenpanel-imm-run-"));
 
@@ -181,7 +139,7 @@ describe.skipIf(!connected)("migration immutability guarantee", () => {
         checksum: "0".repeat(64),
       });
 
-      await runMigrations(client!, db, "pre", { root });
+      await runMigrations(handle.client, db, "pre", { root });
       expect.unreachable("runMigrations should have thrown");
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);

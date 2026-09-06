@@ -6,16 +6,28 @@
  * the hold; post-commit disconnect with reported usage settles (debit + release
  * hold) rather than free-billing or leaking the reservation.
  */
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  test,
+} from "bun:test";
 import { Layer } from "effect";
 import { ObjectId } from "mongodb";
 import {
-  configureDb,
   getDb,
   getClient,
   getRawDb,
-  closeDb,
 } from "@tokenpanel/db";
+import {
+  TEST_DB_START_TIMEOUT_MS,
+  resetTestCollections,
+  startTestDb,
+  stopTestDb,
+} from "@tokenpanel/db/test-support/memory-server";
 import type { AppServices } from "../runtime/layers/live.ts";
 import { MongoDb, type MongoDbService } from "../runtime/services/mongo-db.ts";
 import { ValidatedRepositoriesLive } from "../infrastructure/mongo/repositories/index.ts";
@@ -33,34 +45,15 @@ import { emptyStreamUsage } from "../domains/providers/generation.ts";
 import type { ModelDoc, ModelEntryDoc, ProviderDoc } from "@tokenpanel/db";
 
 const TEST_DB = "tokenpanel_cancel_test";
-let connected = false;
-
-async function ensureConnected(): Promise<boolean> {
-  if (connected) return true;
-  try {
-    const uri =
-      process.env.TEST_MONGODB_URI ??
-      "mongodb://tokenpanel:tokenpanel_dev@localhost:27017/?directConnection=true&replicaSet=rs0&authSource=admin";
-    await import("mongodb").then(({ MongoClient }) =>
-      new MongoClient(uri).connect().then((c) => c.db("admin").command({ ping: 1 })),
-    );
-    configureDb({ uri, databaseName: TEST_DB });
-    connected = true;
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 async function resetData(): Promise<void> {
-  const db = await getDb();
-  await Promise.all([
-    db.customers.deleteMany({}),
-    db.organizations.deleteMany({}),
-    db.usageRecords.deleteMany({}),
-    db.balanceAdjustments.deleteMany({}),
-    db.rateLimitCounters.deleteMany({}),
-  ]);
+  await resetTestCollections(
+    "customers",
+    "organizations",
+    "usageRecords",
+    "balanceAdjustments",
+    "rateLimitCounters",
+  );
 }
 
 async function installRuntime(): Promise<void> {
@@ -173,8 +166,10 @@ async function amountMicrosOf(customerId: ObjectId): Promise<number> {
   return (c?.balance as { amountMicros?: number } | null)?.amountMicros ?? 0;
 }
 
+beforeAll(() => startTestDb({ databaseName: TEST_DB }), TEST_DB_START_TIMEOUT_MS);
+afterAll(stopTestDb);
+
 beforeEach(async () => {
-  if (!(await ensureConnected())) return;
   await resetData();
   await installRuntime();
 });
@@ -182,19 +177,11 @@ beforeEach(async () => {
 afterEach(async () => {
   await disposeAppRuntime().catch(() => undefined);
   clearAppRuntimeSingleton();
-  if (connected) await resetData();
+  await resetData();
 });
 
 describe("generation cancellation (live replica set)", () => {
-  test("skips when mongo is unreachable", async () => {
-    if (!connected) {
-      console.log("  (skipped: live mongo not available)");
-      return;
-    }
-  });
-
   test("pre-commit disconnect releases the held reservation", async () => {
-    if (!connected) return;
     const { orgId, customerId } = await seedOrgCustomer(10_000, 500);
     expect(await reservedMicrosOf(customerId)).toBe(500);
 
@@ -233,7 +220,6 @@ describe("generation cancellation (live replica set)", () => {
   });
 
   test("post-commit disconnect with reported usage settles (debit + release hold)", async () => {
-    if (!connected) return;
     const { orgId, customerId } = await seedOrgCustomer(10_000, 500);
     const { model, entry, provider } = modelStub(orgId);
 
@@ -284,8 +270,3 @@ describe("generation cancellation (live replica set)", () => {
   });
 });
 
-process.on("exit", () => {
-  void (async () => {
-    await closeDb().catch(() => undefined);
-  })();
-});

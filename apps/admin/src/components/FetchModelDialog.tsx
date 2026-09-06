@@ -44,7 +44,7 @@ interface SearchEntry {
   price: string;
 }
 
-function formatPrice(m: FetchedModel): string {
+export function formatPrice(m: FetchedModel): string {
   if (!m.cost) return "no price";
   // Catalog cost is USD cents (minor units); render via the integer-exact
   // micros codec rather than a float divide. Catalog is always USD (2dp).
@@ -53,11 +53,11 @@ function formatPrice(m: FetchedModel): string {
   return `$${input} / $${output}`;
 }
 
-function buildKey(m: FetchedModel): string {
+export function buildKey(m: FetchedModel): string {
   return `${m.subProvider ?? ""}/${m.upstreamModelId}`;
 }
 
-function buildHaystack(m: FetchedModel): string {
+export function buildHaystack(m: FetchedModel): string {
   return `${m.upstreamModelId} ${m.displayName} ${m.subProvider ?? ""}`.toLowerCase();
 }
 

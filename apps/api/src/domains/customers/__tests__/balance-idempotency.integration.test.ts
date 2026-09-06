@@ -1,22 +1,33 @@
 /**
  * Balance-adjustment idempotency + exact-email customer lookup against the
- * live replica set. Proves the money path, not mocks: replays (sequential
+ * in-memory replica set. Proves the money path, not mocks: replays (sequential
  * and concurrent) increment the balance exactly once, conflicting key reuse
  * leaves balances untouched, keys are organization-scoped, and unkeyed
  * requests stay independent operations.
  */
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  test,
+} from "bun:test";
 import { Effect, Layer } from "effect";
-import { MongoClient, ObjectId } from "mongodb";
+import { ObjectId } from "mongodb";
 import { appErrorCode, appErrorTag } from "../../../errors/families.ts";
 import {
-  configureDb,
   getDb,
   getClient,
   getRawDb,
-  closeDb,
-  getMongoConnectionConfig,
 } from "@tokenpanel/db";
+import {
+  TEST_DB_START_TIMEOUT_MS,
+  resetTestCollections,
+  startTestDb,
+  stopTestDb,
+} from "@tokenpanel/db/test-support/memory-server";
 import type { CustomerDoc } from "@tokenpanel/db";
 import { MongoDb, type MongoDbService } from "../../../runtime/services/mongo-db.ts";
 import { ClockLive } from "../../../runtime/layers/clock.ts";
@@ -26,53 +37,9 @@ import { adjustCustomerBalance, listCustomers } from "../operations.ts";
 
 const TEST_DB = "tokenpanel_idempotency_test";
 
-/**
- * Live-replica-set gating: final validation always supplies TEST_MONGODB_URI
- * (compose Mongo). With no URI the suite is skipped explicitly; with a
- * supplied URI a connection failure must FAIL setup — never silently pass.
- */
-const EXPLICIT_URI = process.env.TEST_MONGODB_URI;
-const RUN_LIVE = EXPLICIT_URI !== undefined && EXPLICIT_URI.length > 0;
-const describeLive = RUN_LIVE ? describe : describe.skip;
-let connected = false;
-
-async function ensureConnected(): Promise<void> {
-  if (connected) return;
-  // Another suite in this bun process may already have opened the shared
-  // client (single-process serial execution). Reuse it ONLY after proving
-  // the active database is an isolated test DB — never a dev/prod database.
-  try {
-    getRawDb();
-  } catch {
-    // not connected yet: probe reachability, then configure our own name.
-    const probe = new MongoClient(EXPLICIT_URI as string, {
-      serverSelectionTimeoutMS: 5000,
-    });
-    try {
-      await probe.db("admin").command({ ping: 1 });
-    } finally {
-      await probe.close();
-    }
-    configureDb({ uri: EXPLICIT_URI as string, databaseName: TEST_DB });
-    connected = true;
-    return;
-  }
-  const active = getMongoConnectionConfig().databaseName;
-  if (active !== TEST_DB) {
-    throw new Error(
-      `refusing shared connection: active database "${active}" is not ${TEST_DB}`,
-    );
-  }
-  connected = true;
-}
-
 async function resetData(): Promise<void> {
   const db = await getDb();
-  await Promise.all([
-    db.customers.deleteMany({}),
-    db.organizations.deleteMany({}),
-    db.balanceAdjustments.deleteMany({}),
-  ]);
+  await resetTestCollections("customers", "organizations", "balanceAdjustments");
   // Mirror of post/2026-09-05 balance-adjustment idempotency migration: the
   // unique partial index is the gate that makes replay detection atomic.
   await db.balanceAdjustments.createIndex(
@@ -171,23 +138,19 @@ type AdjustResult = { customer: CustomerDoc; adjustment: { _id: ObjectId } };
 const isAdjustResult = (r: unknown): r is AdjustResult =>
   typeof r === "object" && r !== null && "adjustment" in r;
 
+beforeAll(() => startTestDb({ databaseName: TEST_DB }), TEST_DB_START_TIMEOUT_MS);
+afterAll(stopTestDb);
+
 beforeEach(async () => {
-  await ensureConnected();
   await resetData();
   await installLayer();
 });
 
 afterEach(async () => {
-  if (connected) await resetData();
+  await resetData();
 });
 
-process.on("exit", () => {
-  void (async () => {
-    await closeDb().catch(() => undefined);
-  })();
-});
-
-describeLive("balance adjustment idempotency (live replica set)", () => {
+describe("balance adjustment idempotency (live replica set)", () => {
 
   test("sequential replay increments exactly once and returns the original adjustment", async () => {
     const orgId = await seedOrg();
@@ -413,7 +376,7 @@ describeLive("balance adjustment idempotency (live replica set)", () => {
   });
 });
 
-describeLive("exact-email customer lookup (live replica set)", () => {
+describe("exact-email customer lookup (live replica set)", () => {
   test("email lookup is exact, organization-scoped, and returns zero or one", async () => {
     const orgA = await seedOrg();
     const orgB = await seedOrg();

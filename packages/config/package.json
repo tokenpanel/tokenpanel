@@ -13,6 +13,7 @@
     "build": "bun build src/index.ts --target=bun --outdir dist",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
+    "test:coverage": "bun test --coverage",
     "clean": "rm -rf dist .turbo node_modules/.tmp"
   },
   "dependencies": {

@@ -11,6 +11,7 @@
     "lint": "oxlint",
     "typecheck": "tsc -b --noEmit",
     "test": "bun test --preload ./src/__test__/dom-preload.ts",
+    "test:coverage": "bun test --preload ./src/__test__/dom-preload.ts --coverage",
     "clean": "rm -rf dist .turbo node_modules/.tmp"
   },
   "dependencies": {

@@ -64,10 +64,10 @@ function mkModel(over: Partial<FetchedModel> = {}): FetchedModel {
   } as FetchedModel;
 }
 
-test("slugifyModelId: lowercases, / -> -, strips non [a-z0-9_-]", () => {
+test("slugifyModelId: lowercases, / -> -, preserves dots, strips other characters", () => {
   expect(slugifyModelId("openai/gpt-5")).toBe("openai-gpt-5");
-  expect(slugifyModelId("Anthropic/Claude.Opus")).toBe("anthropic-claudeopus");
-  expect(slugifyModelId("deepseek-v4-flash")).toBe("deepseek-v4-flash");
+  expect(slugifyModelId("Anthropic/Claude.Opus")).toBe("anthropic-claude.opus");
+  expect(slugifyModelId("gpt-5.6 luna")).toBe("gpt-5.6luna");
 });
 
 test("formFromFetched: maps all fields, keeps currency/marginBps/firstProviderId", () => {

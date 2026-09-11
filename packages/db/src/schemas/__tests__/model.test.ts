@@ -141,8 +141,8 @@ test("modelDoc requires entries min 1 + aliasId regex", () => {
     updatedAt: new Date(),
   };
   expect(modelDoc.safeParse(b).success).toBe(true);
+  expect(modelDoc.safeParse({ ...b, aliasId: "gpt-5.6-luna" }).success).toBe(true);
   expect(modelDoc.safeParse({ ...b, aliasId: "MY-GPT" }).success).toBe(false);
-  expect(modelDoc.safeParse({ ...b, aliasId: "my.gpt" }).success).toBe(false);
   expect(modelDoc.safeParse({ ...b, entries: [] }).success).toBe(false);
   expect(modelDoc.safeParse({ ...b, currency: "us" }).success).toBe(false);
 });

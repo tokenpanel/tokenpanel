@@ -135,7 +135,7 @@ export const Slug = Schema.String.pipe(
 export const ModelAliasId = Schema.String.pipe(
   Schema.minLength(1),
   Schema.maxLength(80),
-  Schema.pattern(/^[a-z0-9_-]+$/),
+  Schema.pattern(/^[a-z0-9_.-]+$/),
 );
 
 // ---------------------------------------------------------------------------

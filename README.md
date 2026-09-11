@@ -203,7 +203,7 @@ curl https://your-tokenpanel-domain.com/v1/messages \
 
 ## Local Development
 
-TokenPanel uses Bun workspaces and Docker Compose.
+TokenPanel requires Bun 1.4.0 or newer and uses Bun workspaces and Docker Compose.
 
 ```bash
 bun install

@@ -432,7 +432,7 @@ export function slugifyModelId(id: string): string {
   return id
     .toLowerCase()
     .replace(/\//g, "-")
-    .replace(/[^a-z0-9_-]/g, "");
+    .replace(/[^a-z0-9_.-]/g, "");
 }
 
 /**
@@ -480,8 +480,8 @@ export function buildModelPayload(
   | { ok: false; error: string } {
   const aliasId = f.aliasId.trim();
   if (!aliasId) return { ok: false, error: "Alias ID required." };
-  if (!/^[a-z0-9_-]+$/.test(aliasId))
-    return { ok: false, error: "Alias ID must be lowercase slug (a-z0-9_-)." };
+  if (!/^[a-z0-9_.-]+$/.test(aliasId))
+    return { ok: false, error: "Alias ID must use lowercase letters, digits, _, - or ." };
 
   const displayName = f.displayName.trim();
   if (!displayName) return { ok: false, error: "Display name required." };

@@ -1,5 +1,5 @@
 # --- Stage 1: install deps + build admin SPA ---
-FROM oven/bun:1.2.21-alpine AS build
+FROM oven/bun:1.4.0-alpine AS build
 
 WORKDIR /app
 
@@ -9,7 +9,7 @@ RUN bun run --filter @tokenpanel/db build
 RUN bun run --filter @tokenpanel/admin build
 
 # --- Stage 2: runtime (api + admin dist) ---
-FROM oven/bun:1.2.21-alpine
+FROM oven/bun:1.4.0-alpine
 
 WORKDIR /app
 ENV NODE_ENV=production

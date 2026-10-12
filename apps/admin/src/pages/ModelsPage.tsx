@@ -38,6 +38,19 @@ import { EmptyState } from "@/components/EmptyState";
 import { Panel } from "@/components/Instrument";
 import { Scale } from "@/components/Scale";
 import { useConfirm } from "@/components/ConfirmDialog";
+import { MultiSelect, type MultiSelectOption } from "@/components/MultiSelect";
+import { CurrencySelect } from "@/components/CurrencySelect";
+import { UpstreamModelPicker } from "@/components/ModelPickers";
+import { MODEL_MODALITIES, type ModelModality as Modality } from "@tokenpanel/contracts";
+
+const MODALITY_LABEL: Record<Modality, string> = {
+  text: "Text",
+  image: "Image",
+  audio: "Audio",
+  video: "Video",
+  pdf: "PDF",
+};
+const MODALITY_OPTIONS: MultiSelectOption[] = MODEL_MODALITIES.map((m) => ({ value: m, label: MODALITY_LABEL[m] }));
 import { formatMicros } from "../utils/format.ts";
 import { FetchModelDialog } from "@/components/FetchModelDialog";
 import type { FetchedModel } from "../api/catalog.ts";
@@ -92,19 +105,14 @@ import {
   buildModelPayload,
   priceFromCostMargin,
   emptyForm,
+  parseModalities,
+  modalitiesToText,
 } from "./models/model-form.ts";
 
 type Status = ModelStatus;
 
 const METADATA_MAX_ENTRIES = MODEL_METADATA_POLICY.maxEntries;
 const METADATA_KEY_MAX_LEN = MODEL_METADATA_POLICY.keyMaxLen;
-
-interface ModelCatalog {
-  _id: string;
-  providerId: string;
-  upstreamModelId: string;
-  displayName: string;
-}
 
 
 type StatusFilter = Status | "none";
@@ -587,18 +595,34 @@ function ModelEditor({
 
         <SectionTitle>Modalities</SectionTitle>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <Field id="m-min" label="Input modalities" hint="Comma-separated: text, image, audio, video, pdf.">
-            <Input id="m-min" type="text" value={form.inputModalities} placeholder="text, image" onChange={(e) => setField(setForm, "inputModalities", e.target.value)} disabled={saving} />
+          <Field id="m-min" label="Input modalities" hint="What the model accepts.">
+            <MultiSelect
+              id="m-min"
+              label="Input modalities"
+              options={MODALITY_OPTIONS}
+              value={parseModalities(form.inputModalities)}
+              onChange={(list) => setField(setForm, "inputModalities", modalitiesToText(list as Modality[]))}
+              placeholder="None selected"
+              disabled={saving}
+            />
           </Field>
-          <Field id="m-mout" label="Output modalities" hint="Comma-separated: text, image, audio, video, pdf.">
-            <Input id="m-mout" type="text" value={form.outputModalities} placeholder="text" onChange={(e) => setField(setForm, "outputModalities", e.target.value)} disabled={saving} />
+          <Field id="m-mout" label="Output modalities" hint="What the model can produce.">
+            <MultiSelect
+              id="m-mout"
+              label="Output modalities"
+              options={MODALITY_OPTIONS}
+              value={parseModalities(form.outputModalities)}
+              onChange={(list) => setField(setForm, "outputModalities", modalitiesToText(list as Modality[]))}
+              placeholder="None selected"
+              disabled={saving}
+            />
           </Field>
         </div>
 
         <SectionTitle>Pricing &amp; status</SectionTitle>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
           <Field id="m-cur" label="Currency">
-            <Input id="m-cur" type="text" value={form.currency} onChange={(e) => setField(setForm, "currency", e.target.value)} required disabled={saving} />
+            <CurrencySelect id="m-cur" value={form.currency} onChange={(v) => setField(setForm, "currency", v)} disabled={saving} />
           </Field>
           <Field id="m-margin" label="Margin (bps)" optional tooltip="Markup over cost, in basis points (100 = 1%). Blank = 0 (price equals cost). Changing this re-derives the price fields below from cost; editing a price directly clears this field.">
             <Input
@@ -715,8 +739,14 @@ function ModelEditor({
                   </SelectContent>
                 </Select>
               </Field>
-              <Field id="m-up" label="Upstream model id" hint="Upstream model id on the chosen provider.">
-                <Input id="m-up" type="text" value={form.firstUpstreamModelId} placeholder="gpt-4o-mini" onChange={(e) => setField(setForm, "firstUpstreamModelId", e.target.value)} required disabled={saving} />
+              <Field id="m-up" label="Upstream model id">
+                <UpstreamModelPicker
+                  id="m-up"
+                  providerId={form.firstProviderId}
+                  value={form.firstUpstreamModelId}
+                  onChange={(v) => setField(setForm, "firstUpstreamModelId", v)}
+                  disabled={saving}
+                />
               </Field>
             </div>
           </>
@@ -1404,7 +1434,6 @@ interface AddEntryFormProps {
 interface AddEntryState {
   providerId: string;
   upstreamModelId: string;
-  manualMode: boolean;
   marginBps: string;
   costInput: string;
   costOutput: string;
@@ -1427,7 +1456,6 @@ function emptyAddEntry(): AddEntryState {
   return {
     providerId: "",
     upstreamModelId: "",
-    manualMode: false,
     marginBps: "0",
     costInput: "",
     costOutput: "",
@@ -1449,39 +1477,9 @@ function emptyAddEntry(): AddEntryState {
 
 function AddEntryForm({ modelId, providers, onAdded }: AddEntryFormProps): React.ReactElement {
   const [state, setState] = useState<AddEntryState>(emptyAddEntry);
-  const [catalog, setCatalog] = useState<ModelCatalog[]>([]);
-  const [loadingCatalog, setLoadingCatalog] = useState(false);
-  const [catalogError, setCatalogError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    let cancelled = false;
-    if (!state.providerId) {
-      setCatalog([]);
-      setCatalogError(null);
-      return;
-    }
-    setLoadingCatalog(true);
-    setCatalogError(null);
-    void modelsApi
-      .listProviderCatalog(state.providerId)
-      .then((res) => {
-        if (cancelled) return;
-        setCatalog(res.items as ModelCatalog[]);
-      })
-      .catch((err) => {
-        if (cancelled) return;
-        setCatalogError(err instanceof ApiError ? err.message : "Failed to load models.");
-        setCatalog([]);
-      })
-      .finally(() => {
-        if (!cancelled) setLoadingCatalog(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [state.providerId]);
 
   const submit = useCallback(
     async (e: FormEvent<HTMLFormElement>) => {
@@ -1630,26 +1628,13 @@ function AddEntryForm({ modelId, providers, onAdded }: AddEntryFormProps): React
         </Field>
         <div className="flex flex-col gap-1.5">
           <Label htmlFor="ae-up">Upstream model id</Label>
-          {state.manualMode || catalog.length === 0 ? (
-            <Input id="ae-up" type="text" value={state.upstreamModelId} placeholder="gpt-4o-mini" onChange={(e) => setState((s) => ({ ...s, upstreamModelId: e.target.value }))} required disabled={submitting} />
-          ) : (
-            <Select value={state.upstreamModelId} onValueChange={(v) => setState((s) => ({ ...s, upstreamModelId: v }))} disabled={submitting || loadingCatalog}>
-              <SelectTrigger id="ae-up">
-                <SelectValue placeholder={loadingCatalog ? "Loading…" : "Select model…"} />
-              </SelectTrigger>
-              <SelectContent>
-                {catalog.map((c) => (
-                  <SelectItem key={c._id} value={c.upstreamModelId}>{c.upstreamModelId} — {c.displayName}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          )}
-          <div className="flex items-center gap-2 text-[11px]">
-            {catalogError ? <span className="text-destructive">{catalogError}</span> : null}
-            <button type="button" className="rounded border border-border px-2 py-0.5 text-[11px] text-muted-foreground hover:bg-muted" onClick={() => setState((s) => ({ ...s, manualMode: !s.manualMode, upstreamModelId: "" }))}>
-              {state.manualMode ? "Use dropdown" : "Enter manually"}
-            </button>
-          </div>
+          <UpstreamModelPicker
+            id="ae-up"
+            providerId={state.providerId}
+            value={state.upstreamModelId}
+            onChange={(v) => setState((s) => ({ ...s, upstreamModelId: v }))}
+            disabled={submitting}
+          />
         </div>
       </div>
 

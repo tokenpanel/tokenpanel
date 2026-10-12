@@ -50,6 +50,8 @@ import { EmptyState } from "@/components/EmptyState";
 import { Panel, SpecList } from "@/components/Instrument";
 import { useConfirm } from "@/components/ConfirmDialog";
 import { WindowRuler } from "@/components/Scale";
+import { ModelAliasesField } from "@/components/ModelPickers";
+import { CurrencySelect } from "@/components/CurrencySelect";
 import { limitCaption } from "../utils/limits.ts";
 import { OneTimeSecret } from "@/components/OneTimeSecret";
 import { cn } from "@/lib/utils";
@@ -831,7 +833,7 @@ function BalanceForm({ customerId, currency, onClose, onSaved }: BalanceFormProp
           </div>
           <div className="flex-1">
             <Field id="bal-currency" label="Currency">
-              <Input id="bal-currency" type="text" maxLength={3} value={cur} required disabled={submitting} onChange={(e) => setCur(e.target.value.toUpperCase())} />
+              <CurrencySelect id="bal-currency" value={cur} disabled={submitting} onChange={setCur} />
             </Field>
           </div>
         </div>
@@ -1234,8 +1236,8 @@ function ApiKeyCreateForm({ customerId, customerName, onClose, onSaved }: ApiKey
         <Field id="key-name" label="Name">
           <Input id="key-name" type="text" required maxLength={120} value={name} disabled={submitting} onChange={(e) => setName(e.target.value)} />
         </Field>
-        <Field id="key-whitelist" label="Allowed models" optional hint="Model aliases separated by commas or spaces. Leave empty to allow every model.">
-          <Textarea id="key-whitelist" value={whitelist} rows={2} placeholder="gpt-4.1-mini, claude-sonnet-4" className="font-mono text-[13px]" disabled={submitting} onChange={(e) => setWhitelist(e.target.value)} />
+        <Field id="key-whitelist" label="Allowed models" optional hint="Leave empty to allow every model, including ones published later.">
+          <ModelAliasesField id="key-whitelist" value={whitelist} disabled={submitting} onChange={setWhitelist} />
         </Field>
         <DialogFooter>
           <Button type="button" variant="outline" onClick={onClose} disabled={submitting}>Cancel</Button>

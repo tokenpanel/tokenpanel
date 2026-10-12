@@ -3,6 +3,7 @@ import {
   expect,
   reliableClick,
   selectOption,
+  selectCurrency,
   confirmAction,
   rowWith,
   createCustomer,
@@ -75,9 +76,9 @@ test.describe("access: customers, plans, keys", () => {
     await selectOption(page, page.locator("#plan-interval"), "month");
     await page.locator("#plan-interval-count").fill("1");
     await page.locator("#plan-price-amount").fill("2000");
-    await page.locator("#plan-price-currency").fill("USD");
+    await selectCurrency(page, page.locator("#plan-price-currency"), "USD");
     await page.locator("#plan-credit-amount").fill("5000");
-    await page.locator("#plan-credit-currency").fill("USD");
+    await selectCurrency(page, page.locator("#plan-credit-currency"), "USD");
     await page.locator("#plan-tokens").fill("100000");
 
     // One rule: 1h window (preset), requests dimension, 500 cap, customer scope.

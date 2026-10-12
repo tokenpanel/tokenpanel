@@ -52,6 +52,37 @@ export async function confirmAction(page: Page, confirmLabel: string): Promise<v
   await reliableClick(button);
 }
 
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** Pick an ISO currency in a CurrencySelect (options read "USD · US Dollar"). */
+export async function selectCurrency(page: Page, trigger: Locator, code: string): Promise<void> {
+  await selectOption(page, trigger, new RegExp(`^${escapeRegExp(code)}( ·|$)`));
+}
+
+/**
+ * Set an upstream model id. The field is a dropdown of the provider's
+ * discovered models when it has any, otherwise a text input.
+ */
+export async function setUpstreamModel(page: Page, field: Locator, upstream: string): Promise<void> {
+  await expect(field).toBeEnabled();
+  if ((await field.getAttribute("role")) === "combobox") {
+    await selectOption(page, field, new RegExp(`^${escapeRegExp(upstream)}( ·|$)`));
+  } else {
+    await field.fill(upstream);
+  }
+}
+
+/** Tick model aliases in a ModelAliasesField multi-select (options read "Name alias"). */
+export async function pickModels(page: Page, trigger: Locator, aliases: readonly string[]): Promise<void> {
+  await reliableClick(trigger);
+  for (const alias of aliases) {
+    await page.getByRole("menuitemcheckbox", { name: new RegExp(`${escapeRegExp(alias)}$`) }).first().click({ force: true });
+  }
+  await page.keyboard.press("Escape");
+}
+
 /** The table row that contains the given text as a whole text node (cells may stack a name over a sub-line). */
 export function rowWith(page: Page, cellText: string): Locator {
   return page.locator("tr", { has: page.getByText(cellText, { exact: true }) });
@@ -157,10 +188,10 @@ export async function createModel(page: Page, opts: CreateModelOpts): Promise<vo
   // convention post-micros-migration): "10" = $10/M, "20" = $20/M.
   await page.locator("#m-ipm").fill(opts.inputPrice ?? "10");
   await page.locator("#m-opm").fill(opts.outputPrice ?? "20");
-  await page.locator("#m-cur").fill(opts.currency ?? "USD");
+  await selectCurrency(page, page.locator("#m-cur"), opts.currency ?? "USD");
   await page.locator("#m-margin").fill("0");
   await selectOption(page, page.locator("#m-prov"), opts.providerName);
-  await page.locator("#m-up").fill(opts.upstream);
+  await setUpstreamModel(page, page.locator("#m-up"), opts.upstream);
 
   await reliableClick(page.getByRole("button", { name: "Create model", exact: true }));
 
@@ -206,7 +237,7 @@ export async function addCustomerCredit(
   await reliableClick(page.getByRole("button", { name: "Adjust balance" }));
   await expect(page.getByRole("heading", { name: "Adjust balance" })).toBeVisible();
   await page.locator("#bal-amount").fill(opts.amount);
-  await page.locator("#bal-currency").fill(opts.currency);
+  await selectCurrency(page, page.locator("#bal-currency"), opts.currency);
   await reliableClick(page.getByRole("button", { name: "Apply adjustment", exact: true }));
   // A Top-up ledger entry appears in the balance history.
   await expect(page.getByText("Top-up").first()).toBeVisible();
@@ -231,9 +262,9 @@ export async function createPlan(page: Page, opts: CreatePlanOpts): Promise<void
   await selectOption(page, page.locator("#plan-interval"), "month");
   await page.locator("#plan-interval-count").fill("1");
   await page.locator("#plan-price-amount").fill(opts.price ?? "1000");
-  await page.locator("#plan-price-currency").fill("USD");
+  await selectCurrency(page, page.locator("#plan-price-currency"), "USD");
   await page.locator("#plan-credit-amount").fill(opts.credit ?? "5000");
-  await page.locator("#plan-credit-currency").fill("USD");
+  await selectCurrency(page, page.locator("#plan-credit-currency"), "USD");
   await page.locator("#plan-tokens").fill(opts.tokens ?? "100000");
   await reliableClick(page.getByRole("button", { name: "Create plan" }));
   await expect(page.getByText(opts.name).first()).toBeVisible();
@@ -255,7 +286,9 @@ export async function createCustomerApiKey(page: Page, opts: CreateApiKeyOpts): 
   await selectOption(page, page.locator("#apikey-customer"), new RegExp(opts.customerName));
   await reliableClick(page.getByRole("button", { name: "New key", exact: true }));
   await page.locator("#apikey-name").fill(opts.keyName);
-  if (opts.whitelist) await page.locator("#apikey-whitelist").fill(opts.whitelist);
+  if (opts.whitelist) {
+    await pickModels(page, page.locator("#apikey-whitelist"), opts.whitelist.split(",").map((s) => s.trim()).filter(Boolean));
+  }
   await reliableClick(page.getByRole("button", { name: "Create key", exact: true }));
 
   await expect(page.getByText(/Key created\. Copy it now/)).toBeVisible();

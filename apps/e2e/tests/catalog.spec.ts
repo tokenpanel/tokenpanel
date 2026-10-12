@@ -3,6 +3,7 @@ import {
   expect,
   reliableClick,
   selectOption,
+  setUpstreamModel,
   confirmAction,
   rowWith,
   createProvider,
@@ -126,7 +127,7 @@ test.describe("catalog: providers + models", () => {
 
     // This provider's catalog is empty (never discovered), so #ae-up renders as
     // a plain text input — fill the upstream id directly (no manual toggle).
-    await page.locator("#ae-up").fill(FALLBACK_UPSTREAM);
+    await setUpstreamModel(page, page.locator("#ae-up"), FALLBACK_UPSTREAM);
     await reliableClick(page.getByRole("button", { name: "Add entry" }));
 
     // Bug #3 fixed: provider routing live-refreshes after add, so the new

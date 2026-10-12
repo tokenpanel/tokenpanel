@@ -20,6 +20,8 @@ import { CreditCard, Plus, ShieldCheck, X } from "lucide-react";
 import { Panel, PanelHeader, SpecList } from "@/components/Instrument";
 import { WindowRuler, type WindowMarker } from "@/components/Scale";
 import { useConfirm } from "@/components/ConfirmDialog";
+import { CurrencySelect } from "@/components/CurrencySelect";
+import { ModelAliasSelect } from "@/components/ModelPickers";
 import { cn } from "@/lib/utils";
 import { PageHeader } from "@/components/PageHeader";
 import { EmptyState } from "@/components/EmptyState";
@@ -587,14 +589,14 @@ export default function PlansPage(): React.ReactElement {
                 <UnitsPreview value={draft.priceAmount} currency={draft.priceCurrency} />
               </Field>
               <Field id="plan-price-currency" label="Currency">
-                <Input id="plan-price-currency" type="text" maxLength={3} className="uppercase" value={draft.priceCurrency} required disabled={saving} onChange={(e) => setField("priceCurrency", e.target.value.toUpperCase())} />
+                <CurrencySelect id="plan-price-currency" value={draft.priceCurrency} disabled={saving} onChange={(v) => setField("priceCurrency", v)} />
               </Field>
               <Field id="plan-credit-amount" label="Included credit" tooltip="Balance granted each interval in major units (e.g. 10 = $10.00 USD).">
                 <Input id="plan-credit-amount" type="number" min={0} step="any" value={draft.includedCreditAmount} required disabled={saving} onChange={(e) => setField("includedCreditAmount", e.target.value)} />
                 <UnitsPreview value={draft.includedCreditAmount} currency={draft.includedCreditCurrency} />
               </Field>
               <Field id="plan-credit-currency" label="Currency">
-                <Input id="plan-credit-currency" type="text" maxLength={3} className="uppercase" value={draft.includedCreditCurrency} required disabled={saving} onChange={(e) => setField("includedCreditCurrency", e.target.value.toUpperCase())} />
+                <CurrencySelect id="plan-credit-currency" value={draft.includedCreditCurrency} disabled={saving} onChange={(v) => setField("includedCreditCurrency", v)} />
               </Field>
               <Field id="plan-tokens" label="Included tokens" className="col-span-2 lg:col-span-1">
                 <Input id="plan-tokens" type="number" min={0} step={1} value={draft.includedTokens} required disabled={saving} onChange={(e) => setField("includedTokens", e.target.value)} />
@@ -693,13 +695,13 @@ export default function PlansPage(): React.ReactElement {
 
                             {rule.scope === "model" && (
                               <Field id={`rule-target-${rule.id}`} label="Model alias">
-                                <Input id={`rule-target-${rule.id}`} type="text" maxLength={120} className="font-mono text-[13px]" value={rule.scopeTarget} placeholder="gpt-4.1" disabled={saving} onChange={(e) => updateRule(idx, "scopeTarget", e.target.value)} />
+                                <ModelAliasSelect id={`rule-target-${rule.id}`} value={rule.scopeTarget} disabled={saving} onChange={(v) => updateRule(idx, "scopeTarget", v)} />
                               </Field>
                             )}
 
                             {isSpendDimension(rule.dimension) && (
                               <Field id={`rule-cur-${rule.id}`} label="Currency">
-                                <Input id={`rule-cur-${rule.id}`} type="text" maxLength={3} className="uppercase" value={rule.currency} disabled={saving} onChange={(e) => updateRule(idx, "currency", e.target.value.toUpperCase())} />
+                                <CurrencySelect id={`rule-cur-${rule.id}`} value={rule.currency} disabled={saving} onChange={(v) => updateRule(idx, "currency", v)} />
                               </Field>
                             )}
                           </div>

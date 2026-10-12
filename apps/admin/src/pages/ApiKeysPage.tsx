@@ -32,6 +32,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { EmptyState } from "@/components/EmptyState";
 import { Panel } from "@/components/Instrument";
 import { OneTimeSecret } from "@/components/OneTimeSecret";
+import { ModelAliasesField } from "@/components/ModelPickers";
 import { useConfirm } from "@/components/ConfirmDialog";
 import { cn } from "@/lib/utils";
 import { hasPermission, useAuth } from "../auth/AuthContext.tsx";
@@ -299,20 +300,17 @@ export default function ApiKeysPage(): React.ReactElement {
                 <Label htmlFor="apikey-whitelist">
                   Allowed models <span className="font-normal text-muted-foreground">(optional)</span>
                 </Label>
-                <Input
+                <ModelAliasesField
                   id="apikey-whitelist"
-                  type="text"
-                  placeholder="All models"
-                  className="font-mono text-[13px]"
-                  aria-describedby="apikey-whitelist-hint"
+                  describedBy="apikey-whitelist-hint"
                   value={newWhitelist}
                   disabled={creating}
-                  onChange={(e) => setNewWhitelist(e.target.value)}
+                  onChange={setNewWhitelist}
                 />
               </div>
               <Button type="submit" disabled={creating}>{creating ? "Creating…" : "Create key"}</Button>
               <p id="apikey-whitelist-hint" className="text-xs text-muted-foreground sm:col-span-3">
-                Model aliases separated by commas. Leave empty to allow every model.
+                Leave empty to allow every model, including ones published later.
               </p>
             </form>
           ) : null}

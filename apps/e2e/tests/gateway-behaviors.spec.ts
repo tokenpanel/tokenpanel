@@ -3,6 +3,7 @@ import { expect, test } from "./fixtures.ts";
 import {
   createProvider,
   selectOption,
+  setUpstreamModel,
   reliableClick,
   rowWith,
   setupMockPipeline,
@@ -188,7 +189,7 @@ test.describe("gateway behaviors: billing / rate-limit / fallback / protocols", 
     await expect(page.getByText("Provider routing")).toBeVisible();
     await reliableClick(page.getByRole("button", { name: "Add route" }));
     await selectOption(page, page.locator("#ae-prov"), "Dead Upstream Provider");
-    await page.locator("#ae-up").fill("mock-gpt");
+    await setUpstreamModel(page, page.locator("#ae-up"), "mock-gpt");
     await reliableClick(page.getByRole("button", { name: "Add entry" }));
     await expect(page.getByText("mock-gpt").first()).toBeVisible();
 

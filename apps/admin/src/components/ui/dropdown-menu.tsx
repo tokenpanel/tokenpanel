@@ -65,23 +65,28 @@ function DropdownMenuItem({
 
 function DropdownMenuCheckboxItem({
   className,
+  children,
   ...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.CheckboxItem>): React.ReactElement {
   return (
     <DropdownMenuPrimitive.CheckboxItem
       data-slot="dropdown-menu-checkbox-item"
       className={cn(
-        "relative flex cursor-pointer select-none items-center gap-2 rounded-md py-1.5 pl-8 pr-2 text-sm outline-none transition-colors",
+        "group relative flex cursor-pointer select-none items-center gap-2 rounded-[5px] py-1.5 pl-8 pr-2 text-sm outline-none transition-colors",
         "focus:bg-accent focus:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
         className,
       )}
       {...props}
     >
-      <span className="absolute left-2 flex size-3.5 items-center justify-center">
+      <span
+        aria-hidden
+        className="absolute left-2 flex size-4 items-center justify-center rounded-[4px] border border-input bg-card group-data-[state=checked]:border-primary group-data-[state=checked]:bg-primary group-data-[state=checked]:text-primary-foreground"
+      >
         <DropdownMenuPrimitive.ItemIndicator>
-          <Check className="size-4" />
+          <Check className="size-3" strokeWidth={3} />
         </DropdownMenuPrimitive.ItemIndicator>
       </span>
+      {children}
     </DropdownMenuPrimitive.CheckboxItem>
   );
 }

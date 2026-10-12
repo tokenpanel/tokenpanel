@@ -15,6 +15,7 @@ import { Building2, Loader2, MoreVertical, Pencil, Plus, Trash2, Check } from "l
 import { PageHeader } from "@/components/PageHeader";
 import { EmptyState } from "@/components/EmptyState";
 import { Panel } from "@/components/Instrument";
+import { CurrencySelect } from "@/components/CurrencySelect";
 import { orgInitials } from "@/components/Layout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -382,16 +383,10 @@ export default function OrganizationsPage(): React.ReactElement {
               </div>
               <div className="flex flex-col gap-1.5">
                 <Label htmlFor="org-create-currency">Currency</Label>
-                <Input
+                <CurrencySelect
                   id="org-create-currency"
                   value={createForm.defaultCurrency}
-                  maxLength={3}
-                  onChange={(e) =>
-                    setCreateForm((prev) => ({
-                      ...prev,
-                      defaultCurrency: e.target.value.toUpperCase(),
-                    }))
-                  }
+                  onChange={(v) => setCreateForm((prev) => ({ ...prev, defaultCurrency: v }))}
                 />
               </div>
             </div>
@@ -435,16 +430,10 @@ export default function OrganizationsPage(): React.ReactElement {
               </div>
               <div className="flex flex-col gap-1.5">
                 <Label htmlFor="org-rename-currency">Currency</Label>
-                <Input
+                <CurrencySelect
                   id="org-rename-currency"
                   value={renameForm.defaultCurrency}
-                  maxLength={3}
-                  onChange={(e) =>
-                    setRenameForm((prev) => ({
-                      ...prev,
-                      defaultCurrency: e.target.value.toUpperCase(),
-                    }))
-                  }
+                  onChange={(v) => setRenameForm((prev) => ({ ...prev, defaultCurrency: v }))}
                 />
               </div>
             </div>

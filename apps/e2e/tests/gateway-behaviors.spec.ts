@@ -185,7 +185,7 @@ test.describe("gateway behaviors: billing / rate-limit / fallback / protocols", 
     // tried FIRST; the working mock entry stays at priority 1.
     await page.goto("/models");
     await reliableClick(rowWith(page, pipeline!.modelAlias).getByRole("button", { name: "Edit" }));
-    await expect(page.getByText("Fallback chain")).toBeVisible();
+    await expect(page.getByText("Provider routing")).toBeVisible();
     await reliableClick(page.getByRole("button", { name: "Add Provider Entry" }));
     await selectOption(page, page.locator("#ae-prov"), "Dead Upstream Provider");
     await page.locator("#ae-up").fill("mock-gpt");

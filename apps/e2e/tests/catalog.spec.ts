@@ -116,7 +116,7 @@ test.describe("catalog: providers + models", () => {
   test("adds a second fallback entry via the edit view", async ({ page }) => {
     await page.goto("/models");
     await reliableClick(rowWith(page, MODEL_ALIAS).getByRole("button", { name: "Edit" }));
-    await expect(page.getByText("Fallback chain")).toBeVisible();
+    await expect(page.getByText("Provider routing")).toBeVisible();
 
     // Open the inline add-entry form.
     await reliableClick(page.getByRole("button", { name: "Add Provider Entry" }));
@@ -129,15 +129,15 @@ test.describe("catalog: providers + models", () => {
     await page.locator("#ae-up").fill(FALLBACK_UPSTREAM);
     await reliableClick(page.getByRole("button", { name: "Add entry" }));
 
-    // Bug #3 fixed: the fallback chain live-refreshes after add, so the new
+    // Bug #3 fixed: provider routing live-refreshes after add, so the new
     // entry appears in place — no re-navigation needed.
     await expect(page.getByText(FALLBACK_UPSTREAM).first()).toBeVisible();
   });
 
-  test("reorders the fallback chain by drag-and-drop", async ({ page }) => {
+  test("reorders provider routing by drag-and-drop", async ({ page }) => {
     await page.goto("/models");
     await reliableClick(rowWith(page, MODEL_ALIAS).getByRole("button", { name: "Edit" }));
-    await expect(page.getByText("Fallback chain")).toBeVisible();
+    await expect(page.getByText("Provider routing")).toBeVisible();
 
     const rows = page.locator("[draggable='true']");
     await expect(rows).toHaveCount(2);

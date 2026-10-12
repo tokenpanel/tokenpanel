@@ -153,7 +153,7 @@ export default function ModelsPage(): React.ReactElement {
         setProviders(pRes.items as unknown as Provider[]);
         // Keep the open editor in sync with the fresh list so entry mutations
         // (add / remove / reorder / toggle) surfaced via reload() update the
-        // live fallback chain instead of leaving a stale `editing` snapshot.
+        // live provider routing instead of leaving a stale `editing` snapshot.
         setEditing((prev) => {
           if (!prev) return prev;
           return items.find((m) => m._id === prev._id) ?? prev;
@@ -323,7 +323,7 @@ export default function ModelsPage(): React.ReactElement {
             title="No models yet"
             description={
               canWrite
-                ? "Create your first aliased model with a provider fallback chain."
+                ? "Create your first aliased model and route it to a provider."
                 : "No models configured yet. An admin with models:write can add them."
             }
             action={
@@ -713,7 +713,7 @@ function ModelEditor({
       </form>
 
       {!isCreate && model ? (
-        <FallbackChain
+        <ProviderRouting
           model={model}
           providers={providers}
           providerMap={providerMap}
@@ -943,7 +943,7 @@ function CapabilityCheck({
   );
 }
 
-interface FallbackChainProps {
+interface ProviderRoutingProps {
   model: Model;
   providers: Provider[];
   providerMap: Map<string, Provider>;
@@ -951,13 +951,13 @@ interface FallbackChainProps {
   onModelReplaced: () => void;
 }
 
-function FallbackChain({
+function ProviderRouting({
   model,
   providers,
   providerMap,
   canWrite,
   onModelReplaced,
-}: FallbackChainProps): React.ReactElement {
+}: ProviderRoutingProps): React.ReactElement {
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   const [dropTarget, setDropTarget] = useState<number | null>(null);
   const [reordering, setReordering] = useState(false);
@@ -1129,11 +1129,11 @@ function FallbackChain({
     <div className="flex flex-col gap-5 rounded-lg border border-border bg-card p-6 shadow-xs">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h2 className="text-lg font-semibold">Fallback chain</h2>
+          <h2 className="text-lg font-semibold">Provider routing</h2>
           <p className="mt-0.5 text-sm text-muted-foreground">
             {canWrite
               ? "Drag rows to reorder priorities (lower = tried first)."
-              : "Provider fallback order (priority: lower = tried first)."}
+              : "Provider order (priority: lower = tried first)."}
           </p>
         </div>
         {canWrite ? (
@@ -1648,7 +1648,7 @@ function AddEntryForm({ modelId, providers, onAdded }: AddEntryFormProps): React
 
       <label className="inline-flex cursor-pointer items-center gap-1.5 text-sm">
         <Checkbox checked={state.active} onCheckedChange={(v) => setState((s) => ({ ...s, active: v === true }))} disabled={submitting} />
-        Active in fallback chain
+        Active in provider routing
       </label>
 
       <div className="flex justify-end">
@@ -1855,7 +1855,7 @@ function EditEntryForm({ modelId, entry, allEntries, onSaved, onCancel }: EditEn
       </div>
       <label className="inline-flex cursor-pointer items-center gap-1.5 text-sm">
         <Checkbox checked={active} onCheckedChange={(v) => setActive(v === true)} disabled={submitting} />
-        Active in fallback chain
+        Active in provider routing
       </label>
       <div className="flex justify-end gap-2">
         <Button type="button" variant="outline" size="sm" onClick={onCancel} disabled={submitting}>Cancel</Button>

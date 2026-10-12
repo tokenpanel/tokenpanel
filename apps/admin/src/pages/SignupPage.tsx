@@ -8,7 +8,7 @@ import { Field } from "@/components/ui/field";
 import { PasswordInput } from "@/components/ui/password-input";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Loader2 } from "lucide-react";
-import { AuthBrandPanel, AuthMobileBrand } from "@/components/AuthBrandPanel";
+import { AuthLoading, AuthShell } from "@/components/AuthBrandPanel";
 
 interface FirstRunForm {
   adminEmail: string;
@@ -135,12 +135,7 @@ export default function SignupPage(): ReactElement {
   const [showPassword, setShowPassword] = useState(false);
 
   if (loading) {
-    return (
-      <div className="flex min-h-[100dvh] items-center justify-center text-muted-foreground">
-        <Loader2 className="size-5 animate-spin" aria-hidden />
-        <span className="sr-only">Loading</span>
-      </div>
-    );
+    return <AuthLoading />;
   }
 
   if (user) {
@@ -275,26 +270,16 @@ export default function SignupPage(): ReactElement {
   }
 
   return (
-    <div className="flex min-h-[100dvh] bg-background">
-      <AuthBrandPanel />
-
-      <main className="relative flex flex-1 flex-col justify-center px-6 py-10 sm:px-10">
-        <div className="mx-auto w-full max-w-[28rem] animate-fade-in-up">
-          <AuthMobileBrand />
-
-          <header className="mb-8 flex flex-col gap-2">
-            <h1 className="text-2xl font-semibold tracking-tight">
-              {isInvite ? "Accept your invite" : "Create your admin account"}
-            </h1>
-            <p className="text-sm leading-relaxed text-muted-foreground">
-              {isInvite
-                ? "Choose a username and password to join the organization. If you already have an account with the invited email, enter your existing password."
-                : "This becomes the first admin of your organization."}
-            </p>
-          </header>
-
+    <AuthShell
+      title={isInvite ? "Accept your invite" : "Set up TokenPanel"}
+      description={
+        isInvite
+          ? "Choose a username and password to join the organization. Already have an account with the invited email? Use your existing password."
+          : "Create the first admin account for this instance. A default organization is created with it; you can rename it or add more later."
+      }
+    >
           {isInvite ? (
-            <form className="flex flex-col gap-5" onSubmit={onSubmitInvite} noValidate>
+            <form className="flex flex-col gap-4" onSubmit={onSubmitInvite} noValidate>
               {error ? (
                 <Alert variant="destructive">
                   <AlertDescription>{error}</AlertDescription>
@@ -313,8 +298,8 @@ export default function SignupPage(): ReactElement {
                 />
               </Field>
 
-              <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
-                <Field id="invite-password" label="Password" error={fieldErrors.password}>
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <Field id="invite-password" label="Password" hint="At least 8 characters." error={fieldErrors.password}>
                   <PasswordInput
                     id="invite-password"
                     value={inviteForm.password}
@@ -342,7 +327,7 @@ export default function SignupPage(): ReactElement {
                 </Field>
               </div>
 
-              <Button type="submit" className="mt-1 w-full" disabled={submitting}>
+              <Button type="submit" size="lg" className="mt-2 w-full" disabled={submitting}>
                 {submitting ? (
                   <>
                     <Loader2 className="size-4 animate-spin" />
@@ -354,14 +339,14 @@ export default function SignupPage(): ReactElement {
               </Button>
             </form>
           ) : (
-            <form className="flex flex-col gap-5" onSubmit={onSubmitFirst} noValidate>
+            <form className="flex flex-col gap-4" onSubmit={onSubmitFirst} noValidate>
               {error ? (
                 <Alert variant="destructive">
                   <AlertDescription>{error}</AlertDescription>
                 </Alert>
               ) : null}
 
-              <Field id="signup-email" label="Admin email" error={fieldErrors.adminEmail}>
+              <Field id="signup-email" label="Email" error={fieldErrors.adminEmail}>
                 <Input
                   id="signup-email"
                   type="email"
@@ -375,7 +360,7 @@ export default function SignupPage(): ReactElement {
 
               <Field
                 id="signup-username"
-                label="Admin username"
+                label="Username"
                 error={fieldErrors.adminUsername}
               >
                 <Input
@@ -388,8 +373,8 @@ export default function SignupPage(): ReactElement {
                 />
               </Field>
 
-              <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
-                <Field id="signup-password" label="Password" error={fieldErrors.password}>
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <Field id="signup-password" label="Password" hint="At least 8 characters." error={fieldErrors.password}>
                   <PasswordInput
                     id="signup-password"
                     value={firstForm.password}
@@ -417,12 +402,7 @@ export default function SignupPage(): ReactElement {
                 </Field>
               </div>
 
-              <p className="text-xs leading-relaxed text-muted-foreground">
-                A default organization is created for you automatically. You can
-                rename it or create more after signing in.
-              </p>
-
-              <Button type="submit" className="mt-1 w-full" disabled={submitting}>
+              <Button type="submit" size="lg" className="mt-2 w-full" disabled={submitting}>
                 {submitting ? (
                   <>
                     <Loader2 className="size-4 animate-spin" />
@@ -434,8 +414,6 @@ export default function SignupPage(): ReactElement {
               </Button>
             </form>
           )}
-        </div>
-      </main>
-    </div>
+    </AuthShell>
   );
 }

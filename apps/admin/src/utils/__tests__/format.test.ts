@@ -1,6 +1,8 @@
 import { test, expect } from "bun:test";
 import {
   formatMicros,
+  formatMicrosFixed,
+  columnDecimals,
   formatDate,
   formatNumber,
   formatCompact,
@@ -96,6 +98,13 @@ test("formatMicros: whole-cent amounts render at standard 2dp (USD)", () => {
   expect(formatMicros(-150_000, "USD")).toBe("-$0.15 USD");
 });
 
+test("formatMicros: groups thousands in the whole part", () => {
+  expect(formatMicros(3_325_960_000, "USD")).toBe("$3,325.96 USD");
+  expect(formatMicros(-1_234_567_000_000, "USD")).toBe("-$1,234,567.00 USD");
+  expect(formatMicros(999_000_000, "USD")).toBe("$999.00 USD");
+  expect(formatMicros(12_345_000_000, "JPY")).toBe("\u00a512,345 JPY");
+});
+
 test("formatMicros: sub-cent amounts expand so they never show $0.00", () => {
   expect(formatMicros(300, "USD")).toBe("$0.0003 USD"); // $0.0003
   expect(formatMicros(1, "USD")).toBe("$0.000001 USD");
@@ -110,4 +119,17 @@ test("formatMicros: zero-decimal currency (JPY) sub-unit expands", () => {
 test("formatMicros: three-decimal currency (KWD)", () => {
   expect(formatMicros(1_000, "KWD")).toBe("0.001 KWD"); // 1 fils
   expect(formatMicros(1_500_000, "KWD")).toBe("1.500 KWD");
+});
+test("formatMicrosFixed: one precision for a column, rounded in micros", () => {
+  expect(formatMicrosFixed(-4_916, "USD", 4)).toBe("-$0.0049 USD");
+  expect(formatMicrosFixed(-20_000, "USD", 4)).toBe("-$0.0200 USD");
+  expect(formatMicrosFixed(1_234_567_890, "USD", 2)).toBe("$1,234.57 USD");
+  expect(formatMicrosFixed(500_000, "JPY", 0)).toBe("¥1 JPY");
+});
+
+test("columnDecimals: expands only as far as the smallest amount needs (max 4)", () => {
+  expect(columnDecimals([-20_000, -10_000], "USD")).toBe(2);
+  expect(columnDecimals([-4_916, -20_000], "USD")).toBe(3);
+  expect(columnDecimals([-752, -20_000], "USD")).toBe(4);
+  expect(columnDecimals([-1, 5_000_000], "USD")).toBe(4);
 });

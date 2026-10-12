@@ -3,6 +3,7 @@ import {
   expectToast,
   reliableClick,
   rowWith,
+  readInviteToken,
   selectOption,
   test,
 } from "./helpers.ts";
@@ -27,7 +28,7 @@ test.describe("identity: orgs, settings, invites", () => {
     await expect(
       page.getByRole("heading", { name: "Settings", exact: true }),
     ).toBeVisible();
-    await reliableClick(page.getByRole("tab", { name: "Profile" }));
+    await reliableClick(page.getByRole("tab", { name: "Account" }));
 
     // Login is username-based, so changing the email is harmless to auth.
     const newEmail = `admin+${Date.now()}@e2e.local`;
@@ -41,21 +42,16 @@ test.describe("identity: orgs, settings, invites", () => {
     browser,
   }) => {
     await page.goto("/settings");
-    await reliableClick(page.getByRole("tab", { name: "Invites" }));
+    await reliableClick(page.getByRole("tab", { name: "Team invites" }));
 
     // (a) Admin creates the invite (role Member via the radix Select).
     const inviteEmail = "invitee@id.local";
     await page.locator("#invite-email").fill(inviteEmail);
     await selectOption(page, page.locator("#invite-role"), "Member");
-    await reliableClick(page.getByRole("button", { name: "Invite User" }));
+    await reliableClick(page.getByRole("button", { name: "Create invite link" }));
 
-    // The one-time reveal alert shows the raw token in a <code> element.
-    const reveal = page.locator("[data-slot='alert']", {
-      hasText: "Invite created. Share this signup link",
-    });
-    await expect(reveal).toBeVisible();
-    const token = (await reveal.locator("code").first().textContent())?.trim();
-    expect(token, "reveal alert shows the invite token").toBeTruthy();
+    // The one-time reveal shows the signup link carrying the raw token.
+    const token = await readInviteToken(page);
 
     const origin = new URL(page.url()).origin;
 
@@ -84,7 +80,7 @@ test.describe("identity: orgs, settings, invites", () => {
 
     // (c) Back as admin, the invite row now reads `accepted`.
     await page.reload();
-    await reliableClick(page.getByRole("tab", { name: "Invites" }));
+    await reliableClick(page.getByRole("tab", { name: "Team invites" }));
     await expect(rowWith(page, inviteEmail).getByText("accepted")).toBeVisible();
   });
 
@@ -97,30 +93,30 @@ test.describe("identity: orgs, settings, invites", () => {
     ).toBeVisible();
 
     const orgCard = (name: string) =>
-      page.locator("[data-slot='card']", { has: page.getByText(name, { exact: true }) });
+      page.getByRole("listitem").filter({ has: page.getByText(name, { exact: true }) });
 
     // Create a new org → it becomes the active org.
     await reliableClick(page.getByRole("button", { name: "New organization" }).first());
     await expect(page.getByRole("heading", { name: "New organization" })).toBeVisible();
     await page.locator("#org-create-name").fill("Id Org");
     await page.locator("#org-create-slug").fill("id-org");
-    await reliableClick(page.getByRole("button", { name: "Create", exact: true }));
+    await reliableClick(page.getByRole("button", { name: "Create organization", exact: true }));
 
     // Real success path: the toast confirms creation + auto-switch, and the new
     // org now carries the "Current" badge (no /login bounce).
     await expectToast(page, 'Created "Id Org". Now active.');
     await expect(
-      orgCard("Id Org").getByRole("button", { name: "Current", exact: true }),
+      orgCard("Id Org").getByText("Current", { exact: true }),
     ).toBeVisible();
 
     // Rename it via the per-card actions menu.
     await reliableClick(
-      orgCard("Id Org").getByRole("button", { name: "Organization actions" }),
+      orgCard("Id Org").getByRole("button", { name: "Actions for Id Org" }),
     );
-    await reliableClick(page.getByRole("menuitem", { name: "Rename" }));
+    await reliableClick(page.getByRole("menuitem", { name: "Edit details" }));
     await expect(page.getByRole("heading", { name: "Edit organization" })).toBeVisible();
     await page.locator("#org-rename-name").fill("Id Org Renamed");
-    await reliableClick(page.getByRole("button", { name: "Save", exact: true }));
+    await reliableClick(page.getByRole("button", { name: "Save changes", exact: true }));
     await expectToast(page, "Organization updated.");
     await expect(orgCard("Id Org Renamed")).toBeVisible();
 
@@ -136,16 +132,16 @@ test.describe("identity: orgs, settings, invites", () => {
     await page.goto("/");
     await page.evaluate(() => localStorage.clear());
     await page.goto("/login");
-    await expect(page.getByRole("heading", { name: "Welcome back" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
 
     await page.locator("#login-username").fill(ADMIN_USERNAME);
     await page.locator("#login-password").fill(ADMIN_PASSWORD);
     await reliableClick(page.getByRole("button", { name: "Sign in" }));
     await expect(page.getByRole("heading", { name: "Dashboard" })).toBeVisible();
 
-    await reliableClick(page.getByRole("button", { name: "User menu" }));
-    await reliableClick(page.getByRole("menuitem", { name: "Log out" }));
+    await reliableClick(page.getByRole("button", { name: "Account menu" }));
+    await reliableClick(page.getByRole("menuitem", { name: "Sign out" }));
     await page.waitForURL(/\/login$/);
-    await expect(page.getByRole("heading", { name: "Welcome back" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
   });
 });

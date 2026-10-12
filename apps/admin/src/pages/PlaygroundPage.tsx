@@ -12,7 +12,13 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
-import { Card } from "@/components/ui/card";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import {
   Select,
@@ -36,14 +42,14 @@ import {
   AlertCircle,
   ChevronDown,
   ChevronUp,
-  User,
   Bot,
   Brain,
   Coins,
   Server,
   X,
-  MessageSquare,
+  SlidersHorizontal,
 } from "lucide-react";
+import { Panel } from "@/components/Instrument";
 import { PageHeader } from "@/components/PageHeader";
 import { EmptyState } from "@/components/EmptyState";
 import { Slider } from "@/components/ui/slider";
@@ -117,6 +123,7 @@ export default function PlaygroundPage(): React.ReactElement {
   // Selected models for comparison. At least one required. Multiple = side-by-side.
   const [selectedModelAliases, setSelectedModelAliases] = useState<string[]>([]);
   const [customerId, setCustomerId] = useState<string>("");
+  const [paramsOpenMobile, setParamsOpenMobile] = useState(false);
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [systemPrompt, setSystemPrompt] = useState("");
@@ -319,33 +326,52 @@ export default function PlaygroundPage(): React.ReactElement {
 
   return (
     <TooltipProvider delayDuration={300}>
-      <div className="flex h-full flex-col">
-        <div className="border-b border-border px-4 py-4 sm:px-6">
-          <PageHeader title="Playground" icon={<MessageSquare strokeWidth={1.75} />}>
-            <Button variant="outline" size="sm" onClick={clearConversation} disabled={streaming || messages.length === 0}>
-              <Trash2 className="size-4" />
-              Clear
-            </Button>
-          </PageHeader>
-          {loadError && (
-            <Alert variant="destructive" className="mt-2">
-              <AlertCircle className="size-4" />
-              <AlertDescription>{loadError}</AlertDescription>
-            </Alert>
-          )}
-        </div>
+      <div className="flex flex-col gap-5">
+        <PageHeader
+          title="Playground"
+          description="Send one prompt to several models side by side. Compare output, tokens, cost, and price before rollout."
+        >
+          <Button variant="outline" className="lg:hidden" onClick={() => setParamsOpenMobile((v) => !v)} aria-expanded={paramsOpenMobile}>
+            <SlidersHorizontal />
+            Parameters
+          </Button>
+          <Button variant="outline" onClick={clearConversation} disabled={streaming || messages.length === 0}>
+            <Trash2 />
+            Clear
+          </Button>
+        </PageHeader>
+        {loadError && (
+          <Alert variant="destructive">
+            <AlertCircle className="size-4" />
+            <AlertDescription>{loadError}</AlertDescription>
+          </Alert>
+        )}
 
-        <div className="flex min-h-0 flex-1">
-          {/* Parameter sidebar */}
-          <aside className="flex w-72 shrink-0 flex-col border-r border-border bg-card/40">
-            <div className="flex items-center justify-between px-4 py-3">
-              <span className="text-sm font-medium">Parameters</span>
-              <Button variant="ghost" size="icon-sm" onClick={() => setShowParams((v) => !v)} aria-label="Toggle parameters">
-                {showParams ? <ChevronUp className="size-4" /> : <ChevronDown className="size-4" />}
-              </Button>
+        <Panel className="relative flex h-[calc(100dvh-13.5rem)] min-h-[34rem] overflow-hidden">
+          {/* Parameter rail */}
+          <aside
+            className={cn(
+              "w-72 shrink-0 flex-col border-r border-border bg-background",
+              paramsOpenMobile ? "absolute inset-0 z-20 flex w-full lg:static lg:w-72" : "hidden lg:flex",
+            )}
+            aria-label="Parameters"
+          >
+            <div className="flex h-12 items-center justify-between border-b border-rule px-4">
+              <span className="legend text-muted-foreground">Parameters</span>
+              <div className="flex items-center gap-1">
+                <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => setParams(DEFAULT_PARAMS)}>
+                  Reset
+                </Button>
+                <Button variant="ghost" size="icon-sm" className="hidden lg:inline-flex" onClick={() => setShowParams((v) => !v)} aria-label={showParams ? "Collapse parameters" : "Expand parameters"}>
+                  {showParams ? <ChevronUp /> : <ChevronDown />}
+                </Button>
+                <Button variant="ghost" size="icon-sm" className="lg:hidden" onClick={() => setParamsOpenMobile(false)} aria-label="Close parameters">
+                  <X />
+                </Button>
+              </div>
             </div>
-            {showParams && (
-              <div className="flex flex-col gap-4 overflow-y-auto px-4 pb-4">
+            {showParams || paramsOpenMobile ? (
+              <div className="flex flex-col gap-5 overflow-y-auto px-4 py-4">
                 <ParamSlider label="Temperature" value={params.temperature} min={0} max={2} step={0.05} onChange={(v) => setParams((p) => ({ ...p, temperature: round(v, 2) }))} />
                 <ParamSlider label="Top P" value={params.topP} min={0} max={1} step={0.05} onChange={(v) => setParams((p) => ({ ...p, topP: round(v, 2) }))} />
                 <ParamSlider label="Top K" value={params.topK} min={0} max={100} step={1} onChange={(v) => setParams((p) => ({ ...p, topK: v }))} hint="0 = off" />
@@ -354,18 +380,15 @@ export default function PlaygroundPage(): React.ReactElement {
                 <ParamSlider label="Presence penalty" value={params.presencePenalty} min={-2} max={2} step={0.1} onChange={(v) => setParams((p) => ({ ...p, presencePenalty: round(v, 1) }))} />
 
                 <div className="flex flex-col gap-1.5">
-                  <Label className="text-xs text-muted-foreground">
+                  <Label htmlFor="pg-effort" className="text-xs">
                     Reasoning effort
-                    {!anySelectedModelReasoning && (
-                      <span className="ml-1 text-[10px] text-muted-foreground/60">(no reasoning model selected)</span>
-                    )}
                   </Label>
                   <Select
                     value={params.reasoningEffort}
                     onValueChange={(v) => setParams((p) => ({ ...p, reasoningEffort: v as Params["reasoningEffort"] }))}
                     disabled={!anySelectedModelReasoning}
                   >
-                    <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+                    <SelectTrigger id="pg-effort" className="h-8 text-[13px]"><SelectValue /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="none">None</SelectItem>
                       <SelectItem value="low">Low</SelectItem>
@@ -373,100 +396,99 @@ export default function PlaygroundPage(): React.ReactElement {
                       <SelectItem value="high">High</SelectItem>
                     </SelectContent>
                   </Select>
+                  {!anySelectedModelReasoning ? (
+                    <span className="text-[11px] text-muted-foreground">No reasoning model selected.</span>
+                  ) : null}
                 </div>
 
-                <div className="flex flex-col gap-1.5">
-                  <Label className="text-xs text-muted-foreground">Stop</Label>
-                  <Input value={params.stop} onChange={(e) => setParams((p) => ({ ...p, stop: e.target.value }))} placeholder="e.g. \\n" className="h-8 text-xs" />
-                </div>
-                <div className="flex flex-col gap-1.5">
-                  <Label className="text-xs text-muted-foreground">Seed</Label>
-                  <Input value={params.seed} onChange={(e) => setParams((p) => ({ ...p, seed: e.target.value.replace(/[^0-9]/g, "") }))} placeholder="unset" className="h-8 text-xs" />
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="flex flex-col gap-1.5">
+                    <Label htmlFor="pg-stop" className="text-xs">Stop</Label>
+                    <Input id="pg-stop" value={params.stop} onChange={(e) => setParams((p) => ({ ...p, stop: e.target.value }))} placeholder="\n" className="h-8 font-mono text-xs" />
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                    <Label htmlFor="pg-seed" className="text-xs">Seed</Label>
+                    <Input id="pg-seed" inputMode="numeric" value={params.seed} onChange={(e) => setParams((p) => ({ ...p, seed: e.target.value.replace(/[^0-9]/g, "") }))} placeholder="Unset" className="h-8 text-xs tabular-nums" />
+                  </div>
                 </div>
 
-                <div className="flex flex-col gap-1.5">
-                  <Label className="text-xs text-muted-foreground">Bill to customer (optional)</Label>
-                  <Select value={customerId} onValueChange={setCustomerId}>
-                    <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="No billing (admin test)" /></SelectTrigger>
+                <div className="flex flex-col gap-1.5 border-t border-rule pt-4">
+                  <Label htmlFor="pg-bill" className="text-xs">Bill to customer</Label>
+                  <Select value={customerId || "__none"} onValueChange={(v) => setCustomerId(v === "__none" ? "" : v)}>
+                    <SelectTrigger id="pg-bill" className="h-8 text-[13px]"><SelectValue placeholder="No billing (admin test)" /></SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="">No billing (admin test)</SelectItem>
+                      <SelectItem value="__none">No billing (admin test)</SelectItem>
                       {customers.map((c) => (
                         <SelectItem key={c._id} value={c._id}>{c.name}</SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
-                  {customerId && (
-                    <p className="text-[11px] text-muted-foreground">Usage debits the selected customer and counts toward rate limits.</p>
-                  )}
+                  <p className="text-[11px] leading-snug text-muted-foreground">
+                    {customerId
+                      ? "Usage debits this customer's balance and counts toward their rolling limits."
+                      : "Requests are not billed to anyone. Cost is still shown."}
+                  </p>
                 </div>
-
-                <Button variant="outline" size="sm" className="mt-1" onClick={() => setParams(DEFAULT_PARAMS)}>
-                  Reset
-                </Button>
               </div>
-            )}
+            ) : null}
           </aside>
 
-          {/* Chat area */}
-          <main className="flex min-w-0 flex-1 flex-col">
-            {/* Model selector chips */}
-            <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-3 sm:px-6">
-              <span className="text-xs font-medium text-muted-foreground">Models:</span>
+          {/* Chat */}
+          <section className="flex min-w-0 flex-1 flex-col" aria-label="Conversation">
+            <div className="flex min-h-12 flex-wrap items-center gap-2 border-b border-rule px-4 py-2 sm:px-5">
+              <span className="legend mr-1 text-muted-foreground">Models</span>
               {selectedModelAliases.map((alias) => {
                 const m = models.find((x) => x.aliasId === alias);
                 return (
-                  <Badge key={alias} variant="secondary" className="gap-1 pr-1.5">
+                  <span key={alias} className="inline-flex h-7 items-center gap-1.5 rounded-md border border-border bg-card pl-2.5 pr-1 text-[13px] font-medium">
                     <span className="max-w-[160px] truncate">{m?.displayName ?? alias}</span>
                     {m?.reasoning ? (
                       <Tooltip>
                         <TooltipTrigger asChild>
-                          <Brain className="size-3 text-muted-foreground" />
+                          <Brain className="size-3.5 text-muted-foreground" aria-label="Reasoning capable" />
                         </TooltipTrigger>
                         <TooltipContent>Reasoning capable</TooltipContent>
                       </Tooltip>
                     ) : null}
                     <button
                       type="button"
-                      className="rounded-full p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+                      className="flex size-5 items-center justify-center rounded-[4px] text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-40"
                       onClick={() => removeModel(alias)}
                       disabled={streaming || selectedModelAliases.length <= 1}
                       aria-label={`Remove ${alias}`}
                     >
                       <X className="size-3" />
                     </button>
-                  </Badge>
+                  </span>
                 );
               })}
               <ModelAddMenu models={models} selected={selectedModelAliases} onAdd={addModel} disabled={streaming} />
             </div>
 
-            {/* Messages + stream panels */}
             <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-6 sm:px-6" style={{ overflowAnchor: "none" }}>
               {messages.length === 0 && Object.keys(streamStates).length === 0 ? (
                 <EmptyState
-                  icon={<Bot className="size-5" />}
-                  title="No messages yet"
-                  description="Send a message below to test the selected model(s). Parameters are on the left."
+                  className="h-full"
+                  icon={<Bot />}
+                  title="Ask the selected models anything"
+                  description="Each model answers in its own panel with token counts, upstream cost, and the price a customer would pay."
                 />
               ) : (
                 <div className="mx-auto flex max-w-3xl flex-col gap-4">
                   {systemPrompt.trim() && (
-                    <div className="flex gap-3 rounded-lg border border-border bg-muted/30 p-3 text-sm">
-                      <Brain className="size-4 shrink-0 text-muted-foreground" />
-                      <div>
-                        <div className="text-xs font-medium text-muted-foreground">System</div>
-                        <div className="whitespace-pre-wrap text-foreground">{systemPrompt}</div>
-                      </div>
+                    <div className="rounded-lg border border-dashed border-border px-3.5 py-2.5 text-sm">
+                      <div className="legend mb-1 text-muted-foreground">System</div>
+                      <div className="whitespace-pre-wrap text-foreground/85">{systemPrompt}</div>
                     </div>
                   )}
                   {messages.map((m, i) => (
                     <MessageBubble key={i} role={m.role} content={m.content} />
                   ))}
-                  {Object.entries(streamStates).map(([alias, s]) => (
+                  {Object.entries(streamStates).map(([alias, st]) => (
                     <StreamPanel
                       key={alias}
                       displayName={models.find((x) => x.aliasId === alias)?.displayName ?? alias}
-                      state={s}
+                      state={st}
                       streaming={streaming}
                       modelReasoning={models.find((x) => x.aliasId === alias)?.reasoning ?? false}
                       reasoningEffort={params.reasoningEffort}
@@ -476,26 +498,32 @@ export default function PlaygroundPage(): React.ReactElement {
               )}
             </div>
 
-            {/* Composer */}
-            <div className="border-t border-border px-4 py-3 sm:px-6">
+            <div className="border-t border-rule bg-background px-4 py-3 sm:px-5">
               <div className="mx-auto flex max-w-3xl flex-col gap-2">
-                <div className="flex flex-col gap-1.5">
-                  <Label className="text-xs text-muted-foreground">System prompt</Label>
+                <details className="group">
+                  <summary className="cursor-pointer list-none text-xs font-medium text-muted-foreground outline-none hover:text-foreground focus-visible:text-foreground [&::-webkit-details-marker]:hidden">
+                    <span className="inline-flex items-center gap-1">
+                      <ChevronDown className="size-3.5 transition-transform group-open:rotate-180" />
+                      System prompt{systemPrompt.trim() ? " · set" : ""}
+                    </span>
+                  </summary>
                   <Textarea
+                    aria-label="System prompt"
                     value={systemPrompt}
                     onChange={(e) => setSystemPrompt(e.target.value)}
-                    placeholder="Optional system prompt…"
+                    placeholder="Optional instructions sent before every message"
                     rows={2}
-                    className="text-sm"
+                    className="mt-2 text-sm"
                   />
-                </div>
+                </details>
                 <div className="flex items-end gap-2">
                   <Textarea
+                    aria-label="Message"
                     value={input}
                     onChange={(e) => setInput(e.target.value)}
-                    placeholder={selectedModelAliases.length === 0 ? "Select a model first…" : "Start a new message…"}
+                    placeholder={selectedModelAliases.length === 0 ? "Add a model first" : "Message the selected models · Enter to send, Shift+Enter for a new line"}
                     rows={2}
-                    className="min-h-[44px] flex-1 text-sm"
+                    className="min-h-[48px] flex-1 resize-none text-sm"
                     disabled={streaming || selectedModelAliases.length === 0}
                     onKeyDown={(e) => {
                       if (e.key === "Enter" && !e.shiftKey) {
@@ -505,19 +533,19 @@ export default function PlaygroundPage(): React.ReactElement {
                     }}
                   />
                   {streaming ? (
-                    <Button variant="outline" size="icon" onClick={stopStream} aria-label="Stop">
-                      <Square className="size-4" />
+                    <Button variant="outline" size="icon" className="size-12" onClick={stopStream} aria-label="Stop">
+                      <Square className="fill-current" />
                     </Button>
                   ) : (
-                    <Button size="icon" onClick={() => void send()} disabled={!input.trim() || selectedModelAliases.length === 0} aria-label="Send">
-                      {hasActiveStream ? <Loader2 className="size-4 animate-spin" /> : <Send className="size-4" />}
+                    <Button size="icon" className="size-12" onClick={() => void send()} disabled={!input.trim() || selectedModelAliases.length === 0} aria-label="Send">
+                      {hasActiveStream ? <Loader2 className="animate-spin" /> : <Send />}
                     </Button>
                   )}
                 </div>
               </div>
             </div>
-          </main>
-        </div>
+          </section>
+        </Panel>
       </div>
     </TooltipProvider>
   );
@@ -535,16 +563,11 @@ export default function PlaygroundPage(): React.ReactElement {
 function MessageBubble({ role, content }: { role: Role; content: string }): React.ReactElement {
   const isUser = role === "user";
   return (
-    <div className={cn("flex gap-3", isUser ? "justify-end" : "justify-start")}>
-      {!isUser && (
-        <div className="flex size-7 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
-          <Bot className="size-4" />
-        </div>
-      )}
+    <div className={cn("flex", isUser ? "justify-end" : "justify-start")}>
       <div
         className={cn(
           "max-w-[85%] rounded-lg px-3.5 py-2.5 text-sm",
-          isUser ? "bg-primary text-primary-foreground" : "bg-card text-card-foreground border border-border",
+          isUser ? "bg-secondary text-secondary-foreground" : "border border-border bg-card text-card-foreground",
         )}
       >
         {isUser ? (
@@ -553,11 +576,6 @@ function MessageBubble({ role, content }: { role: Role; content: string }): Reac
           <StreamingMarkdown content={content} />
         )}
       </div>
-      {isUser && (
-        <div className="flex size-7 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground">
-          <User className="size-4" />
-        </div>
-      )}
     </div>
   );
 }
@@ -576,21 +594,24 @@ function StreamPanel({ displayName, state, streaming: isStreaming, modelReasonin
   return (
     // Plain div, NOT FadeIn. FadeIn's opacity:0->1 keyframe re-runs if this
     // node ever re-mounts; a stable div keeps the panel painted at all times.
-    <div className="flex gap-3">
-      <div className="flex size-7 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
-        <Bot className="size-4" />
-      </div>
-      <Card className="flex min-w-0 flex-1 flex-col gap-2 p-3">
+    <div className="flex min-w-0 flex-col gap-2 rounded-lg border border-border bg-card px-3.5 py-3">
         <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-          <span className="font-medium text-foreground">{displayName}</span>
+          <span className="text-[13px] font-semibold text-foreground">{displayName}</span>
           {state.provider && (
-            <Badge variant="outline" className="gap-1 text-[10px]">
+            <span className="inline-flex items-center gap-1 font-mono text-[11px]">
               <Server className="size-3" />
               {state.provider.upstreamModelId}
-            </Badge>
+            </span>
           )}
-          {state.done && !state.error && <Badge variant="success" className="text-[10px]">done</Badge>}
-          {state.error && <Badge variant="destructive" className="text-[10px]">error</Badge>}
+          <span className="ml-auto">
+            {state.error ? (
+              <Badge variant="destructive">Error</Badge>
+            ) : state.done ? (
+              <Badge variant="success">Done</Badge>
+            ) : isActivelyStreaming ? (
+              <Badge variant="info">Streaming</Badge>
+            ) : null}
+          </span>
         </div>
         {loading ? (
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -617,7 +638,7 @@ function StreamPanel({ displayName, state, streaming: isStreaming, modelReasonin
           </Alert>
         ) : null}
         {(state.usage || state.cost) && !isActivelyStreaming && (
-          <div className="flex flex-wrap items-center gap-2 border-t border-border pt-2 text-[11px] text-muted-foreground">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-rule pt-2 text-[11.5px] tabular-nums text-muted-foreground">
             {state.usage && (
               <span className="flex items-center gap-1">
                 <Coins className="size-3" />
@@ -633,46 +654,30 @@ function StreamPanel({ displayName, state, streaming: isStreaming, modelReasonin
             )}
           </div>
         )}
-      </Card>
     </div>
   );
 }
 
 function ModelAddMenu({ models, selected, onAdd, disabled }: { models: PlaygroundModel[]; selected: string[]; onAdd: (alias: string) => void; disabled: boolean }): React.ReactElement {
-  const [open, setOpen] = useState(false);
   const available = models.filter((m) => !selected.includes(m.aliasId));
   return (
-    <div className="relative">
-      <Button variant="outline" size="sm" disabled={disabled || available.length === 0} onClick={() => setOpen((v) => !v)}>
-        <Plus className="size-3.5" />
-        Add model
-      </Button>
-      {open && !disabled && (
-        <>
-          <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
-          <div className="absolute left-0 top-full z-20 mt-1 max-h-64 w-56 overflow-y-auto rounded-md border border-border bg-popover p-1 shadow-md">
-            {available.length === 0 ? (
-              <div className="px-2 py-1.5 text-xs text-muted-foreground">All models added</div>
-            ) : (
-              available.map((m) => (
-                <button
-                  key={m.aliasId}
-                  type="button"
-                  className="flex w-full items-center justify-between rounded px-2 py-1.5 text-left text-xs hover:bg-accent"
-                  onClick={() => {
-                    onAdd(m.aliasId);
-                    setOpen(false);
-                  }}
-                >
-                  <span className="truncate">{m.displayName}</span>
-                  <span className="text-muted-foreground">{m.aliasId}</span>
-                </button>
-              ))
-            )}
-          </div>
-        </>
-      )}
-    </div>
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="ghost" size="sm" className="h-7" disabled={disabled || available.length === 0}>
+          <Plus />
+          Add model
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="max-h-72 w-64 overflow-y-auto">
+        <DropdownMenuLabel>Compare with</DropdownMenuLabel>
+        {available.map((m) => (
+          <DropdownMenuItem key={m.aliasId} onClick={() => onAdd(m.aliasId)} className="justify-between gap-3">
+            <span className="truncate">{m.displayName}</span>
+            <span className="shrink-0 font-mono text-[11px] text-muted-foreground">{m.aliasId}</span>
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
@@ -680,11 +685,11 @@ function ParamSlider({ label, value, min, max, step, onChange, hint }: { label: 
   return (
     <div className="flex flex-col gap-1.5">
       <div className="flex items-center justify-between">
-        <Label className="text-xs text-muted-foreground">{label}</Label>
-        <span className="font-mono text-xs">{value}</span>
+        <Label className="text-xs">{label}</Label>
+        <span className="text-xs font-medium tabular-nums">{value}</span>
       </div>
       <Slider value={value} min={min} max={max} step={step} onChange={onChange} aria-label={label} />
-      {hint ? <span className="text-[10px] text-muted-foreground">{hint}</span> : null}
+      {hint ? <span className="text-[11px] text-muted-foreground">{hint}</span> : null}
     </div>
   );
 }

@@ -11,7 +11,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { Card } from "@/components/ui/card";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -22,10 +21,21 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { KeyRound, Copy, Check, Plus, ShieldCheck } from "lucide-react";
+import { KeyRound, MoreHorizontal, Plus, ShieldCheck } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+
 import { PageHeader } from "@/components/PageHeader";
 import { EmptyState } from "@/components/EmptyState";
-import { FadeIn } from "@/components/anim";
+import { Panel, PanelHeader } from "@/components/Instrument";
+import { OneTimeSecret } from "@/components/OneTimeSecret";
+import { useConfirm } from "@/components/ConfirmDialog";
+import { cn } from "@/lib/utils";
 import { MANAGEMENT_SCOPE_DEFINITIONS, requiredPanelPermissionForScope } from "@tokenpanel/contracts";
 
 function groupBy<T, K extends string>(items: readonly T[], key: (t: T) => K): Record<K, T[]> {
@@ -63,6 +73,7 @@ export default function ManagementKeysPage(): React.ReactElement {
     [user],
   );
 
+  const confirm = useConfirm();
   const [keys, setKeys] = useState<ManagementKey[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -178,7 +189,13 @@ export default function ManagementKeysPage(): React.ReactElement {
 
   async function onRevoke(id: string) {
     const key = keys.find((k) => k._id === id);
-    if (!confirm(`Revoke management key "${key?.name ?? id}"? This cannot be undone.`)) return;
+    const ok = await confirm({
+      title: `Revoke "${key?.name ?? id}"?`,
+      description: "Services using this management key lose access immediately. This cannot be undone.",
+      confirmLabel: "Revoke key",
+      destructive: true,
+    });
+    if (!ok) return;
     setRevokingId(id);
     setError(null);
     try {
@@ -217,8 +234,23 @@ export default function ManagementKeysPage(): React.ReactElement {
     : [];
 
   return (
-    <div className="flex flex-col gap-6 p-6 lg:p-8">
-      <PageHeader title="Management Keys" icon={<ShieldCheck strokeWidth={1.75} />} />
+    <div className="flex flex-col gap-6">
+      <PageHeader
+        title="Management keys"
+        description={
+          <>
+            Server-to-server keys for your own backend: read org data and call the gateway on your behalf. Prefixed{" "}
+            <code className="font-mono text-xs">tp_mgmt_</code>, separate from customer keys (<code className="font-mono text-xs">tp_live_</code>).
+          </>
+        }
+      >
+        {canWrite && !showCreate ? (
+          <Button onClick={openCreate}>
+            <Plus />
+            New key
+          </Button>
+        ) : null}
+      </PageHeader>
 
       {error ? (
         <Alert variant="destructive">
@@ -226,249 +258,223 @@ export default function ManagementKeysPage(): React.ReactElement {
         </Alert>
       ) : null}
 
-      {createdKey ? (
-        <Alert variant="info">
-          <div className="flex flex-col gap-2.5">
-            <div className="text-sm font-semibold">
-              Management key created. Copy it now — shown only once.
-            </div>
-            <div className="flex items-center gap-2">
-              <code className="flex-1 rounded border border-border bg-muted px-2 py-1.5 font-mono text-xs break-all">
-                {createdKey}
-              </code>
-              <Button variant="outline" size="sm" onClick={() => void copyKey(createdKey)}>
-                {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
-                {copied ? "Copied" : "Copy"}
-              </Button>
-              <Button variant="ghost" size="sm" onClick={() => setCreatedKey(null)}>
-                Dismiss
-              </Button>
-            </div>
-          </div>
-        </Alert>
-      ) : null}
-
-      <div className="flex items-center justify-between">
-        <p className="text-sm text-muted-foreground">
-          Management keys use the <code className="font-mono text-xs">tp_mgmt_</code> prefix and are
-          separate from customer API keys (<code className="font-mono text-xs">tp_live_</code>).
-        </p>
-        {canWrite && !showCreate ? (
-          <Button size="sm" onClick={openCreate}>
-            <Plus className="size-4" />
-            Create Key
-          </Button>
-        ) : null}
-      </div>
-
-      {showCreate && canWrite ? (
-        <FadeIn>
-          <Card className="p-5">
-            <form className="flex flex-col gap-4" onSubmit={onSubmit}>
-              <div className="flex items-center justify-between">
-                <h2 className="text-base font-semibold">
-                  {editingId ? "Edit management key" : "Create management key"}
-                </h2>
-                <Button type="button" variant="ghost" size="sm" onClick={resetForm}>
-                  Cancel
-                </Button>
-              </div>
-              <div className="flex flex-col gap-1.5">
-                <Label htmlFor="mgmt-name">Name</Label>
-                <Input
-                  id="mgmt-name"
-                  type="text"
-                  placeholder="e.g. Billing sync service"
-                  value={name}
-                  required
-                  disabled={saving}
-                  onChange={(e) => setName(e.target.value)}
-                />
-              </div>
-              <div className="flex flex-col gap-2">
-                <Label>Scopes</Label>
-                <p className="text-xs text-muted-foreground">
-                  Each scope is independent — grant only what the integration needs.
-                </p>
-                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                  {lockedScopes.length > 0 ? (
-                    <div className="flex flex-col gap-2 rounded-md border border-border bg-muted/30 p-3 sm:col-span-2 lg:col-span-3">
-                      <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                        Locked scopes
-                      </div>
-                      <p className="text-[11px] text-muted-foreground">
-                        Granted on this key but not modifiable by your role. Preserved on save.
-                      </p>
-                      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                        {lockedScopes.map((s) => {
-                          const def = SCOPE_BY_VALUE.get(s);
-                          return (
-                            <label
-                              key={s}
-                              className="flex cursor-not-allowed items-start gap-2 text-sm opacity-70"
-                              title="Cannot be modified by your role"
-                            >
-                              <Checkbox checked disabled className="mt-0.5" />
-                              <span className="flex flex-col">
-                                <span className="font-medium leading-tight">
-                                  {def?.description ?? s}
-                                </span>
-                                <code className="font-mono text-[10px] text-muted-foreground">
-                                  {s}
-                                </code>
-                              </span>
-                            </label>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  ) : null}
-                  {Object.entries(ALL_SCOPES_BY_GROUP).map(([group, items]) => {
-                    const grantable = items.filter((s) =>
-                      grantableScopeValues.has(s.value),
-                    );
-                    if (grantable.length === 0) return null;
-                    return (
-                    <div key={group} className="flex flex-col gap-2 rounded-md border border-border p-3">
-                      <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                        {group}
-                      </div>
-                      {grantable.map((s) => (
-                        <label
-                          key={s.value}
-                          className="flex cursor-pointer items-start gap-2 text-sm"
-                          title={s.description}
-                        >
-                          <Checkbox
-                            checked={selected.has(s.value)}
-                            onCheckedChange={() => toggleScope(s.value)}
-                            className="mt-0.5"
-                          />
-                          <span className="flex flex-col">
-                            <span className="font-medium leading-tight">{s.description}</span>
-                            <code className="font-mono text-[10px] text-muted-foreground">{s.value}</code>
-                          </span>
-                        </label>
-                      ))}
-                    </div>
-                    );
-                  })}
-                </div>
-              </div>
-              <div>
-                <Button type="submit" disabled={saving || !name.trim()}>
-                  {saving
-                    ? "Saving…"
-                    : editingId
-                      ? "Save changes"
-                      : "Create key"}
-                </Button>
-              </div>
-            </form>
-          </Card>
-        </FadeIn>
-      ) : null}
-
       {!canRead ? (
         <Alert>
           <ShieldCheck className="size-4" />
           <AlertDescription>
-            You need <code className="font-mono text-xs">management_keys:read</code> to view
-            management keys. Contact an admin if you need access.
+            Viewing management keys needs <code className="font-mono text-xs">management_keys:read</code>. Ask an admin for access.
           </AlertDescription>
         </Alert>
       ) : !canWrite ? (
         <Alert>
           <ShieldCheck className="size-4" />
           <AlertDescription>
-            You can view management keys but need{" "}
-            <code className="font-mono text-xs">management_keys:write</code> to create or revoke
-            them.
+            Read-only access. Creating or revoking keys needs{" "}
+            <code className="font-mono text-xs">management_keys:write</code>.
           </AlertDescription>
         </Alert>
       ) : null}
 
-      {loading || !canRead ? null : keys.length === 0 ? (
-        <EmptyState
-          icon={<KeyRound className="size-5" />}
-          title="No management keys yet"
-          description="Create one to enable backend services to read org data and call /v1 on your behalf."
+      {createdKey ? (
+        <OneTimeSecret
+          className="mb-0"
+          label="Management key created. Copy it now; it is shown only once."
+          secret={createdKey}
+          copied={copied}
+          onCopy={() => void copyKey(createdKey)}
+          onDismiss={() => setCreatedKey(null)}
         />
-      ) : (
-        <FadeIn>
-          <Card className="overflow-hidden p-0">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Name</TableHead>
-                  <TableHead>Prefix</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Scopes</TableHead>
-                  <TableHead>Last Used</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {keys.map((k) => (
-                  <TableRow key={k._id}>
-                    <TableCell className="font-medium">{k.name}</TableCell>
-                    <TableCell>
-                      <code className="font-mono text-xs">{k.prefix}…</code>
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant={k.status === "active" ? "success" : "destructive"}>
-                        {k.status}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>
-                      {k.scopes.length === 0 ? (
-                        <span className="text-xs text-muted-foreground">No scopes</span>
-                      ) : (
-                        <div className="flex max-w-[420px] flex-wrap gap-1">
-                          {k.scopes.map((s) => (
-                            <span
-                              key={s}
-                              className="rounded border border-border bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground"
-                            >
-                              {s}
+      ) : null}
+
+      {showCreate && canWrite ? (
+        <Panel>
+          <PanelHeader
+            title={editingId ? "Edit management key" : "New management key"}
+            description="Grant only the scopes the integration needs. Each scope is independent."
+          />
+          <form className="flex flex-col" onSubmit={onSubmit}>
+            <div className="flex flex-col gap-5 px-5 py-5">
+              <div className="flex max-w-md flex-col gap-1.5">
+                <Label htmlFor="mgmt-name">Name</Label>
+                <Input
+                  id="mgmt-name"
+                  type="text"
+                  placeholder="Billing sync service"
+                  value={name}
+                  required
+                  disabled={saving}
+                  onChange={(e) => setName(e.target.value)}
+                />
+              </div>
+              <div className="grid gap-x-8 gap-y-5 sm:grid-cols-2 xl:grid-cols-3">
+                {lockedScopes.length > 0 ? (
+                  <fieldset className="flex flex-col gap-2.5 border-t border-dashed border-border pt-3 sm:col-span-2 xl:col-span-3">
+                    <legend className="sr-only">Locked scopes</legend>
+                    <div className="legend text-muted-foreground">Locked scopes</div>
+                    <p className="text-xs text-muted-foreground">
+                      Granted on this key but outside what your role can change. Kept as-is on save.
+                    </p>
+                    <div className="grid gap-2.5 sm:grid-cols-2 xl:grid-cols-3">
+                      {lockedScopes.map((sc) => {
+                        const def = SCOPE_BY_VALUE.get(sc);
+                        return (
+                          <label
+                            key={sc}
+                            className="flex cursor-not-allowed items-start gap-2.5 text-sm opacity-70"
+                            title="Cannot be modified by your role"
+                          >
+                            <Checkbox checked disabled className="mt-0.5" />
+                            <span className="flex flex-col gap-0.5">
+                              <span className="font-medium leading-tight">{def?.description ?? sc}</span>
+                              <code className="font-mono text-[11px] text-muted-foreground">{sc}</code>
                             </span>
-                          ))}
-                        </div>
-                      )}
-                    </TableCell>
-                    <TableCell className="text-muted-foreground">
-                      {formatRelative(k.lastUsedAt)}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <div className="flex justify-end gap-1.5">
-                        {k.status === "active" && canWrite ? (
-                          <>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              disabled={saving}
-                              onClick={() => openEdit(k)}
-                            >
-                              Edit
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </fieldset>
+                ) : null}
+                {Object.entries(ALL_SCOPES_BY_GROUP).map(([group, items]) => {
+                  const grantable = items.filter((sc) => grantableScopeValues.has(sc.value));
+                  if (grantable.length === 0) return null;
+                  const on = grantable.filter((sc) => selected.has(sc.value)).length;
+                  return (
+                    <fieldset key={group} className="flex flex-col gap-2.5 border-t border-rule pt-3">
+                      <legend className="sr-only">{group}</legend>
+                      <div className="flex items-center justify-between">
+                        <span className="legend text-muted-foreground">{group}</span>
+                        <span className="text-xs tabular-nums text-muted-foreground">{on}/{grantable.length}</span>
+                      </div>
+                      {grantable.map((sc) => (
+                        <label key={sc.value} className="flex cursor-pointer items-start gap-2.5 text-sm" title={sc.description}>
+                          <Checkbox
+                            checked={selected.has(sc.value)}
+                            onCheckedChange={() => toggleScope(sc.value)}
+                            className="mt-0.5"
+                          />
+                          <span className="flex flex-col gap-0.5">
+                            <span className="font-medium leading-tight">{sc.description}</span>
+                            <code className="font-mono text-[11px] text-muted-foreground">{sc.value}</code>
+                          </span>
+                        </label>
+                      ))}
+                    </fieldset>
+                  );
+                })}
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 border-t border-rule px-5 py-4">
+              <Button type="button" variant="outline" onClick={resetForm}>Cancel</Button>
+              <Button type="submit" disabled={saving || !name.trim()}>
+                {saving ? "Saving…" : editingId ? "Save changes" : "Create key"}
+              </Button>
+            </div>
+          </form>
+        </Panel>
+      ) : null}
+
+      {!canRead ? null : loading ? (
+        <div className="skeleton h-32 rounded-xl" aria-hidden />
+      ) : keys.length === 0 ? (
+        <Panel>
+          <EmptyState
+            icon={<KeyRound />}
+            title="No management keys yet"
+            description="Create one so a backend service can read organization data or call /v1 on your behalf."
+            action={
+              canWrite && !showCreate ? (
+                <Button size="sm" onClick={openCreate}>
+                  <Plus />
+                  New key
+                </Button>
+              ) : null
+            }
+          />
+        </Panel>
+      ) : (
+        <Panel className="overflow-hidden">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Key</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead className="hidden md:table-cell">Scopes</TableHead>
+                <TableHead className="hidden sm:table-cell">Last used</TableHead>
+                <TableHead className="text-right"><span className="sr-only">Actions</span></TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {keys.map((k) => (
+                <TableRow key={k._id} className={cn(k.status !== "active" && "text-muted-foreground")}>
+                  <TableCell>
+                    <div className="font-medium text-foreground">{k.name}</div>
+                    <code className="font-mono text-xs text-muted-foreground">{k.prefix}…</code>
+                  </TableCell>
+                  <TableCell>
+                    <Badge variant={k.status === "active" ? "success" : "destructive"} className="capitalize">
+                      {k.status}
+                    </Badge>
+                  </TableCell>
+                  <TableCell className="hidden whitespace-normal md:table-cell">
+                    {k.scopes.length === 0 ? (
+                      <span className="text-[13px] text-muted-foreground">No scopes</span>
+                    ) : (
+                      <div className="flex max-w-[30rem] flex-wrap gap-1">
+                        {k.scopes.map((sc) => (
+                          <span key={sc} className="rounded-[4px] bg-secondary px-1.5 py-0.5 font-mono text-[11px] text-secondary-foreground">
+                            {sc}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </TableCell>
+                  <TableCell className="hidden text-muted-foreground sm:table-cell">
+                    {k.lastUsedAt ? formatRelative(k.lastUsedAt) : "Never"}
+                  </TableCell>
+                  <TableCell className="text-right">
+                    {k.status === "active" && canWrite ? (
+                      <div className="flex justify-end sm:hidden">
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button variant="ghost" size="icon-sm" aria-label={`Actions for ${k.name}`}>
+                              <MoreHorizontal />
                             </Button>
-                            <Button
-                              variant="destructive"
-                              size="sm"
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end" className="w-44">
+                            <DropdownMenuItem disabled={saving} onClick={() => openEdit(k)}>Edit</DropdownMenuItem>
+                            <DropdownMenuSeparator />
+                            <DropdownMenuItem
                               disabled={revokingId === k._id}
                               onClick={() => void onRevoke(k._id)}
+                              className="text-destructive focus:text-destructive"
                             >
-                              {revokingId === k._id ? "Revoking…" : "Revoke"}
-                            </Button>
-                          </>
-                        ) : null}
+                              Revoke…
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
                       </div>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </Card>
-        </FadeIn>
+                    ) : null}
+                    {k.status === "active" && canWrite ? (
+                      <div className="hidden justify-end gap-1 sm:flex">
+                        <Button variant="outline" size="sm" disabled={saving} onClick={() => openEdit(k)}>
+                          Edit
+                        </Button>
+                        <Button
+                          variant="ghost-destructive"
+                          size="sm"
+                          disabled={revokingId === k._id}
+                          onClick={() => void onRevoke(k._id)}
+                        >
+                          {revokingId === k._id ? "Revoking…" : "Revoke"}
+                        </Button>
+                      </div>
+                    ) : null}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </Panel>
       )}
     </div>
   );

@@ -186,7 +186,7 @@ test.describe("gateway behaviors: billing / rate-limit / fallback / protocols", 
     await page.goto("/models");
     await reliableClick(rowWith(page, pipeline!.modelAlias).getByRole("button", { name: "Edit" }));
     await expect(page.getByText("Provider routing")).toBeVisible();
-    await reliableClick(page.getByRole("button", { name: "Add Provider Entry" }));
+    await reliableClick(page.getByRole("button", { name: "Add route" }));
     await selectOption(page, page.locator("#ae-prov"), "Dead Upstream Provider");
     await page.locator("#ae-up").fill("mock-gpt");
     await reliableClick(page.getByRole("button", { name: "Add entry" }));
@@ -238,7 +238,7 @@ test.describe("gateway behaviors: billing / rate-limit / fallback / protocols", 
     // Create a management key with ONLY customers:read (uncheck the default
     // models:read so we also prove a non-default scope set is honored).
     await page.goto("/management-keys");
-    await reliableClick(page.getByRole("button", { name: "Create Key", exact: true }));
+    await reliableClick(page.getByRole("button", { name: "New key", exact: true }).first());
     await page.locator("#mgmt-name").fill("Mgmt Customers Only");
     const scopeBox = (value: string) =>
       page
@@ -250,7 +250,7 @@ test.describe("gateway behaviors: billing / rate-limit / fallback / protocols", 
     await scopeBox("models:read").click({ force: true }); // off (was default)
     await reliableClick(page.getByRole("button", { name: "Create key", exact: true }));
     await expect(page.getByText(/Management key created\. Copy it now/)).toBeVisible();
-    const mgmtKey = (await page.locator("code", { hasText: "tp_mgmt_" }).first().textContent())?.trim();
+    const mgmtKey = (await page.locator("[data-slot='one-time-secret'] code", { hasText: "tp_mgmt_" }).first().textContent())?.trim();
     expect(mgmtKey?.startsWith("tp_mgmt_")).toBeTruthy();
 
     const auth = { Authorization: `Bearer ${mgmtKey}` };

@@ -1,6 +1,6 @@
 import type { Browser, Page } from "@playwright/test";
 import { expect, reliableClick, test } from "./fixtures.ts";
-import { createCustomer } from "./helpers.ts";
+import { createCustomer, readInviteToken } from "./helpers.ts";
 
 /**
  * Permission-system coverage.
@@ -44,20 +44,14 @@ async function inviteMember(
   atoms: readonly string[],
 ): Promise<string> {
   await page.goto("/settings");
-  await reliableClick(page.getByRole("tab", { name: "Invites" }));
+  await reliableClick(page.getByRole("tab", { name: "Team invites" }));
 
   await page.locator("#invite-email").fill(email);
   // Role defaults to "member"; the per-atom checkboxes only render for members.
   for (const atom of atoms) await grantPermission(page, atom);
-  await reliableClick(page.getByRole("button", { name: "Invite User" }));
+  await reliableClick(page.getByRole("button", { name: "Create invite link" }));
 
-  const reveal = page.locator("[data-slot='alert']", {
-    hasText: "Invite created. Share this signup link",
-  });
-  await expect(reveal).toBeVisible();
-  const token = (await reveal.locator("code").first().textContent())?.trim();
-  expect(token, "invite token revealed").toBeTruthy();
-  return token!;
+  return readInviteToken(page);
 }
 
 /**
@@ -185,7 +179,7 @@ test.describe("permissions: members see and reach only their grants", () => {
       // balances:read → the Balance column header renders.
       await expect(member.page.getByRole("columnheader", { name: "Balance" })).toBeVisible();
       // No customers:write → the create button is absent (read-only UI).
-      await expect(member.page.getByRole("button", { name: "Add Customer" })).toHaveCount(0);
+      await expect(member.page.getByRole("button", { name: "Add customer" })).toHaveCount(0);
     } finally {
       await member.cleanup();
     }

@@ -8,8 +8,7 @@ import { Label } from "@/components/ui/label";
 import { PasswordInput } from "@/components/ui/password-input";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Loader2 } from "lucide-react";
-import { AuthBrandPanel, AuthMobileBrand } from "@/components/AuthBrandPanel";
-import { cn } from "@/lib/utils";
+import { AuthLoading, AuthShell } from "@/components/AuthBrandPanel";
 
 interface FromState {
   from?: { pathname: string };
@@ -31,12 +30,7 @@ export default function LoginPage(): ReactElement {
   const [submitting, setSubmitting] = useState(false);
 
   if (loading) {
-    return (
-      <div className="flex min-h-[100dvh] items-center justify-center text-muted-foreground">
-        <Loader2 className="size-5 animate-spin" aria-hidden />
-        <span className="sr-only">Loading</span>
-      </div>
-    );
+    return <AuthLoading />;
   }
 
   if (needsSetup) {
@@ -66,77 +60,63 @@ export default function LoginPage(): ReactElement {
   }
 
   return (
-    <div className="flex min-h-[100dvh] bg-background">
-      <AuthBrandPanel />
+    <AuthShell
+      title="Sign in"
+      description="Manage usage, access, and limits for your organization."
+      footer="New to this instance? Ask an admin for an invite link."
+    >
+      <form className="flex flex-col gap-4" onSubmit={onSubmit} noValidate>
+        {error ? (
+          <Alert variant="destructive">
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        ) : null}
 
-      <main className="relative flex flex-1 flex-col justify-center px-6 py-10 sm:px-10">
-        <div
-          className={cn(
-            "mx-auto w-full max-w-[22.5rem] animate-fade-in-up",
-            "sm:max-w-[24rem]",
-          )}
-        >
-          <AuthMobileBrand />
-
-          <header className="mb-8 flex flex-col gap-2">
-            <h1 className="text-2xl font-semibold tracking-tight">Welcome back</h1>
-            <p className="text-sm leading-relaxed text-muted-foreground">
-              Sign in to the admin console to manage usage, access, and limits.
-            </p>
-          </header>
-
-          <form className="flex flex-col gap-5" onSubmit={onSubmit} noValidate>
-            {error ? (
-              <Alert variant="destructive">
-                <AlertDescription>{error}</AlertDescription>
-              </Alert>
-            ) : null}
-
-            <div className="flex flex-col gap-2">
-              <Label htmlFor="login-username">Username</Label>
-              <Input
-                id="login-username"
-                type="text"
-                value={username}
-                autoComplete="username"
-                autoFocus
-                required
-                disabled={submitting}
-                onChange={(e) => setUsername(e.target.value)}
-              />
-            </div>
-
-            <div className="flex flex-col gap-2">
-              <Label htmlFor="login-password">Password</Label>
-              <PasswordInput
-                id="login-password"
-                value={password}
-                autoComplete="current-password"
-                required
-                disabled={submitting}
-                showPassword={showPassword}
-                onToggleShow={() => setShowPassword((v) => !v)}
-                onChange={(e) => setPassword(e.target.value)}
-              />
-            </div>
-
-            <Button type="submit" className="mt-1 w-full" disabled={submitting}>
-              {submitting ? (
-                <>
-                  <Loader2 className="size-4 animate-spin" />
-                  Signing in…
-                </>
-              ) : (
-                "Sign in"
-              )}
-            </Button>
-          </form>
-
-          <p className="mt-8 border-t border-border pt-5 text-center text-xs leading-relaxed text-muted-foreground">
-            First time here? Ask an admin to invite you to the organization.
-          </p>
+        <div className="flex flex-col gap-2">
+          <Label htmlFor="login-username">Username</Label>
+          <Input
+            id="login-username"
+            type="text"
+            value={username}
+            autoComplete="username"
+            autoCapitalize="none"
+            spellCheck={false}
+            autoFocus
+            required
+            disabled={submitting}
+            aria-invalid={error ? true : undefined}
+            className="h-10"
+            onChange={(e) => setUsername(e.target.value)}
+          />
         </div>
-      </main>
-    </div>
+
+        <div className="flex flex-col gap-2">
+          <Label htmlFor="login-password">Password</Label>
+          <PasswordInput
+            id="login-password"
+            value={password}
+            autoComplete="current-password"
+            required
+            disabled={submitting}
+            aria-invalid={error ? true : undefined}
+            className="h-10"
+            showPassword={showPassword}
+            onToggleShow={() => setShowPassword((v) => !v)}
+            onChange={(e) => setPassword(e.target.value)}
+          />
+        </div>
+
+        <Button type="submit" size="lg" className="mt-2 w-full" disabled={submitting}>
+          {submitting ? (
+            <>
+              <Loader2 className="size-4 animate-spin" />
+              Signing in…
+            </>
+          ) : (
+            "Sign in"
+          )}
+        </Button>
+      </form>
+    </AuthShell>
   );
 }

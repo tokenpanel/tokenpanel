@@ -14,12 +14,12 @@ import { toast } from "sonner";
 import { Building2, Loader2, MoreVertical, Pencil, Plus, Trash2, Check } from "lucide-react";
 import { PageHeader } from "@/components/PageHeader";
 import { EmptyState } from "@/components/EmptyState";
-import { FadeIn, StaggerItem } from "@/components/anim";
+import { Panel } from "@/components/Instrument";
+import { orgInitials } from "@/components/Layout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { Card } from "@/components/ui/card";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import {
   Dialog,
@@ -224,10 +224,13 @@ export default function OrganizationsPage(): React.ReactElement {
   const isOwner = (org: Organization) => user?.id === org.ownerId;
 
   return (
-    <div className="flex flex-col gap-6 p-6 lg:p-8">
-      <PageHeader title="Organizations" icon={<Building2 strokeWidth={1.75} />}>
+    <div className="flex flex-col gap-6">
+      <PageHeader
+        title="Organizations"
+        description="Each organization has its own providers, models, plans, customers, and keys. Switch to work inside one."
+      >
         <Button onClick={openCreate}>
-          <Plus className="size-4" />
+          <Plus />
           New organization
         </Button>
       </PageHeader>
@@ -239,119 +242,106 @@ export default function OrganizationsPage(): React.ReactElement {
       ) : null}
 
       {loading ? (
-        <div className="flex items-center justify-center py-20 text-muted-foreground">
-          <Loader2 className="size-5 animate-spin" />
-        </div>
+        <div className="skeleton h-40 rounded-xl" aria-hidden />
       ) : orgs.length === 0 ? (
-        <Card className="p-8">
+        <Panel>
           <EmptyState
-            icon={<Building2 className="size-5" />}
+            icon={<Building2 />}
             title="No organizations"
-            description="Create your first organization to start managing providers and customers."
+            description="Create an organization to hold providers, models, plans, and customers."
             action={
-              <Button onClick={openCreate}>
-                <Plus className="size-4" />
+              <Button size="sm" onClick={openCreate}>
+                <Plus />
                 New organization
               </Button>
             }
           />
-        </Card>
+        </Panel>
       ) : (
-        <FadeIn>
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-            {orgs.map((org, i) => {
-              const active = org.id === activeId;
-              const owned = isOwner(org);
-              return (
-                <StaggerItem key={org.id} index={i}>
-                  <Card className={cn("flex flex-col gap-4 p-5", active && "ring-2 ring-primary/40")}>
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="flex items-center gap-3">
-                        <div className="flex size-10 items-center justify-center rounded-lg bg-primary/10 text-primary">
-                          <Building2 className="size-5" />
-                        </div>
-                        <div className="flex flex-col gap-0.5">
-                          <span className="font-semibold leading-tight">{org.name}</span>
-                          <span className="font-mono text-xs text-muted-foreground">{org.slug}</span>
-                        </div>
-                      </div>
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <Button variant="ghost" size="icon-sm" aria-label="Organization actions">
-                            <MoreVertical className="size-4" />
-                          </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end">
-                          {canWriteOrg ? (
-                            <DropdownMenuItem onClick={() => openRename(org)}>
-                              <Pencil className="size-4" />
-                              <span>Rename</span>
-                            </DropdownMenuItem>
-                          ) : null}
-                          {owned ? (
-                            <DropdownMenuItem
-                              onClick={() => setDeleteTarget(org)}
-                              className="text-destructive focus:text-destructive"
-                            >
-                              <Trash2 className="size-4" />
-                              <span>Delete</span>
-                            </DropdownMenuItem>
-                          ) : (
-                            <DropdownMenuItem disabled>
-                              <Trash2 className="size-4" />
-                              <span>Delete (owner only)</span>
-                            </DropdownMenuItem>
-                          )}
-                          <DropdownMenuSeparator />
-                          <DropdownMenuItem
-                            disabled={active}
-                            onClick={() => void onSwitch(org.id)}
-                          >
-                            <Check className="size-4" />
-                            <span>{active ? "Currently active" : "Switch to"}</span>
-                          </DropdownMenuItem>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-sm">
-                      <div className="text-muted-foreground">Currency</div>
-                      <div>{org.defaultCurrency}</div>
-                      <div className="text-muted-foreground">Role</div>
-                      <div className="flex items-center gap-1.5">
-                        <Badge variant={org.role === "admin" ? "secondary" : "outline"}>
-                          {org.role === "admin" ? "Admin" : "Member"}
-                        </Badge>
-                        {owned ? <Badge variant="success">Owner</Badge> : null}
-                      </div>
-                      <div className="text-muted-foreground">Created</div>
-                      <div className="text-xs">{formatDate(org.createdAt)}</div>
-                    </div>
-
-                    <div className="mt-auto flex items-center justify-between">
-                      {active ? (
-                        <Badge variant="success">Active</Badge>
-                      ) : (
-                        <span className="text-xs text-muted-foreground">Inactive</span>
-                      )}
-                      <Button
-                        variant={active ? "outline" : "default"}
-                        size="sm"
-                        disabled={active || switchingId === org.id}
-                        onClick={() => void onSwitch(org.id)}
-                      >
-                        {switchingId === org.id ? (
-                          <Loader2 className="size-3.5 animate-spin" />
-                        ) : null}
-                        {active ? "Current" : "Switch"}
+        <Panel as="ul" className="overflow-hidden">
+          {orgs.map((org) => {
+            const active = org.id === activeId;
+            const owned = isOwner(org);
+            return (
+              <li
+                key={org.id}
+                className={cn(
+                  "flex flex-wrap items-center gap-x-4 gap-y-3 border-b border-rule px-4 py-4 last:border-b-0 sm:flex-nowrap sm:px-5",
+                  active && "bg-accent/50",
+                )}
+              >
+                <span
+                  aria-hidden
+                  className={cn(
+                    "flex size-10 shrink-0 items-center justify-center rounded-md text-[13px] font-semibold",
+                    active ? "bg-foreground text-background" : "bg-secondary text-secondary-foreground",
+                  )}
+                >
+                  {orgInitials(org.name)}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="truncate font-semibold">{org.name}</span>
+                    {active ? <Badge variant="info">Current</Badge> : null}
+                  </div>
+                  <div className="mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
+                    <span className="font-mono">{org.slug}</span>
+                    <span className="tabular-nums">{org.defaultCurrency}</span>
+                    <span>{owned ? "Owner" : org.role === "admin" ? "Admin" : "Member"}</span>
+                    <span>Created {formatDate(org.createdAt)}</span>
+                  </div>
+                </div>
+                <div className="flex shrink-0 items-center gap-1.5">
+                  {active ? null : (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={switchingId === org.id}
+                      onClick={() => void onSwitch(org.id)}
+                    >
+                      {switchingId === org.id ? <Loader2 className="animate-spin" /> : null}
+                      Switch
+                    </Button>
+                  )}
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button variant="ghost" size="icon-sm" aria-label={`Actions for ${org.name}`}>
+                        <MoreVertical />
                       </Button>
-                    </div>
-                  </Card>
-                </StaggerItem>
-              );
-            })}
-          </div>
-        </FadeIn>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="w-52">
+                      {canWriteOrg ? (
+                        <DropdownMenuItem onClick={() => openRename(org)}>
+                          <Pencil className="size-4" />
+                          <span>Edit details</span>
+                        </DropdownMenuItem>
+                      ) : null}
+                      <DropdownMenuItem disabled={active} onClick={() => void onSwitch(org.id)}>
+                        <Check className="size-4" />
+                        <span>{active ? "Current organization" : "Switch to this"}</span>
+                      </DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                      {owned ? (
+                        <DropdownMenuItem
+                          onClick={() => setDeleteTarget(org)}
+                          className="text-destructive focus:text-destructive"
+                        >
+                          <Trash2 className="size-4" />
+                          <span>Delete…</span>
+                        </DropdownMenuItem>
+                      ) : (
+                        <DropdownMenuItem disabled>
+                          <Trash2 className="size-4" />
+                          <span>Delete (owner only)</span>
+                        </DropdownMenuItem>
+                      )}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </div>
+              </li>
+            );
+          })}
+        </Panel>
       )}
 
       {/* Create dialog */}
@@ -380,9 +370,9 @@ export default function OrganizationsPage(): React.ReactElement {
                 }
               />
             </div>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div className="flex flex-col gap-1.5">
-                <Label htmlFor="org-create-slug">Slug (optional)</Label>
+                <Label htmlFor="org-create-slug">Slug <span className="font-normal text-muted-foreground">(optional)</span></Label>
                 <Input
                   id="org-create-slug"
                   value={createForm.slug}
@@ -411,7 +401,7 @@ export default function OrganizationsPage(): React.ReactElement {
               </Button>
               <Button type="submit" disabled={creating || !createForm.name.trim()}>
                 {creating ? <Loader2 className="size-4 animate-spin" /> : null}
-                Create
+                Create organization
               </Button>
             </DialogFooter>
           </form>
@@ -434,7 +424,7 @@ export default function OrganizationsPage(): React.ReactElement {
                 onChange={(e) => setRenameForm((prev) => ({ ...prev, name: e.target.value }))}
               />
             </div>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div className="flex flex-col gap-1.5">
                 <Label htmlFor="org-rename-slug">Slug</Label>
                 <Input
@@ -464,7 +454,7 @@ export default function OrganizationsPage(): React.ReactElement {
               </Button>
               <Button type="submit" disabled={renaming || !renameForm.name.trim()}>
                 {renaming ? <Loader2 className="size-4 animate-spin" /> : null}
-                Save
+                Save changes
               </Button>
             </DialogFooter>
           </form>
@@ -475,14 +465,14 @@ export default function OrganizationsPage(): React.ReactElement {
       <Dialog open={deleteTarget !== null} onOpenChange={(open) => !open && setDeleteTarget(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Delete organization</DialogTitle>
+            <DialogTitle>Delete organization?</DialogTitle>
             <DialogDescription>
               {deleteTarget
                 ? `This permanently deletes "${deleteTarget.name}" and removes it from all members. This cannot be undone.`
                 : ""}
             </DialogDescription>
           </DialogHeader>
-          <Alert variant="destructive">
+          <Alert variant="warning">
             <AlertDescription>
               The organization must be empty (no providers, customers, models, plans, or API keys) before it can be deleted.
             </AlertDescription>
@@ -493,7 +483,7 @@ export default function OrganizationsPage(): React.ReactElement {
             </Button>
             <Button type="button" variant="destructive" onClick={() => void onDelete()} disabled={deleting}>
               {deleting ? <Loader2 className="size-4 animate-spin" /> : null}
-              Delete
+              Delete organization
             </Button>
           </DialogFooter>
         </DialogContent>

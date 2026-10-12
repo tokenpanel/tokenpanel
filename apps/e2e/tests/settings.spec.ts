@@ -21,7 +21,7 @@ test.describe("settings: change password", () => {
     const newPassword = "E2E-New-Passw0rd!";
 
     await page.goto("/settings");
-    await reliableClick(page.getByRole("tab", { name: "Profile" }));
+    await reliableClick(page.getByRole("tab", { name: "Account" }));
 
     await page.locator("#cur-pw").fill(ADMIN_PASSWORD);
     await page.locator("#new-pw").fill(newPassword);
@@ -30,7 +30,7 @@ test.describe("settings: change password", () => {
 
     // The session is revoked → the app drops back to the login screen.
     await page.waitForURL(/\/login$/);
-    await expect(page.getByRole("heading", { name: "Welcome back" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
 
     // Old password no longer works.
     await page.locator("#login-username").fill(ADMIN_USERNAME);
@@ -43,12 +43,12 @@ test.describe("settings: change password", () => {
     await page.locator("#login-username").fill(ADMIN_USERNAME);
     await page.locator("#login-password").fill(newPassword);
     await reliableClick(page.getByRole("button", { name: "Sign in" }));
-    await expect(page.getByRole("button", { name: "User menu" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Account menu" })).toBeVisible();
 
 
     // Restore the known password so creds.ts stays valid for future runs.
     await page.goto("/settings");
-    await reliableClick(page.getByRole("tab", { name: "Profile" }));
+    await reliableClick(page.getByRole("tab", { name: "Account" }));
     await page.locator("#cur-pw").fill(newPassword);
     await page.locator("#new-pw").fill(ADMIN_PASSWORD);
     await page.locator("#confirm-pw").fill(ADMIN_PASSWORD);
@@ -61,7 +61,7 @@ test.describe("settings: change password", () => {
     await page.locator("#login-username").fill(ADMIN_USERNAME);
     await page.locator("#login-password").fill(ADMIN_PASSWORD);
     await reliableClick(page.getByRole("button", { name: "Sign in" }));
-    await expect(page.getByRole("button", { name: "User menu" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Account menu" })).toBeVisible();
 
     await page.context().storageState({ path: AUTH_STATE });
   });

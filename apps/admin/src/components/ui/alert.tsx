@@ -4,15 +4,15 @@ import { AlertCircle, CheckCircle2, Info } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const alertVariants = cva(
-  "relative flex w-full items-start gap-3 rounded-lg border p-4 text-sm transition-colors",
+  "relative flex w-full items-start gap-3 rounded-lg border bg-card px-4 py-3 text-sm text-foreground",
   {
     variants: {
       variant: {
-        default: "border-border bg-card text-card-foreground",
-        destructive: "border-destructive/30 bg-destructive/10 text-destructive [&_svg]:text-destructive",
-        success: "border-success/30 bg-success/10 text-success [&_svg]:text-success",
-        warning: "border-warning/30 bg-warning/10 text-warning [&_svg]:text-warning",
-        info: "border-primary/30 bg-primary/10 text-primary [&_svg]:text-primary",
+        default: "border-border [&>svg]:text-muted-foreground",
+        destructive: "border-destructive/45 [&>svg]:text-destructive",
+        success: "border-success/45 [&>svg]:text-success",
+        warning: "border-warning/55 [&>svg]:text-warning",
+        info: "border-signal/40 [&>svg]:text-signal",
       },
     },
     defaultVariants: { variant: "default" },
@@ -60,7 +60,7 @@ function AlertDescription({ className, ...props }: React.ComponentProps<"div">):
   return (
     <div
       data-slot="alert-description"
-      className={cn("text-sm text-muted-foreground [&_p]:leading-relaxed", className)}
+      className={cn("text-sm text-foreground/85 [&_p]:leading-relaxed", className)}
       {...props}
     />
   );

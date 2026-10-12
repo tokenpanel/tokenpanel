@@ -8,7 +8,7 @@ import { Field } from "@/components/ui/field";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
-import { Card } from "@/components/ui/card";
+import { cn } from "@/lib/utils";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import {
   Table,
@@ -40,15 +40,23 @@ import {
   RefreshCw,
   Plus,
   Pencil,
+  MoreHorizontal,
   Search,
   Trash2,
   ChevronDown,
   ChevronUp,
   ShieldCheck,
 } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { PageHeader } from "@/components/PageHeader";
 import { EmptyState } from "@/components/EmptyState";
-import { FadeIn } from "@/components/anim";
+import { Panel } from "@/components/Instrument";
 import {
   PROVIDER_PRESET_CATEGORY_LABELS,
   PROVIDER_PRESET_CATEGORY_ORDER,
@@ -493,16 +501,19 @@ export default function ProvidersPage(): React.ReactElement {
   }, [providers]);
 
   return (
-    <div className="flex flex-col gap-6 p-6 lg:p-8">
-      <PageHeader title="Providers" icon={<Plug strokeWidth={1.75} />}>
-        <Button variant="outline" size="sm" onClick={() => void loadProviders()} disabled={loading}>
-          <RefreshCw className={loading ? "size-4 animate-spin" : "size-4"} />
+    <div className="flex flex-col gap-6">
+      <PageHeader
+        title="Providers"
+        description="Upstream AI connections. Keys are stored encrypted and never shown to customers."
+      >
+        <Button variant="outline" onClick={() => void loadProviders()} disabled={loading}>
+          <RefreshCw className={loading ? "animate-spin" : undefined} />
           Refresh
         </Button>
         {canWrite ? (
-          <Button size="sm" onClick={openCreate}>
-            <Plus className="size-4" />
-            Add Provider
+          <Button onClick={openCreate}>
+            <Plus />
+            Add provider
           </Button>
         ) : null}
       </PageHeader>
@@ -517,43 +528,41 @@ export default function ProvidersPage(): React.ReactElement {
         <Alert>
           <ShieldCheck className="size-4" />
           <AlertDescription>
-            You can view providers but need{" "}
-            <code className="font-mono text-xs">providers:write</code> to create, edit, toggle,
-            discover, or delete them.
+            Read-only access. Creating, editing, toggling, discovering, or deleting providers needs{" "}
+            <code className="font-mono text-xs">providers:write</code>.
           </AlertDescription>
         </Alert>
       ) : null}
 
-      <Card className="overflow-hidden p-0">
-        {loading && providers.length === 0 ? null : providers.length === 0 ? (
+      <Panel className="overflow-hidden">
+        {loading && providers.length === 0 ? <div className="px-5 py-10 text-center text-sm text-muted-foreground">Loading…</div> : providers.length === 0 ? (
           <EmptyState
-            icon={<Plug className="size-5" />}
+            icon={<Plug />}
             title="No providers yet"
             description={
               canWrite
-                ? "Add your first AI service provider to start discovering and configuring models."
-                : "No providers configured yet. An admin with providers:write can add them."
+                ? "Connect an OpenAI- or Anthropic-compatible upstream, then discover its models and publish them as aliases."
+                : "No providers configured yet. Someone with providers:write can add them."
             }
             action={
               canWrite ? (
                 <Button size="sm" onClick={openCreate}>
-                  <Plus className="size-4" />
-                  Add Provider
+                  <Plus />
+                  Add provider
                 </Button>
               ) : undefined
             }
           />
         ) : (
-          <FadeIn>
+          <>
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Name</TableHead>
-                  <TableHead>Adapter</TableHead>
-                  <TableHead>Base URL</TableHead>
-                  <TableHead>API Key</TableHead>
-                  <TableHead>Active</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
+                  <TableHead>Provider</TableHead>
+                  <TableHead className="hidden md:table-cell">Adapter</TableHead>
+                  <TableHead className="hidden sm:table-cell">Key</TableHead>
+                  <TableHead>Enabled</TableHead>
+                  <TableHead className="text-right"><span className="sr-only">Actions</span></TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -579,14 +588,14 @@ export default function ProvidersPage(): React.ReactElement {
                 ))}
               </TableBody>
             </Table>
-          </FadeIn>
+          </>
         )}
-      </Card>
+      </Panel>
 
       <Dialog open={canWrite && modalOpen} onOpenChange={(o) => (o ? null : closeModal())}>
-        <DialogContent className="max-w-[540px] gap-0 p-0">
-          <DialogHeader className="border-b border-border p-4">
-            <DialogTitle>{editing ? "Edit Provider" : "Add Provider"}</DialogTitle>
+        <DialogContent className="max-w-[540px] gap-0 p-0 sm:p-0">
+          <DialogHeader className="border-b border-border px-5 py-4">
+            <DialogTitle>{editing ? `Edit ${editing.name}` : "Add provider"}</DialogTitle>
           </DialogHeader>
           <form onSubmit={onSubmit}>
             <div className="flex max-h-[60vh] flex-col gap-4 overflow-y-auto p-5">
@@ -672,7 +681,7 @@ export default function ProvidersPage(): React.ReactElement {
                   placeholder={editing ? "Leave blank to keep current key" : (selectedPreset?.apiKeyPlaceholder ?? "API key")}
                 />
               </Field>
-              <Field id="prov-org" label="Provider org (optional)" tooltip="Some providers (e.g. OpenAI) support organization-level scoping. Leave blank if not applicable.">
+              <Field id="prov-org" label="Provider organization" optional tooltip="Some providers (e.g. OpenAI) support organization-level scoping. Leave blank if not applicable.">
                 <Input
                   id="prov-org"
                   type="text"
@@ -684,7 +693,7 @@ export default function ProvidersPage(): React.ReactElement {
               </Field>
               <Field
                 id="prov-timeout"
-                label="HTTP timeout (ms, optional)"
+                label="HTTP timeout (ms)" optional
                 hint="Leave empty to use the process default (PROVIDER_HTTP_TIMEOUT_MS, usually 120000). 0 disables the app-level timeout for this provider. Non-streaming: full request. Streaming: time-to-first-byte only."
               >
                 <Input
@@ -699,7 +708,7 @@ export default function ProvidersPage(): React.ReactElement {
               </Field>
               <Field
                 id="prov-headers"
-                label="Custom headers (optional JSON)"
+                label="Custom headers (JSON)" optional
                 hint={
                   editing
                     ? (() => {
@@ -716,6 +725,7 @@ export default function ProvidersPage(): React.ReactElement {
                 <Textarea
                   id="prov-headers"
                   rows={4}
+                  className="font-mono text-[13px]"
                   value={form.headers}
                   disabled={saving}
                   onChange={(e) => updateField("headers", e.target.value)}
@@ -727,7 +737,7 @@ export default function ProvidersPage(): React.ReactElement {
                 />
               </Field>
             </div>
-            <DialogFooter className="border-t border-border bg-muted/30 p-4">
+            <DialogFooter className="border-t border-border bg-background px-5 py-3.5">
               <Button type="button" variant="outline" onClick={closeModal} disabled={saving}>Cancel</Button>
               <Button type="submit" disabled={saving}>
                 {saving ? (
@@ -750,9 +760,9 @@ export default function ProvidersPage(): React.ReactElement {
         open={canWrite && deleting !== null}
         onOpenChange={(o) => (o ? null : (setDeleting(null), setDeleteError(null)))}
       >
-        <DialogContent className="max-w-[420px] gap-0 p-0">
-          <DialogHeader className="border-b border-border p-4">
-            <DialogTitle>Delete provider</DialogTitle>
+        <DialogContent className="max-w-[420px] gap-0 p-0 sm:p-0">
+          <DialogHeader className="border-b border-border px-5 py-4">
+            <DialogTitle>Delete provider?</DialogTitle>
           </DialogHeader>
           <div className="flex flex-col gap-3 p-5">
             {deleteError ? (
@@ -767,7 +777,7 @@ export default function ProvidersPage(): React.ReactElement {
               This removes the provider configuration. Cached models are unaffected until re-discovery.
             </div>
           </div>
-          <DialogFooter className="border-t border-border bg-muted/30 p-4">
+          <DialogFooter className="border-t border-border bg-background px-5 py-3.5">
             <Button
               type="button"
               variant="outline"
@@ -783,7 +793,7 @@ export default function ProvidersPage(): React.ReactElement {
               variant="destructive"
               onClick={() => deleting && void onDelete(deleting)}
             >
-              Delete
+              Delete provider
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -829,77 +839,95 @@ function ProviderRow({
 
   return (
     <>
-      <TableRow>
-        <TableCell className="font-medium">{provider.name}</TableCell>
-        <TableCell>
-          <Badge variant="secondary">{provider.sdkType}</Badge>
+      <TableRow className={cn(!provider.active && "text-muted-foreground")}>
+        <TableCell className="max-w-[22rem]">
+          <div className="truncate font-medium text-foreground">{provider.name}</div>
+          <div className="truncate font-mono text-xs text-muted-foreground" title={provider.baseUrl}>
+            {provider.baseUrl}
+          </div>
         </TableCell>
-        <TableCell className="max-w-[280px] truncate font-mono text-xs text-muted-foreground" title={provider.baseUrl}>
-          {provider.baseUrl}
+        <TableCell className="hidden md:table-cell">
+          <Badge variant="secondary" className="font-mono text-[11px]">{provider.sdkType}</Badge>
         </TableCell>
-        <TableCell>
-          <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
-            <span
-              className={
-                provider.hasApiKey
-                  ? "size-1.5 rounded-full bg-success"
-                  : "size-1.5 rounded-full bg-muted-foreground"
-              }
-            />
-            {provider.hasApiKey ? "Set" : "Not set"}
-          </span>
+        <TableCell className="hidden sm:table-cell">
+          <Badge variant={provider.hasApiKey ? "success" : "off"}>{provider.hasApiKey ? "Stored" : "Missing"}</Badge>
         </TableCell>
         <TableCell>
           {canWrite ? (
             <Switch
               checked={provider.active}
               onCheckedChange={onToggle}
-              aria-label="Toggle provider active"
+              aria-label={`${provider.active ? "Disable" : "Enable"} ${provider.name}`}
             />
           ) : (
-            <Badge variant={provider.active ? "success" : "secondary"}>
-              {provider.active ? "Active" : "Inactive"}
+            <Badge variant={provider.active ? "success" : "off"}>
+              {provider.active ? "Enabled" : "Disabled"}
             </Badge>
           )}
         </TableCell>
         <TableCell className="text-right">
-          <div className="inline-flex gap-1">
-            {canWrite ? (
-              <>
-                <Button variant="ghost" size="icon-sm" onClick={onEdit} aria-label="Edit">
-                  <Pencil className="size-4" />
+          <div className="inline-flex items-center gap-1 sm:hidden">
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="icon-sm" aria-label={`Actions for ${provider.name}`}>
+                  <MoreHorizontal />
                 </Button>
-                <Button variant="ghost" size="sm" onClick={onDiscover} disabled={discovering}>
-                  {discovering ? (
-                    <Loader2 className="size-3.5 animate-spin" />
-                  ) : (
-                    <Search className="size-3.5" />
-                  )}
-                  {discovering ? "…" : "Discover"}
-                </Button>
-              </>
-            ) : null}
-            <Button variant="ghost" size="sm" onClick={() => setExpanded((v) => !v)}>
-              {expanded ? <ChevronUp className="size-3.5" /> : <ChevronDown className="size-3.5" />}
-              {expanded ? "Hide" : "Models"}
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-48">
+                <DropdownMenuItem onClick={() => setExpanded((v) => !v)}>
+                  {expanded ? <ChevronUp /> : <ChevronDown />}
+                  {expanded ? "Hide models" : "Show models"}
+                </DropdownMenuItem>
+                {canWrite ? (
+                  <>
+                    <DropdownMenuItem disabled={discovering} onClick={onDiscover}>
+                      <Search />
+                      Discover models
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={onEdit}>
+                      <Pencil />
+                      Edit
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem onClick={onDelete} className="text-destructive focus:text-destructive">
+                      <Trash2 />
+                      Delete…
+                    </DropdownMenuItem>
+                  </>
+                ) : null}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+          <div className="hidden items-center gap-1 sm:inline-flex">
+            <Button variant="outline" size="sm" onClick={() => setExpanded((v) => !v)} aria-expanded={expanded}>
+              {expanded ? <ChevronUp /> : <ChevronDown />}
+              Models
             </Button>
             {canWrite ? (
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                className="text-destructive hover:text-destructive"
-                onClick={onDelete}
-                aria-label="Delete"
-              >
-                <Trash2 className="size-4" />
-              </Button>
+              <>
+                <Button variant="ghost" size="sm" onClick={onDiscover} disabled={discovering} aria-label={`Discover from ${provider.name}`}>
+                  {discovering ? <Loader2 className="animate-spin" /> : <Search />}
+                  <span className="hidden lg:inline">{discovering ? "Discovering…" : "Discover"}</span>
+                </Button>
+                <Button variant="ghost" size="icon-sm" onClick={onEdit} aria-label={`Edit ${provider.name}`}>
+                  <Pencil />
+                </Button>
+                <Button
+                  variant="ghost-destructive"
+                  size="icon-sm"
+                  onClick={onDelete}
+                  aria-label={`Delete ${provider.name}`}
+                >
+                  <Trash2 />
+                </Button>
+              </>
             ) : null}
           </div>
         </TableCell>
       </TableRow>
       {expanded ? (
         <TableRow>
-          <TableCell colSpan={6} className="p-0">
+          <TableCell colSpan={5} className="p-0 first:pl-0 last:pr-0">
             <ModelsPanel
               loading={catalogLoading}
               items={catalog}
@@ -933,9 +961,9 @@ function ModelsPanel({
   onRetry,
 }: ModelsPanelProps): React.ReactElement {
   return (
-    <div className="flex flex-col border-t border-border bg-muted/20">
-      <div className="flex items-center justify-between border-b border-border px-4 py-3 text-sm font-medium">
-        <span>Cached Models</span>
+    <div className="flex flex-col bg-background">
+      <div className="flex items-center justify-between border-b border-rule px-5 py-2.5 text-sm font-medium">
+        <span>Discovered upstream models</span>
         <span className="flex items-center gap-1.5 text-xs font-normal text-muted-foreground">
           {loading ? "Loading…" : items && items.length > 0 ? `${items.length} cached` : "None cached"}
           {canWrite ? (
@@ -955,17 +983,17 @@ function ModelsPanel({
           ) : null}
         </div>
       ) : !loading && (!items || items.length === 0) ? (
-        <div className="px-6 py-10 text-center text-sm text-muted-foreground">
+        <div className="px-6 py-8 text-center text-sm text-muted-foreground">
           {canWrite
-            ? "No models cached. Click Discover to fetch from upstream."
+            ? "Nothing discovered yet. Use Discover to fetch this provider's model list."
             : "No models cached for this provider."}
         </div>
       ) : (
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>Model ID</TableHead>
-              <TableHead>Display Name</TableHead>
+              <TableHead>Upstream ID</TableHead>
+              <TableHead>Display name</TableHead>
               <TableHead>Modalities</TableHead>
               <TableHead>Context</TableHead>
               <TableHead>Status</TableHead>
@@ -979,7 +1007,7 @@ function ModelsPanel({
                 <TableCell>
                   <div className="inline-flex flex-wrap gap-1">
                     {[...m.modalities.input, ...m.modalities.output].map((mo) => (
-                      <span key={mo} className="rounded border border-border bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                      <span key={mo} className="rounded-[4px] bg-secondary px-1.5 py-0.5 text-[11px] text-secondary-foreground">
                         {mo}
                       </span>
                     ))}

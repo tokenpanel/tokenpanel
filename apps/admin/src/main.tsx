@@ -5,14 +5,23 @@ import "./index.css";
 import App from "./App.tsx";
 import { AuthProvider } from "./auth/AuthContext.tsx";
 import { Toaster } from "@/components/ui/sonner";
+import { ThemeProvider } from "./theme/ThemeContext.tsx";
+import { ConfirmProvider } from "@/components/ConfirmDialog";
+import { TooltipProvider } from "@/components/ui/tooltip";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <BrowserRouter>
-      <AuthProvider>
-        <App />
-        <Toaster />
-      </AuthProvider>
-    </BrowserRouter>
+    <ThemeProvider>
+      <BrowserRouter>
+        <AuthProvider>
+          <TooltipProvider>
+            <ConfirmProvider>
+              <App />
+            </ConfirmProvider>
+          </TooltipProvider>
+          <Toaster />
+        </AuthProvider>
+      </BrowserRouter>
+    </ThemeProvider>
   </StrictMode>,
 );

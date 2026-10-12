@@ -28,7 +28,7 @@ function UnitsPreview({ value, currency, suffix, allowNegative }: UnitsPreviewPr
   }
   if (micros === 0) return null;
   return (
-    <span className="text-xs text-muted-foreground">
+    <span className="text-xs tabular-nums text-muted-foreground">
       ≈ {formatMicros(micros, currency)}{suffix ? ` ${suffix}` : ""}
     </span>
   );

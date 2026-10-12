@@ -82,8 +82,8 @@ const ModelRow = memo(function ModelRow({
       <button
         type="button"
         className={cn(
-          "flex w-full flex-col gap-0.5 px-3 py-2 text-left text-sm transition-colors hover:bg-muted",
-          active && "bg-primary/10",
+          "flex w-full flex-col gap-0.5 px-3 py-2 text-left text-sm outline-none transition-colors hover:bg-accent focus-visible:bg-accent",
+          active && "bg-accent",
         )}
         onClick={() => onSelect(model)}
       >
@@ -281,7 +281,7 @@ export function FetchModelDialog({
             </Alert>
           ) : null}
 
-          <div className="mt-1 max-h-72 overflow-y-auto rounded-md border border-border bg-card">
+          <div className="mt-1 max-h-72 overflow-y-auto rounded-lg border border-border bg-background">
             {!sourceId ? (
               <div className="px-3 py-6 text-center text-sm text-muted-foreground">
                 Choose a provider to load models.
@@ -296,7 +296,7 @@ export function FetchModelDialog({
                 {deferredQuery.trim() ? "No models match your search." : "No models returned."}
               </div>
             ) : (
-              <ul className="divide-y divide-border">
+              <ul className="divide-y divide-rule">
                 {visible.map((entry) => (
                   <ModelRow
                     key={entry.key}

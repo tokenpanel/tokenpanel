@@ -17,7 +17,7 @@ test("form cost -> primary entry cost, accepted by API create-input schema", () 
     aliasId: "claude-sonnet",
     displayName: "Claude Sonnet",
     currency: "USD",
-    marginBps: "5000",
+    marginPercent: "50",
     costInputUnits: "3",
     costOutputUnits: "15",
     costCacheReadUnits: "0.3",

@@ -468,7 +468,7 @@ const PRICE_COST_PAIRS = {
 
 /**
  * Set a price field from direct user input. If the entered value no longer
- * matches cost + current margin, clear marginBps (price is now manual).
+ * matches cost + current margin, clear the margin (price is now manual).
  */
 function setPriceField(
   setForm: React.Dispatch<React.SetStateAction<FormState>>,
@@ -477,9 +477,9 @@ function setPriceField(
 ): void {
   const costKey = PRICE_COST_PAIRS[key];
   setForm((prev) => {
-    const derived = priceFromCostMargin(prev[costKey] as string, prev.marginBps);
+    const derived = priceFromCostMargin(prev[costKey] as string, prev.marginPercent);
     const stale = derived !== undefined && derived !== value.trim();
-    return { ...prev, [key]: value, ...(stale ? { marginBps: "" } : {}) };
+    return { ...prev, [key]: value, ...(stale ? { marginPercent: "" } : {}) };
   });
 }
 
@@ -624,24 +624,25 @@ function ModelEditor({
           <Field id="m-cur" label="Currency">
             <CurrencySelect id="m-cur" value={form.currency} onChange={(v) => setField(setForm, "currency", v)} disabled={saving} />
           </Field>
-          <Field id="m-margin" label="Margin (bps)" optional tooltip="Markup over cost, in basis points (100 = 1%). Blank = 0 (price equals cost). Changing this re-derives the price fields below from cost; editing a price directly clears this field.">
+          <Field id="m-margin" label="Margin (%)" optional tooltip="Markup over cost as a percentage, up to 2 decimals (e.g. 25 = cost × 1.25). Blank = 0 (price equals cost). Changing this re-derives the price fields below from cost; editing a price directly clears this field.">
             <Input
               id="m-margin"
               type="number"
               min={0}
-              value={form.marginBps}
+              step="0.01"
+              value={form.marginPercent}
               onChange={(e) => {
-                const marginBps = e.target.value;
+                const marginPercent = e.target.value;
                 setForm((prev) => ({
                   ...prev,
-                  marginBps,
-                  inputUnits: priceFromCostMargin(prev.costInputUnits, marginBps) ?? prev.inputUnits,
-                  outputUnits: priceFromCostMargin(prev.costOutputUnits, marginBps) ?? prev.outputUnits,
-                  reasoningUnits: priceFromCostMargin(prev.costReasoningUnits, marginBps) ?? prev.reasoningUnits,
-                  cacheReadUnits: priceFromCostMargin(prev.costCacheReadUnits, marginBps) ?? prev.cacheReadUnits,
-                  cacheWriteUnits: priceFromCostMargin(prev.costCacheWriteUnits, marginBps) ?? prev.cacheWriteUnits,
-                  inputAudioUnits: priceFromCostMargin(prev.costInputAudioUnits, marginBps) ?? prev.inputAudioUnits,
-                  outputAudioUnits: priceFromCostMargin(prev.costOutputAudioUnits, marginBps) ?? prev.outputAudioUnits,
+                  marginPercent,
+                  inputUnits: priceFromCostMargin(prev.costInputUnits, marginPercent) ?? prev.inputUnits,
+                  outputUnits: priceFromCostMargin(prev.costOutputUnits, marginPercent) ?? prev.outputUnits,
+                  reasoningUnits: priceFromCostMargin(prev.costReasoningUnits, marginPercent) ?? prev.reasoningUnits,
+                  cacheReadUnits: priceFromCostMargin(prev.costCacheReadUnits, marginPercent) ?? prev.cacheReadUnits,
+                  cacheWriteUnits: priceFromCostMargin(prev.costCacheWriteUnits, marginPercent) ?? prev.cacheWriteUnits,
+                  inputAudioUnits: priceFromCostMargin(prev.costInputAudioUnits, marginPercent) ?? prev.inputAudioUnits,
+                  outputAudioUnits: priceFromCostMargin(prev.costOutputAudioUnits, marginPercent) ?? prev.outputAudioUnits,
                 }));
               }}
               onFocus={selectOnFocus}
@@ -1353,7 +1354,7 @@ function ProviderRouting({
                           ) : null}
                         </div>
                       </div>
-                      {expanded.has(entry.id) ? <EntryCostPrice entry={entry} /> : null}
+                      {expanded.has(entry.id) ? <EntryCostPrice entry={entry} currency={model.currency} /> : null}
                       <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
                         <span className="tabular-nums">Cost in/out: {entry.cost ? `${formatMicrosToMajor(entry.cost.inputMicrosPerMillion)} / ${formatMicrosToMajor(entry.cost.outputMicrosPerMillion)}` : "model default"}</span>
                         <span className="tabular-nums">Price in/out: {entry.price ? `${formatMicrosToMajor(entry.price.inputMicrosPerMillion)} / ${formatMicrosToMajor(entry.price.outputMicrosPerMillion)}` : "model default"}</span>
@@ -1408,7 +1409,7 @@ function ScheduleRates({ label, schedule }: { label: string; schedule?: TokenPri
       <div className="grid grid-cols-2 gap-x-3 font-mono text-xs">
         {rows.map(([name, rate]) => (
           <span key={name} className={rate === undefined ? "text-muted-foreground/60" : undefined}>
-            {name}={rate ?? "—"}
+            {name}={rate === undefined ? "—" : formatMicrosToMajor(rate)}
           </span>
         ))}
       </div>
@@ -1416,11 +1417,11 @@ function ScheduleRates({ label, schedule }: { label: string; schedule?: TokenPri
   );
 }
 
-function EntryCostPrice({ entry }: { entry: ModelEntry }): React.ReactElement {
+function EntryCostPrice({ entry, currency }: { entry: ModelEntry; currency: string }): React.ReactElement {
   return (
     <div className="grid grid-cols-1 gap-2.5 pt-1 sm:grid-cols-2">
-      <ScheduleRates label="Cost override (micros / 1M)" schedule={entry.cost} />
-      <ScheduleRates label="Price override (micros / 1M)" schedule={entry.price} />
+      <ScheduleRates label={`Cost override (${currency} / 1M)`} schedule={entry.cost} />
+      <ScheduleRates label={`Price override (${currency} / 1M)`} schedule={entry.price} />
     </div>
   );
 }
@@ -1434,7 +1435,7 @@ interface AddEntryFormProps {
 interface AddEntryState {
   providerId: string;
   upstreamModelId: string;
-  marginBps: string;
+  marginPercent: string;
   costInput: string;
   costOutput: string;
   costCacheRead: string;
@@ -1456,7 +1457,7 @@ function emptyAddEntry(): AddEntryState {
   return {
     providerId: "",
     upstreamModelId: "",
-    marginBps: "0",
+    marginPercent: "0",
     costInput: "",
     costOutput: "",
     costCacheRead: "",
@@ -1639,24 +1640,25 @@ function AddEntryForm({ modelId, providers, onAdded }: AddEntryFormProps): React
       </div>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <Field id="ae-margin" label="Margin (bps)" optional tooltip="Markup over cost (100 = 1%). Blank = 0. Changing this re-derives price fields from cost; you can still edit price directly.">
+        <Field id="ae-margin" label="Margin (%)" optional tooltip="Markup over cost as a percentage, up to 2 decimals (e.g. 25 = cost × 1.25). Blank = 0. Changing this re-derives price fields from cost; you can still edit price directly.">
           <Input
             id="ae-margin"
             type="number"
             min={0}
-            value={state.marginBps}
+            step="0.01"
+            value={state.marginPercent}
             onChange={(e) => {
-              const marginBps = e.target.value;
+              const marginPercent = e.target.value;
               setState((s) => ({
                 ...s,
-                marginBps,
-                priceInput: priceFromCostMargin(s.costInput, marginBps) ?? s.priceInput,
-                priceOutput: priceFromCostMargin(s.costOutput, marginBps) ?? s.priceOutput,
-                priceCacheRead: priceFromCostMargin(s.costCacheRead, marginBps) ?? s.priceCacheRead,
-                priceCacheWrite: priceFromCostMargin(s.costCacheWrite, marginBps) ?? s.priceCacheWrite,
-                priceReasoning: priceFromCostMargin(s.costReasoning, marginBps) ?? s.priceReasoning,
-                priceInputAudio: priceFromCostMargin(s.costInputAudio, marginBps) ?? s.priceInputAudio,
-                priceOutputAudio: priceFromCostMargin(s.costOutputAudio, marginBps) ?? s.priceOutputAudio,
+                marginPercent,
+                priceInput: priceFromCostMargin(s.costInput, marginPercent) ?? s.priceInput,
+                priceOutput: priceFromCostMargin(s.costOutput, marginPercent) ?? s.priceOutput,
+                priceCacheRead: priceFromCostMargin(s.costCacheRead, marginPercent) ?? s.priceCacheRead,
+                priceCacheWrite: priceFromCostMargin(s.costCacheWrite, marginPercent) ?? s.priceCacheWrite,
+                priceReasoning: priceFromCostMargin(s.costReasoning, marginPercent) ?? s.priceReasoning,
+                priceInputAudio: priceFromCostMargin(s.costInputAudio, marginPercent) ?? s.priceInputAudio,
+                priceOutputAudio: priceFromCostMargin(s.costOutputAudio, marginPercent) ?? s.priceOutputAudio,
               }));
             }}
             onFocus={selectOnFocus}

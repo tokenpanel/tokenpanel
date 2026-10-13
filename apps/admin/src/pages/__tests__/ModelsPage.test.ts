@@ -15,6 +15,7 @@ import {
   formFromModel,
   type MetadataRow,
 } from "../ModelsPage.tsx";
+import { formatBpsAsPercent, parsePercentToBps } from "../models/model-form.ts";
 
 test("parseModalities: splits comma, lowercases, filters unknown, dedupes", () => {
   expect(parseModalities("text, image, TEXT, audio, bogus")).toEqual(["text", "image", "audio"]);
@@ -83,7 +84,7 @@ function validForm(over: Record<string, unknown> = {}) {
     costInputAudioUnits: "",
     costOutputAudioUnits: "",
     currency: "USD",
-    marginBps: "0",
+    marginPercent: "0",
     firstProviderId: "p1",
     firstUpstreamModelId: "gpt-4o",
     metadataRows: [] as MetadataRow[],
@@ -167,11 +168,42 @@ test("buildModelPayload: optional rate not non-neg decimal → error", () => {
   expect(buildModelPayload(validForm({ reasoningUnits: "abc" }), true).ok).toBe(false);
 });
 
-test("buildModelPayload: margin not non-neg int → error; blank → 0", () => {
-  expect(buildModelPayload(validForm({ marginBps: "-1" }), true).ok).toBe(false);
-  const blank = buildModelPayload(validForm({ marginBps: "" }), true);
+test("buildModelPayload: margin percent → marginBps; invalid → error; blank → 0", () => {
+  expect(buildModelPayload(validForm({ marginPercent: "-1" }), true).ok).toBe(false);
+  expect(buildModelPayload(validForm({ marginPercent: "12.345" }), true).ok).toBe(false);
+  const blank = buildModelPayload(validForm({ marginPercent: "" }), true);
   expect(blank.ok).toBe(true);
   if (blank.ok) expect(blank.payload.marginBps).toBe(0);
+  const pct = buildModelPayload(validForm({ marginPercent: "12.5" }), true);
+  expect(pct.ok).toBe(true);
+  if (pct.ok) expect(pct.payload.marginBps).toBe(1250);
+});
+
+test("parsePercentToBps: string-exact, ≤2 dp, non-negative", () => {
+  expect(parsePercentToBps("12.5")).toBe(1250);
+  expect(parsePercentToBps("0.29")).toBe(29); // float 0.29 × 100 = 28.999…
+  expect(parsePercentToBps("0.01")).toBe(1);
+  expect(parsePercentToBps("50")).toBe(5000);
+  expect(parsePercentToBps(".5")).toBe(50);
+  expect(parsePercentToBps("250.")).toBe(25000);
+  expect(parsePercentToBps(" 1 ")).toBe(100);
+  expect(parsePercentToBps("")).toBeUndefined();
+  expect(parsePercentToBps(".")).toBeUndefined();
+  expect(parsePercentToBps("-1")).toBeUndefined();
+  expect(parsePercentToBps("1.234")).toBeUndefined();
+  expect(parsePercentToBps("1e2")).toBeUndefined();
+  expect(parsePercentToBps("abc")).toBeUndefined();
+});
+
+test("formatBpsAsPercent: round-trips stored bps", () => {
+  expect(formatBpsAsPercent(0)).toBe("0");
+  expect(formatBpsAsPercent(1)).toBe("0.01");
+  expect(formatBpsAsPercent(1250)).toBe("12.5");
+  expect(formatBpsAsPercent(5000)).toBe("50");
+  expect(formatBpsAsPercent(12345)).toBe("123.45");
+  for (const bps of [0, 1, 10, 99, 100, 101, 1250, 5000, 12345, 100000]) {
+    expect(parsePercentToBps(formatBpsAsPercent(bps))).toBe(bps);
+  }
 });
 
 test("buildModelPayload: currency not 3-letter → error", () => {
@@ -424,19 +456,22 @@ test("formFromModel: malformed metadata sets corrupt flag and empty rows", () =>
 
 test("priceFromCostMargin: integer-exact markup, ceil'd so margin never undercut", () => {
   // 50% of $1.00/M = $1.50/M.
-  expect(priceFromCostMargin("1", "5000")).toBe("1.5");
-  // 100 bps (1%) of $1.00/M = $1.01/M.
-  expect(priceFromCostMargin("1", "100")).toBe("1.01");
+  expect(priceFromCostMargin("1", "50")).toBe("1.5");
+  // 1% of $1.00/M = $1.01/M.
+  expect(priceFromCostMargin("1", "1")).toBe("1.01");
+  // 12.5% of $2.00/M = $2.25/M.
+  expect(priceFromCostMargin("2", "12.5")).toBe("2.25");
   // 0 margin → price equals cost.
   expect(priceFromCostMargin("2.5", "0")).toBe("2.5");
   // Markup that lands on a sub-micro boundary is ceil'd up, never down:
-  // $0.000001/M cost × 1 bps = 0.0000000001 → ceil → 1 micro → $0.000002/M.
-  expect(priceFromCostMargin("0.000001", "1")).toBe("0.000002");
+  // $0.000001/M cost × 0.01% = 0.0000000001 → ceil → 1 micro → $0.000002/M.
+  expect(priceFromCostMargin("0.000001", "0.01")).toBe("0.000002");
 });
 
 test("priceFromCostMargin: blank cost or bad margin → undefined (field unchanged)", () => {
-  expect(priceFromCostMargin("", "5000")).toBeUndefined();
-  expect(priceFromCostMargin("  ", "5000")).toBeUndefined();
+  expect(priceFromCostMargin("", "50")).toBeUndefined();
+  expect(priceFromCostMargin("  ", "50")).toBeUndefined();
+  expect(priceFromCostMargin("1", "1.234")).toBeUndefined();
   expect(priceFromCostMargin("1", "abc")).toBeUndefined();
   expect(priceFromCostMargin("1", "-5")).toBeUndefined();
   expect(priceFromCostMargin("not-a-number", "100")).toBeUndefined();

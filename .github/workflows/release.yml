@@ -1,0 +1,78 @@
+name: Release
+
+# A pushed version tag is the release: `tokenpanel update` installs the newest
+# stable tag on main. This workflow only publishes the matching GitHub Release
+# with notes generated from Conventional Commits (cliff.toml).
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate tag
+        id: tag
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          if [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "prerelease=false" >>"$GITHUB_OUTPUT"
+            # Stable notes skip prerelease tags so they cover the whole cycle.
+            echo "tag_pattern=^v[0-9]+\\.[0-9]+\\.[0-9]+\$" >>"$GITHUB_OUTPUT"
+            # Operators only receive stable tags reachable from main; a stable
+            # tag elsewhere would publish notes for a release nobody installs.
+            if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+              echo "::error::stable tag $TAG is not on main"
+              exit 1
+            fi
+          elif [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-[0-9A-Za-z.-]+$ ]]; then
+            echo "prerelease=true" >>"$GITHUB_OUTPUT"
+            echo "tag_pattern=^v[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?\$" >>"$GITHUB_OUTPUT"
+          else
+            echo "::error::tag $TAG is not vMAJOR.MINOR.PATCH[-PRERELEASE]"
+            exit 1
+          fi
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.0"
+
+      - name: Generate release notes
+        env:
+          TAG_PATTERN: ${{ steps.tag.outputs.tag_pattern }}
+        run: |
+          bunx git-cliff@2.14.2 --current --tag-pattern "$TAG_PATTERN" --strip all \
+            --output "$RUNNER_TEMP/notes.md"
+          cat "$RUNNER_TEMP/notes.md"
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          PRERELEASE: ${{ steps.tag.outputs.prerelease }}
+        run: |
+          flags=(--title "$TAG" --notes-file "$RUNNER_TEMP/notes.md")
+          if [ "$PRERELEASE" = "true" ]; then
+            flags+=(--prerelease --latest=false)
+          else
+            flags+=(--latest)
+          fi
+          # Re-running the workflow refreshes the notes of an existing release.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" "${flags[@]}"
+          else
+            gh release create "$TAG" --verify-tag "${flags[@]}"
+          fi

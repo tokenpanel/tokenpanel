@@ -137,11 +137,11 @@ export function ReasoningPanel({ reasoning, streaming, defaultOpen = true, reaso
         : "Reasoning";
 
   return (
-    <div className="rounded-md border border-dashed border-border bg-muted/20">
+    <div className="rounded-md border border-dashed border-border bg-background">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center gap-1.5 px-2 py-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+        className="flex w-full items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
       >
         <svg
           className={cn("size-3 transition-transform", open && "rotate-90")}
@@ -162,7 +162,7 @@ export function ReasoningPanel({ reasoning, streaming, defaultOpen = true, reaso
         )}
       </button>
       {open && displayReasoning && (
-        <div className="border-t border-border px-2 py-1.5">
+        <div className="border-t border-dashed border-border px-2.5 py-2">
           <div className="whitespace-pre-wrap break-words text-xs leading-relaxed text-muted-foreground font-mono">
             {displayReasoning}
           </div>

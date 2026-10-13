@@ -1,31 +1,34 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { getDashboardSummary, type DashboardSummary } from "../api/dashboard.ts";
-import { formatMicros, formatRelative } from "../utils/format.ts";
+import { getAnalyticsSummary, type AnalyticsSummary } from "../api/analytics.ts";
+import { formatCompact, formatMicros, formatNumber, formatRelative } from "../utils/format.ts";
+import { cacheHitRate, formatPercent, grossMargin } from "../utils/usage.ts";
 import { statusVariant, type CustomerStatus } from "./customers/labels.ts";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { Separator } from "@/components/ui/separator";
-import { PageHeader } from "@/components/PageHeader";
-import { StatCard } from "@/components/StatCard";
-import { EmptyState } from "@/components/EmptyState";
-import { FadeIn, StaggerItem } from "@/components/anim";
 import {
-  Users,
-  Boxes,
-  Plug,
-  CreditCard,
-  Wallet,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { PageHeader } from "@/components/PageHeader";
+import { EmptyState } from "@/components/EmptyState";
+import { Panel, PanelHeader, Readout, ReadoutStrip } from "@/components/Instrument";
+import { Scale } from "@/components/Scale";
+import {
   ArrowRight,
-  UserPlus,
+  BarChart3,
   KeyRound,
   MessageSquare,
-  BarChart3,
-  LayoutDashboard,
+  UserPlus,
+  Users,
+  Wallet,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { hasPermission, useAuth } from "../auth/AuthContext.tsx";
@@ -47,96 +50,296 @@ export function customerStatusVariant(
   return "secondary";
 }
 
-function DashboardSkeleton(): React.ReactElement {
-  return (
-    <div className="flex flex-col gap-8" aria-hidden>
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        {Array.from({ length: 4 }).map((_, i) => (
-          <Card key={i} className="p-6">
-            <div className="flex items-start justify-between gap-4">
-              <div className="flex flex-col gap-3">
-                <Skeleton className="h-4 w-20" />
-                <Skeleton className="h-9 w-16" />
-              </div>
-              <Skeleton className="size-11 rounded-xl" />
-            </div>
-          </Card>
-        ))}
-      </div>
-      <div className="grid grid-cols-1 gap-6 xl:grid-cols-5">
-        <Card className="p-6 xl:col-span-2">
-          <Skeleton className="mb-4 h-5 w-40" />
-          <Skeleton className="h-10 w-48" />
-          <Skeleton className="mt-3 h-4 w-32" />
-        </Card>
-        <Card className="overflow-hidden xl:col-span-3">
-          <div className="flex items-center justify-between border-b border-border/80 px-6 py-4">
-            <Skeleton className="h-5 w-36" />
-            <Skeleton className="h-4 w-16" />
-          </div>
-          {Array.from({ length: 4 }).map((_, i) => (
-            <div
-              key={i}
-              className="flex items-center gap-3 border-b border-border/60 px-6 py-4 last:border-0"
-            >
-              <Skeleton className="size-10 rounded-full" />
-              <div className="flex flex-1 flex-col gap-2">
-                <Skeleton className="h-4 w-36" />
-                <Skeleton className="h-3 w-48" />
-              </div>
-              <Skeleton className="h-5 w-14 rounded-md" />
-            </div>
-          ))}
-        </Card>
-      </div>
-    </div>
-  );
+const WINDOW_DAYS = 30;
+
+function windowRange(): { from: string; to: string } {
+  const to = new Date();
+  const from = new Date();
+  from.setDate(from.getDate() - (WINDOW_DAYS - 1));
+  from.setHours(0, 0, 0, 0);
+  return { from: from.toISOString(), to: to.toISOString() };
 }
 
 const QUICK_LINKS: ReadonlyArray<{
   to: string;
   label: string;
-  description: string;
   icon: typeof UserPlus;
   permission: PanelPermission;
 }> = [
-  {
-    to: "/customers",
-    label: "Add customer",
-    description: "Create a customer account",
-    icon: UserPlus,
-    permission: "customers:read",
-  },
-  {
-    to: "/api-keys",
-    label: "Issue API key",
-    description: "Scoped keys for customer access",
-    icon: KeyRound,
-    permission: "customer_keys:read",
-  },
-  {
-    to: "/playground",
-    label: "Open playground",
-    description: "Try models with live chat",
-    icon: MessageSquare,
-    permission: "playground:write",
-  },
-  {
-    to: "/analytics",
-    label: "View analytics",
-    description: "Usage, spend, and top customers",
-    icon: BarChart3,
-    permission: "usage:read",
-  },
+  { to: "/customers", label: "Add customer", icon: UserPlus, permission: "customers:read" },
+  { to: "/api-keys", label: "Issue API key", icon: KeyRound, permission: "customer_keys:read" },
+  { to: "/playground", label: "Open playground", icon: MessageSquare, permission: "playground:write" },
+  { to: "/analytics", label: "View analytics", icon: BarChart3, permission: "usage:read" },
 ];
+
+function CountReadout({
+  label,
+  value,
+  hint,
+  to,
+}: {
+  label: string;
+  value: number;
+  hint: string;
+  to: string | null;
+}): React.ReactElement {
+  const inner = <Readout label={label} value={formatNumber(value)} hint={hint} />;
+  if (!to) return inner;
+  return (
+    <Link
+      to={to}
+      className="group block no-underline outline-none transition-colors hover:bg-accent/70 hover:no-underline focus-visible:bg-accent focus-visible:ring-[3px] focus-visible:ring-inset focus-visible:ring-ring"
+    >
+      {inner}
+    </Link>
+  );
+}
+
+/** Last-30-days spend instrument. Only rendered with usage:read. */
+function SpendPanel({
+  data,
+  loading,
+  error,
+}: {
+  data: AnalyticsSummary | null;
+  loading: boolean;
+  error: string | null;
+}): React.ReactElement {
+  const primary = data?.totals.byCurrency[0] ?? null;
+  const others = data?.totals.byCurrency.slice(1) ?? [];
+  const margin = primary ? grossMargin(primary.priceMicros, primary.costMicros) : null;
+  const cache = data ? cacheHitRate(data.totals) : { rate: null, served: 0 };
+  const top = (data?.topCustomers ?? []).filter((c) => c.currency === primary?.currency).slice(0, 5);
+  const topMax = top.reduce((m, c) => Math.max(m, c.priceMicros), 0);
+
+  return (
+    <Panel className="flex flex-col">
+      <PanelHeader
+        title="Last 30 days"
+        description="Charged price, upstream cost, and cache efficiency across all customers."
+        actions={
+          <Button asChild variant="ghost" size="sm">
+            <Link to="/analytics">
+              Analytics
+              <ArrowRight />
+            </Link>
+          </Button>
+        }
+      />
+      {error ? (
+        <div className="p-5">
+          <Alert variant="destructive">
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        </div>
+      ) : loading && !data ? (
+        <div className="grid gap-6 p-5 sm:grid-cols-2" aria-hidden>
+          <Skeleton className="h-24" />
+          <Skeleton className="h-24" />
+        </div>
+      ) : !primary ? (
+        <EmptyState
+          icon={<BarChart3 />}
+          title="No usage in the last 30 days"
+          description="Requests through the gateway show up here with their cost and charged price."
+          action={
+            <Button asChild size="sm" variant="outline">
+              <Link to="/playground">Try a model in the playground</Link>
+            </Button>
+          }
+        />
+      ) : (
+        <div className="flex flex-col">
+          <div className="grid grid-cols-1 gap-px bg-rule sm:grid-cols-2 [&>*]:bg-card">
+            <div className="flex flex-col gap-4 px-5 py-4">
+              <div className="flex items-end justify-between gap-4">
+                <div className="min-w-0">
+                  <div className="legend text-muted-foreground">Charged</div>
+                  <div className="readout mt-2 truncate text-[32px] font-semibold leading-none">
+                    {formatMicros(primary.priceMicros, primary.currency)}
+                  </div>
+                </div>
+                <div className="min-w-0 text-right">
+                  <div className="legend text-muted-foreground">Upstream cost</div>
+                  <div className="readout mt-2 truncate text-[17px] font-medium leading-none text-muted-foreground">
+                    {formatMicros(primary.costMicros, primary.currency)}
+                  </div>
+                </div>
+              </div>
+              <div>
+                <div className="mb-2 flex items-baseline justify-between text-[13px]">
+                  <span className="text-muted-foreground">Gross margin</span>
+                  <span className="font-semibold tabular-nums">{formatPercent(margin)}</span>
+                </div>
+                <Scale
+                  value={margin === null ? null : Math.max(0, margin)}
+                  label="Gross margin"
+                  valueText={formatPercent(margin)}
+                  marks={["0%", "50%", "100%"]}
+                  tone={margin !== null && margin < 0 ? "destructive" : "signal"}
+                />
+              </div>
+            </div>
+            <div className="flex flex-col gap-4 px-5 py-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <div className="legend text-muted-foreground">Requests</div>
+                  <div className="readout mt-2 text-[22px] font-semibold leading-none">{formatNumber(data?.totals.requests ?? 0)}</div>
+                </div>
+                <div>
+                  <div className="legend text-muted-foreground">Tokens</div>
+                  <div className="readout mt-2 text-[22px] font-semibold leading-none" title={formatNumber(data?.totals.tokens ?? 0)}>
+                    {formatCompact(data?.totals.tokens ?? 0)}
+                  </div>
+                </div>
+              </div>
+              <div>
+                <div className="mb-2 flex items-baseline justify-between text-[13px]">
+                  <span className="text-muted-foreground">Prompt cache hit rate</span>
+                  <span className="font-semibold tabular-nums">{formatPercent(cache.rate)}</span>
+                </div>
+                <Scale
+                  value={cache.rate}
+                  label="Prompt cache hit rate"
+                  valueText={formatPercent(cache.rate)}
+                  marks={["0%", "50%", "100%"]}
+                  tone="success"
+                />
+              </div>
+            </div>
+          </div>
+          {others.length > 0 ? (
+            <div className="border-t border-rule px-5 py-2.5 text-xs text-muted-foreground">
+              Also charged:{" "}
+              {others.map((r) => formatMicros(r.priceMicros, r.currency)).join(" · ")}
+            </div>
+          ) : null}
+          {top.length > 0 ? (
+            <div className="border-t border-rule px-5 pb-4 pt-3.5">
+              <div className="legend mb-2.5 text-muted-foreground">Top spenders · {primary.currency}</div>
+              <ol className="flex flex-col gap-2.5">
+                {top.map((c) => (
+                  <li key={`${c.customerId}:${c.currency}`} className="grid grid-cols-[1fr_auto] items-center gap-x-4 gap-y-1.5 sm:grid-cols-[minmax(0,10rem)_1fr_auto]">
+                    <span className="truncate text-[13px] font-medium">{c.customerName}</span>
+                    <Scale
+                      className="col-span-2 row-start-2 sm:col-span-1 sm:row-start-auto"
+                      size="sm"
+                      value={topMax > 0 ? c.priceMicros / topMax : 0}
+                      label={`${c.customerName} share of top spend`}
+                      valueText={formatMicros(c.priceMicros, c.currency)}
+                      divisions={10}
+                      minor={2}
+                    />
+                    <span className="col-start-2 row-start-1 min-w-[5.5rem] text-right text-[13px] tabular-nums sm:col-start-auto sm:row-start-auto">
+                      {formatMicros(c.priceMicros, c.currency)}
+                    </span>
+                  </li>
+                ))}
+              </ol>
+            </div>
+          ) : null}
+        </div>
+      )}
+    </Panel>
+  );
+}
+
+function BalancePanel({ balances }: { balances: Record<string, number> }): React.ReactElement {
+  const entries = Object.entries(balances);
+  const [primary, ...rest] = entries;
+  return (
+    <Panel>
+      <PanelHeader title="Customer balances" description="Prepaid credit held across all accounts." />
+      {primary ? (
+        <div className="px-5 py-4">
+          <div className="legend text-muted-foreground">{primary[0]}</div>
+          <div
+            className={cn(
+              "readout mt-2 text-[32px] font-semibold leading-none",
+              primary[1] < 0 && "text-destructive",
+            )}
+          >
+            {formatMicros(primary[1], primary[0])}
+          </div>
+          {rest.length > 0 ? (
+            <dl className="mt-4 flex flex-col border-t border-rule">
+              {rest.map(([currency, amount]) => (
+                <div key={currency} className="flex items-center justify-between border-b border-rule py-2 text-sm">
+                  <dt className="legend text-muted-foreground">{currency}</dt>
+                  <dd className={cn("m-0 font-medium tabular-nums", amount < 0 && "text-destructive")}>
+                    {formatMicros(amount, currency)}
+                  </dd>
+                </div>
+              ))}
+            </dl>
+          ) : null}
+        </div>
+      ) : (
+        <EmptyState
+          className="py-8"
+          icon={<Wallet />}
+          title="No balances yet"
+          description="Top up a customer from their account drawer to see credit here."
+          action={
+            <Button asChild size="sm" variant="outline">
+              <Link to="/customers">Open customers</Link>
+            </Button>
+          }
+        />
+      )}
+    </Panel>
+  );
+}
+
+function QuickActions(): React.ReactElement | null {
+  const { user } = useAuth();
+  const links = QUICK_LINKS.filter((item) => hasPermission(user, item.permission));
+  if (links.length === 0) return null;
+  return (
+    <Panel>
+      <PanelHeader title="Shortcuts" />
+      <div className="grid grid-cols-2 gap-px bg-rule [&>*]:bg-card rounded-b-xl overflow-hidden">
+        {links.map((item) => {
+          const Icon = item.icon;
+          return (
+            <Link
+              key={item.to}
+              to={item.to}
+              className="group flex items-center gap-2.5 px-4 py-3.5 text-[13px] font-medium no-underline outline-none transition-colors hover:bg-accent hover:no-underline focus-visible:ring-[3px] focus-visible:ring-inset focus-visible:ring-ring"
+            >
+              <Icon className="size-4 shrink-0 text-muted-foreground transition-colors group-hover:text-signal" strokeWidth={1.8} />
+              <span className="truncate">{item.label}</span>
+            </Link>
+          );
+        })}
+      </div>
+    </Panel>
+  );
+}
+
+function DashboardSkeleton(): React.ReactElement {
+  return (
+    <div className="flex flex-col gap-6" aria-hidden>
+      <Skeleton className="h-[104px] rounded-xl" />
+      <div className="grid gap-6 xl:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
+        <Skeleton className="h-72 rounded-xl" />
+        <Skeleton className="h-72 rounded-xl" />
+      </div>
+    </div>
+  );
+}
 
 export default function DashboardPage(): React.ReactElement {
   const { user } = useAuth();
   const canReadBalances = hasPermission(user, "balances:read");
   const canReadCustomers = hasPermission(user, "customers:read");
+  const canReadUsage = hasPermission(user, "usage:read");
   const [data, setData] = useState<DashboardSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [usage, setUsage] = useState<AnalyticsSummary | null>(null);
+  const [usageLoading, setUsageLoading] = useState(canReadUsage);
+  const [usageError, setUsageError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -160,14 +363,33 @@ export default function DashboardPage(): React.ReactElement {
     };
   }, []);
 
-  const balanceEntries = data ? Object.entries(data.balancesByCurrency) : [];
-  const primaryBalance = balanceEntries[0];
+  useEffect(() => {
+    if (!canReadUsage) return;
+    let cancelled = false;
+    async function load() {
+      setUsageLoading(true);
+      setUsageError(null);
+      try {
+        const res = await getAnalyticsSummary({ ...windowRange(), top: 5 });
+        if (!cancelled) setUsage(res);
+      } catch (err) {
+        if (!cancelled) setUsageError(err instanceof Error ? err.message : "Failed to load usage.");
+      } finally {
+        if (!cancelled) setUsageLoading(false);
+      }
+    }
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, [canReadUsage]);
 
   return (
-    <div className="flex flex-col gap-8 p-6 pb-12 lg:p-10">
-      <FadeIn>
-        <PageHeader title="Dashboard" icon={<LayoutDashboard strokeWidth={1.75} />} />
-      </FadeIn>
+    <div className="flex flex-col gap-6">
+      <PageHeader
+        title="Dashboard"
+        description="Money, catalog, and recent accounts for this organization."
+      />
 
       {error ? (
         <Alert variant="destructive">
@@ -179,253 +401,130 @@ export default function DashboardPage(): React.ReactElement {
 
       {data ? (
         <>
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-            <StaggerItem index={0}>
-              <StatCard
-                label="Customers"
-                value={String(data.customers)}
-                icon={<Users />}
-                tone="muted"
-                hint="Accounts in this organization"
-              />
-            </StaggerItem>
-            <StaggerItem index={1}>
-              <StatCard
-                label="Models"
-                value={String(data.models)}
-                icon={<Boxes />}
-                tone="muted"
-                hint="Aliased models in catalog"
-              />
-            </StaggerItem>
-            <StaggerItem index={2}>
-              <StatCard
-                label="Providers"
-                value={String(data.providers)}
-                icon={<Plug />}
-                tone="muted"
-                hint="Upstream AI connections"
-              />
-            </StaggerItem>
-            <StaggerItem index={3}>
-              <StatCard
-                label="Active plans"
-                value={String(data.activePlans)}
-                icon={<CreditCard />}
-                tone="muted"
-                hint="Sellable subscription plans"
-              />
-            </StaggerItem>
+          <ReadoutStrip label="Organization totals">
+            <CountReadout
+              label="Customers"
+              value={data.customers}
+              hint="Accounts"
+              to={canReadCustomers ? "/customers" : null}
+            />
+            <CountReadout
+              label="Models"
+              value={data.models}
+              hint="Published aliases"
+              to={hasPermission(user, "models:read") ? "/models" : null}
+            />
+            <CountReadout
+              label="Providers"
+              value={data.providers}
+              hint="Upstream connections"
+              to={hasPermission(user, "providers:read") ? "/providers" : null}
+            />
+            <CountReadout
+              label="Active plans"
+              value={data.activePlans}
+              hint="Sellable subscriptions"
+              to={hasPermission(user, "plans:read") ? "/plans" : null}
+            />
+          </ReadoutStrip>
+
+          <div
+            className={cn(
+              "grid grid-cols-1 items-start gap-6",
+              canReadUsage && "xl:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]",
+              !canReadUsage && canReadBalances && "lg:grid-cols-2",
+            )}
+          >
+            {canReadUsage ? (
+              <SpendPanel data={usage} loading={usageLoading} error={usageError} />
+            ) : null}
+            <div className="flex flex-col gap-6">
+              {canReadBalances ? <BalancePanel balances={data.balancesByCurrency} /> : null}
+              <QuickActions />
+            </div>
           </div>
 
-          <div className="grid grid-cols-1 gap-6 xl:grid-cols-5">
-            {/* Balance + quick actions column */}
-            <FadeIn className="flex flex-col gap-6 xl:col-span-2" delay={0.06}>
-              {canReadBalances ? (
-              <Card className="p-6">
-                <div className="flex flex-col gap-5">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="flex flex-col gap-1">
-                      <span className="text-sm font-medium text-muted-foreground">
-                        Total customer balance
-                      </span>
-                      <span className="text-xs text-muted-foreground">
-                        Sum of account balances by currency
-                      </span>
-                    </div>
-                    <div className="flex size-11 items-center justify-center rounded-xl bg-muted text-muted-foreground ring-1 ring-inset ring-border">
-                      <Wallet className="size-5" />
-                    </div>
-                  </div>
-
-                  {balanceEntries.length > 0 && primaryBalance ? (
-                    <>
-                      <div className="flex flex-col gap-1">
-                        <span className="text-3xl font-semibold tracking-tight tabular-nums sm:text-4xl">
-                          {formatMicros(primaryBalance[1], primaryBalance[0])}
-                        </span>
-                        {balanceEntries.length > 1 ? (
-                          <span className="text-xs text-muted-foreground">
-                            Primary currency · {balanceEntries.length} currencies total
-                          </span>
-                        ) : null}
-                      </div>
-                      {balanceEntries.length > 1 ? (
-                        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                          {balanceEntries.slice(1).map(([currency, amount]) => (
-                            <div
-                              key={currency}
-                              className="rounded-lg border border-border bg-muted/40 px-3 py-2.5"
-                            >
-                              <div className="text-xs font-medium text-muted-foreground">
-                                {currency}
-                              </div>
-                              <div className="text-sm font-semibold tabular-nums">
-                                {formatMicros(amount, currency)}
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      ) : null}
-                    </>
-                  ) : (
-                    <EmptyState
-                      className="py-6"
-                      title="No balances yet"
-                      description="Customer balances will show here once accounts are funded."
-                      icon={<Wallet className="size-5" />}
-                      action={
-                        <Button asChild size="sm" variant="outline">
-                          <Link to="/customers">
-                            Manage customers
-                            <ArrowRight className="size-3.5" />
-                          </Link>
-                        </Button>
-                      }
-                    />
-                  )}
-                </div>
-              </Card>
-              ) : null}
-
-              <Card className="overflow-hidden">
-                <div className="border-b border-border/80 px-6 py-3.5">
-                  <h2 className="text-sm font-semibold tracking-tight">Quick actions</h2>
-                </div>
-                <ul className="divide-y divide-border/70">
-                  {QUICK_LINKS.filter((item) =>
-                    hasPermission(user, item.permission),
-                  ).map((item) => {
-                    const Icon = item.icon;
-                    return (
-                      <li key={item.to}>
-                        <Link
-                          to={item.to}
-                          className={cn(
-                            "group flex items-center gap-3.5 px-6 py-3.5 no-underline",
-                            "transition-colors hover:bg-muted/40",
-                          )}
-                        >
-                          <div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-muted text-muted-foreground ring-1 ring-inset ring-border transition-colors group-hover:bg-accent group-hover:text-foreground">
-                            <Icon className="size-4" />
-                          </div>
-                          <div className="min-w-0 flex-1">
-                            <div className="text-sm font-medium text-foreground">
-                              {item.label}
-                            </div>
-                            <div className="truncate text-xs text-muted-foreground">
-                              {item.description}
-                            </div>
-                          </div>
-                          <ArrowRight className="size-4 shrink-0 text-muted-foreground/50 transition-transform group-hover:translate-x-0.5 group-hover:text-foreground" />
-                        </Link>
-                      </li>
-                    );
-                  })}
-                </ul>
-              </Card>
-            </FadeIn>
-
-            {/* Recent customers */}
-            <FadeIn className="xl:col-span-3" delay={0.1}>
-              <Card className="flex h-full flex-col overflow-hidden">
-                <div className="flex items-center justify-between gap-3 border-b border-border/80 px-6 py-3.5">
-                  <h2 className="text-sm font-semibold tracking-tight">
-                    Recent customers
-                    {!canReadCustomers ? (
-                      <span className="ml-2 text-xs font-normal text-muted-foreground">
-                        (limited)
-                      </span>
-                    ) : null}
-                  </h2>
-                  <Button asChild variant="ghost" size="sm" className="shrink-0">
+          <Panel className="overflow-hidden">
+            <PanelHeader
+              title="Recent customers"
+              description={
+                data.recentCustomers.length > 0
+                  ? `Newest ${data.recentCustomers.length} of ${formatNumber(data.customers)}`
+                  : undefined
+              }
+              actions={
+                canReadCustomers ? (
+                  <Button asChild variant="ghost" size="sm">
                     <Link to="/customers">
-                      View all
-                      <ArrowRight className="size-3.5" />
+                      All customers
+                      <ArrowRight />
                     </Link>
                   </Button>
-                </div>
-
-                {data.recentCustomers.length > 0 ? (
-                  <ul className="divide-y divide-border/70">
-                    {data.recentCustomers.map((c, i) => (
-                      <StaggerItem key={c._id} index={i} step={0.03} as="li">
-                        <div className="flex items-center gap-3.5 px-6 py-4 transition-colors hover:bg-muted/30">
-                          <Avatar className="size-10 shrink-0 ring-1 ring-border/60">
-                            <AvatarFallback className="bg-muted text-xs font-semibold text-muted-foreground">
-                              {initials(c.name ?? "")}
-                            </AvatarFallback>
-                          </Avatar>
-                          <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-                            <div className="flex items-center gap-2">
-                              <span className="truncate font-medium">
-                                {c.name ?? "Unknown customer"}
-                              </span>
-                              <Badge
-                                variant={customerStatusVariant(c.status)}
-                                className="capitalize shrink-0"
-                              >
-                                {c.status}
-                              </Badge>
-                            </div>
-                            <div className="truncate text-xs text-muted-foreground">
-                              {c.email ?? "No email"}
-                              {c.createdAt ? (
-                                <>
-                                  <span className="mx-1.5 text-border">·</span>
-                                  {formatRelative(c.createdAt)}
-                                </>
-                              ) : null}
-                            </div>
-                          </div>
-                          {canReadBalances && c.balance ? (
-                            <div className="hidden shrink-0 flex-col items-end sm:flex">
-                              <span className="text-sm font-semibold tabular-nums">
-                                {formatMicros(
-                                  c.balance.amountMicros,
-                                  c.balance.currency,
-                                )}
-                              </span>
-                              <span className="text-[11px] text-muted-foreground">
-                                balance
-                              </span>
-                            </div>
-                          ) : null}
+                ) : null
+              }
+            />
+            {data.recentCustomers.length > 0 ? (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Customer</TableHead>
+                    <TableHead className="hidden sm:table-cell">Status</TableHead>
+                    {canReadBalances ? <TableHead className="text-right">Balance</TableHead> : null}
+                    <TableHead className="hidden text-right sm:table-cell">Created</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {data.recentCustomers.map((c) => (
+                    <TableRow key={c._id}>
+                      <TableCell className="max-w-[16rem]">
+                        <div className="truncate font-medium">{c.name ?? "Customer"}</div>
+                        <div className="truncate text-xs text-muted-foreground">
+                          {c.email ?? (canReadCustomers ? "No email" : "Details hidden")}
                         </div>
-                      </StaggerItem>
-                    ))}
-                  </ul>
-                ) : (
-                  <EmptyState
-                    className="flex-1 py-14"
-                    title="No customers yet"
-                    description="Create your first customer to start tracking balances and usage."
-                    icon={<Users className="size-5" />}
-                    action={
-                      <Button asChild size="sm">
-                        <Link to="/customers">
-                          <UserPlus className="size-3.5" />
-                          Add customer
-                        </Link>
-                      </Button>
-                    }
-                  />
-                )}
-
-                {data.recentCustomers.length > 0 ? (
-                  <>
-                    <Separator className="mt-auto" />
-                    <div className="px-6 py-3 text-xs text-muted-foreground">
-                      Showing {data.recentCustomers.length} most recent
-                      {data.customers > data.recentCustomers.length
-                        ? ` of ${data.customers}`
-                        : ""}
-                    </div>
-                  </>
-                ) : null}
-              </Card>
-            </FadeIn>
-          </div>
+                        <Badge variant={customerStatusVariant(c.status)} className="mt-1.5 capitalize sm:hidden">
+                          {c.status}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="hidden sm:table-cell">
+                        <Badge variant={customerStatusVariant(c.status)} className="capitalize">
+                          {c.status}
+                        </Badge>
+                      </TableCell>
+                      {canReadBalances ? (
+                        <TableCell
+                          className={cn(
+                            "text-right font-medium tabular-nums",
+                            c.balance && c.balance.amountMicros < 0 && "text-destructive",
+                          )}
+                        >
+                          {c.balance ? formatMicros(c.balance.amountMicros, c.balance.currency) : "—"}
+                        </TableCell>
+                      ) : null}
+                      <TableCell className="hidden text-right text-muted-foreground sm:table-cell">
+                        {c.createdAt ? formatRelative(c.createdAt) : "—"}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            ) : (
+              <EmptyState
+                icon={<Users />}
+                title="No customers yet"
+                description="Customers hold balances, subscriptions, and API keys. Create one to start metering usage."
+                action={
+                  canReadCustomers ? (
+                    <Button asChild size="sm">
+                      <Link to="/customers">
+                        <UserPlus />
+                        Add customer
+                      </Link>
+                    </Button>
+                  ) : null
+                }
+              />
+            )}
+          </Panel>
         </>
       ) : null}
     </div>

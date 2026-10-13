@@ -47,7 +47,7 @@ test.describe("gateway / billing / analytics / playground", () => {
     test.skip(!pipeline, "pipeline not provisioned");
     await page.goto("/");
     await expect(page.getByRole("heading", { name: "Dashboard" })).toBeVisible();
-    await expect(page.getByText("Total customer balance")).toBeVisible();
+    await expect(page.getByText("Customer balances")).toBeVisible();
   });
 
   test("playground streams a completion from the mock provider", async ({ page }) => {
@@ -55,7 +55,7 @@ test.describe("gateway / billing / analytics / playground", () => {
     await page.goto("/playground");
 
     // A model is auto-selected, enabling the composer.
-    const composer = page.getByPlaceholder("Start a new message…");
+    const composer = page.getByRole("textbox", { name: "Message", exact: true });
     await expect(composer).toBeVisible();
     await composer.fill("Hello playground");
     await reliableClick(page.getByRole("button", { name: "Send", exact: true }));

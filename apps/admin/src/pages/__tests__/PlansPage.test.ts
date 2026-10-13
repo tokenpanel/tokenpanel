@@ -153,13 +153,13 @@ test("formatWindow: fallback seconds", () => {
 });
 
 test("formatAmountMicros: renders micros as ISO-aware money", () => {
-  expect(formatAmountMicros(1_000_000_000, "USD")).toBe("$1000.00 USD");
+  expect(formatAmountMicros(1_000_000_000, "USD")).toBe("$1,000.00 USD");
   expect(formatAmountMicros(0, "USD")).toBe("$0.00 USD");
   expect(formatAmountMicros(123_450_000, "USD")).toBe("$123.45 USD");
   expect(formatAmountMicros(50_000, "USD")).toBe("$0.05 USD");
 });
 
 test("formatAmountMicros: zero-decimal JPY / BIF", () => {
-  expect(formatAmountMicros(1_234_000_000, "JPY")).toBe("\u00a51234 JPY");
+  expect(formatAmountMicros(1_234_000_000, "JPY")).toBe("\u00a51,234 JPY");
   expect(formatAmountMicros(500_000_000, "BIF")).toBe("500 BIF");
 });

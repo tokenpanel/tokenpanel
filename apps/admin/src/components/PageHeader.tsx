@@ -3,20 +3,17 @@ import { cn } from "@/lib/utils";
 
 interface PageHeaderProps {
   title: string;
-  /** Lucide (or other) icon node — shown in a neutral mark next to the title. */
+  /** Deprecated: page titles no longer carry icon tiles. Ignored. */
   icon?: React.ReactNode;
-  /** Optional supporting line. Prefer short; omit when the title is enough. */
-  description?: string;
+  /** One short line on what this page is for. */
+  description?: React.ReactNode;
   children?: React.ReactNode;
   className?: string;
 }
 
-/**
- * Page title band: icon mark + title + actions on a solid surface.
- */
+/** Page title row: title + purpose line left, primary actions right. */
 export function PageHeader({
   title,
-  icon,
   description,
   children,
   className,
@@ -24,37 +21,18 @@ export function PageHeader({
   return (
     <header
       className={cn(
-        "flex flex-col gap-3 rounded-xl border border-border bg-card px-4 py-3.5 sm:flex-row sm:justify-between sm:px-5 sm:py-4",
-        description ? "sm:items-start" : "sm:items-center",
+        "flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-6",
         className,
       )}
     >
-      <div className="flex min-w-0 items-center gap-3.5">
-        {icon ? (
-          <div
-            className={cn(
-              "flex size-10 shrink-0 items-center justify-center rounded-xl",
-              "border border-border bg-muted text-muted-foreground",
-              "[&_svg]:size-[1.125rem]",
-            )}
-            aria-hidden
-          >
-            {icon}
-          </div>
+      <div className="min-w-0">
+        <h1 className="text-[26px] font-semibold leading-tight tracking-[-0.02em]">{title}</h1>
+        {description ? (
+          <p className="mt-1 max-w-[72ch] text-pretty text-sm text-muted-foreground">{description}</p>
         ) : null}
-        <div className="min-w-0 flex flex-col gap-0.5">
-          <h1 className="truncate text-xl font-semibold tracking-tight sm:text-2xl">
-            {title}
-          </h1>
-          {description ? (
-            <p className="truncate text-sm text-muted-foreground">{description}</p>
-          ) : null}
-        </div>
       </div>
       {children ? (
-        <div className="flex shrink-0 flex-wrap items-center gap-2 sm:pt-0.5">
-          {children}
-        </div>
+        <div className="flex shrink-0 flex-wrap items-center gap-2 sm:pt-0.5">{children}</div>
       ) : null}
     </header>
   );

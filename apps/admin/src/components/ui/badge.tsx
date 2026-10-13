@@ -3,16 +3,27 @@ import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "@/lib/utils";
 
 const badgeVariants = cva(
-  "inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-xs font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1",
+  "inline-flex h-[22px] items-center gap-1.5 whitespace-nowrap rounded-[5px] border px-2 text-xs font-medium leading-none text-foreground transition-colors",
   {
     variants: {
       variant: {
-        default: "border-transparent bg-secondary text-secondary-foreground",
-        secondary: "border-transparent bg-muted text-muted-foreground",
-        destructive: "border-transparent bg-destructive/15 text-destructive",
-        outline: "border-border text-foreground",
-        success: "border-transparent bg-success/15 text-success",
-        warning: "border-transparent bg-warning/15 text-warning",
+        default: "border-border bg-secondary",
+        // Neutral chip (types, roles, aliases)
+        secondary: "border-transparent bg-secondary text-secondary-foreground",
+        // Inactive / off: hollow ring
+        off: "border-border bg-transparent text-muted-foreground before:size-[7px] before:rounded-full before:border-[1.5px] before:border-current before:content-['']",
+        outline: "border-border bg-transparent",
+        // Live / ok: filled disc
+        success:
+          "border-border bg-card before:size-[7px] before:rounded-full before:bg-success before:content-['']",
+        // Attention: hollow orange ring
+        warning:
+          "border-border bg-card before:size-[7px] before:rounded-full before:border-[1.5px] before:border-warning before:content-['']",
+        // Stopped / revoked: filled square
+        destructive:
+          "border-border bg-card before:size-[7px] before:rounded-[1px] before:bg-destructive before:content-['']",
+        info:
+          "border-border bg-card before:size-[7px] before:rotate-45 before:rounded-[1px] before:bg-signal before:content-['']",
       },
     },
     defaultVariants: { variant: "default" },

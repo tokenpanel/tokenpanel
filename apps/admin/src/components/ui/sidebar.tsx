@@ -24,7 +24,7 @@ import {
 
 const SIDEBAR_COOKIE_NAME = "sidebar_state";
 const SIDEBAR_COOKIE_MAX_AGE = 60 * 60 * 24 * 7;
-const SIDEBAR_WIDTH = "16.5rem";
+const SIDEBAR_WIDTH = "15.5rem";
 /** Mobile drawer: leave room for scrim so outside-tap can dismiss. */
 const SIDEBAR_WIDTH_MOBILE = "16rem";
 const SIDEBAR_WIDTH_ICON = "3.25rem";
@@ -381,7 +381,7 @@ function SidebarGroupLabel({
       data-slot="sidebar-group-label"
       data-sidebar="group-label"
       className={cn(
-        "flex h-8 shrink-0 items-center rounded-md px-2.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-sidebar-foreground/70 ring-sidebar-ring outline-hidden transition-opacity duration-200 ease-linear focus-visible:ring-2 [&>svg]:size-4 [&>svg]:shrink-0",
+        "legend flex h-7 shrink-0 items-center rounded-md px-2 text-sidebar-legend ring-sidebar-ring outline-hidden transition-opacity duration-200 ease-linear focus-visible:ring-2 [&>svg]:size-4 [&>svg]:shrink-0",
         "group-data-[collapsible=icon]:opacity-0",
         className,
       )}
@@ -450,13 +450,13 @@ function SidebarMenuItem({ className, ...props }: React.ComponentProps<"li">): R
 
 const sidebarMenuButtonVariants = cva(
   [
-    "peer/menu-button flex w-full items-center gap-2.5 overflow-hidden rounded-lg p-2 text-left text-sm",
+    "peer/menu-button flex w-full items-center gap-2.5 overflow-hidden rounded-md p-2 text-left text-sm no-underline hover:no-underline",
     "ring-sidebar-ring outline-hidden transition-[width,height,padding,background-color,color,box-shadow] duration-150 ease-out",
     "group-has-data-[sidebar=menu-action]/menu-item:pr-8",
     "group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2!",
-    "text-sidebar-foreground/85",
+    "text-sidebar-foreground/78",
     "hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
-    "focus-visible:ring-2",
+    "focus-visible:ring-2 focus-visible:outline-none",
     "active:bg-sidebar-accent active:text-sidebar-accent-foreground",
     "disabled:pointer-events-none disabled:opacity-50",
     "aria-disabled:pointer-events-none aria-disabled:opacity-50",

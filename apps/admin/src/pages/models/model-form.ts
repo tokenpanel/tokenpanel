@@ -277,18 +277,42 @@ export function toNonNegInt(v: string): number | undefined {
 }
 
 /**
+ * Parse a non-negative percentage string to integer basis points via string
+ * manipulation (no float): `"12.5"` → 1250, `"0.01"` → 1, `"50"` → 5000.
+ * Returns undefined for blank/non-numeric input or more than 2 decimals
+ * (finer than 1 bp is unrepresentable in the stored `marginBps`).
+ */
+export function parsePercentToBps(percent: string): number | undefined {
+  const m = /^\+?(\d*)(?:\.(\d*))?$/.exec(percent.trim());
+  if (!m) return undefined;
+  const whole = m[1] ?? "";
+  const frac = m[2] ?? "";
+  if (whole === "" && frac === "") return undefined;
+  if (frac.length > 2) return undefined;
+  const bps = Number(whole || "0") * 100 + Number(frac.padEnd(2, "0"));
+  return Number.isSafeInteger(bps) ? bps : undefined;
+}
+
+/** Format integer basis points as a percentage string: 1250 → "12.5", 5000 → "50". */
+export function formatBpsAsPercent(bps: number): string {
+  const whole = Math.floor(bps / 100);
+  const frac = String(bps % 100).padStart(2, "0").replace(/0+$/, "");
+  return frac === "" ? String(whole) : `${whole}.${frac}`;
+}
+
+/**
  * Compute a retail price (major-unit string) from a wholesale cost and a margin
- * in basis points: price = cost × (1 + bps/10000). Integer-exact in micros —
+ * percentage: price = cost × (1 + bps/10000). Integer-exact in micros —
  * the markup is ceil'd so the margin is never undercut. Returns undefined when
  * the cost is blank or either value fails to parse (caller keeps the field as-is).
  */
 export function priceFromCostMargin(
   costMajor: string,
-  marginBps: string,
+  marginPercent: string,
 ): string | undefined {
   const cost = costMajor.trim();
   if (cost === "") return undefined;
-  const bps = toNonNegInt(marginBps);
+  const bps = parsePercentToBps(marginPercent);
   if (bps === undefined) return undefined;
   let costMicros: number;
   try {
@@ -332,7 +356,8 @@ export interface FormState {
   costInputAudioUnits: string;
   costOutputAudioUnits: string;
   currency: string;
-  marginBps: string;
+  /** Margin over cost as a percentage string ("12.5" = 1250 bps). */
+  marginPercent: string;
   firstProviderId: string;
   firstUpstreamModelId: string;
   /** Metadata editor rows (client-only ids; may be incomplete before save). */
@@ -377,7 +402,7 @@ export function emptyForm(): FormState {
     costInputAudioUnits: "",
     costOutputAudioUnits: "",
     currency: "USD",
-    marginBps: "0",
+    marginPercent: "0",
     firstProviderId: "",
     firstUpstreamModelId: "",
     metadataRows: [],
@@ -419,7 +444,7 @@ export function formFromModel(m: Model): FormState {
     costInputAudioUnits: primaryCost?.inputAudioMicrosPerMillion !== undefined ? formatMicrosToMajor(primaryCost.inputAudioMicrosPerMillion) : "",
     costOutputAudioUnits: primaryCost?.outputAudioMicrosPerMillion !== undefined ? formatMicrosToMajor(primaryCost.outputAudioMicrosPerMillion) : "",
     currency: m.currency,
-    marginBps: String(m.marginBps),
+    marginPercent: formatBpsAsPercent(m.marginBps),
     firstProviderId: "",
     firstUpstreamModelId: "",
     metadataRows: mapped.rows,
@@ -437,7 +462,7 @@ export function slugifyModelId(id: string): string {
 
 /**
  * Map a fetched catalog model onto the Add Model form state. Preserves fields
- * the catalog doesn't know about (currency, marginBps, firstProviderId,
+ * the catalog doesn't know about (currency, marginPercent, firstProviderId,
  * metadataRows) so the admin's existing choices aren't clobbered. The fetched
  * upstreamModelId is dropped into the primary-entry upstream field as a
  * convenience; the admin still picks which of their configured providers
@@ -497,9 +522,9 @@ export function buildModelPayload(
     return { ok: false, error: "Price must be non-negative decimals (≤6 dp)." };
   }
 
-  const marginBps = f.marginBps.trim() === "" ? 0 : toNonNegInt(f.marginBps);
+  const marginBps = f.marginPercent.trim() === "" ? 0 : parsePercentToBps(f.marginPercent);
   if (marginBps === undefined)
-    return { ok: false, error: "Margin (bps) must be a non-negative integer." };
+    return { ok: false, error: "Margin must be a non-negative percentage (≤2 dp)." };
 
   const currency = f.currency.trim().toUpperCase();
   if (!/^[A-Z]{3}$/.test(currency))

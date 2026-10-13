@@ -23,6 +23,7 @@ manager/
     migrate.sh           # migration runner wrapper
     build.sh             # docker build on host (shared by setup/update/rebuild)
     rollback.sh          # container swap + rollback + config snapshot restore
+    release.sh           # release tags, deployed version, update direction
   release/
     manifest.json        # generated config/release manifest
     manifest.env         # bash-safe manifest fragment
@@ -43,13 +44,11 @@ manager/
 curl -fsSL https://raw.githubusercontent.com/tokenpanel/tokenpanel/main/manager/install.sh | sudo bash
 ```
 
-## Manual install
-
-```bash
-git clone https://github.com/tokenpanel/tokenpanel /opt/tokenpanel
-cd /opt/tokenpanel/manager
-sudo bin/tokenpanel-setup
-```
+The installer is the only supported way to install TokenPanel, and
+`tokenpanel update` the only supported way to update it. Do not clone the
+repository, `git pull`, or run `docker compose` against it by hand: those skip
+the release checkout, backups, pre/post migrations, health-gated swap, and
+rollback that the manager performs.
 
 ## Commands
 
@@ -58,7 +57,8 @@ tokenpanel status       # container state, version, disk usage
 tokenpanel start        # preflight + up + health + post migrations
 tokenpanel stop         # stop all services
 tokenpanel restart      # stop + start
-tokenpanel update       # safe update: backup → build → config render → pre → swap → post
+tokenpanel update       # latest stable release: build → config render → pre → backup → post → swap
+tokenpanel update vX.Y.Z  # a specific release or prerelease (downgrades refused)
 tokenpanel config       # operator config management (status|render|check|migrate)
 tokenpanel backup       # write-quiet mongodump (stops api briefly for consistent snapshot)
 tokenpanel restore <f>  # restore from backup
@@ -66,11 +66,21 @@ tokenpanel migrate      # run pending migrations (default phase: pre)
 tokenpanel logs [-f]    # tail container logs
 tokenpanel enter [svc]  # exec shell into container
 tokenpanel doctor       # diagnostics
-tokenpanel rebuild      # rebuild image + recreate + post migrations (keeps data)
+tokenpanel rebuild      # rebuild the deployed version (refuses a different checkout; --force)
 tokenpanel destroy      # remove containers (keeps data)
 tokenpanel reset        # WIPE everything (strong confirm)
 tokenpanel version      # manager + app versions
 ```
+
+## Releases
+
+Releases are `vX.Y.Z` git tags on `main`; each has a GitHub Release with
+generated notes. `tokenpanel update` installs the highest stable tag, does
+nothing when that release (or a newer build) is already deployed, and refuses
+explicit downgrades. Before the first release it follows `origin/main`. The
+installed version comes from the deployed image, so `tokenpanel version`
+stays correct after a failed update or rollback. Older depth-1 install
+checkouts are converted to full history on the first update.
 
 ## Configuration
 

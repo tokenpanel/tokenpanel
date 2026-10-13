@@ -4,7 +4,7 @@ import {
   type AnalyticsSummary,
 } from "../api/analytics.ts";
 import { formatMicros, formatNumber, formatCompact } from "../utils/format.ts";
-import { Card } from "@/components/ui/card";
+import { cacheHitRate, formatPercent, grossMargin } from "../utils/usage.ts";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -16,10 +16,11 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Activity, Coins, TrendingUp, TrendingDown, Hash, BarChart3, Database, Zap, Layers } from "lucide-react";
+import { BarChart3 } from "lucide-react";
 import { PageHeader } from "@/components/PageHeader";
-import { StatCard } from "@/components/StatCard";
-import { FadeIn, StaggerItem } from "@/components/anim";
+import { EmptyState } from "@/components/EmptyState";
+import { Panel, PanelHeader, Readout, ReadoutStrip } from "@/components/Instrument";
+import { Scale } from "@/components/Scale";
 import { cn } from "@/lib/utils";
 
 const DEFAULT_RANGE_DAYS = 30;
@@ -41,6 +42,79 @@ export function defaultTo(): string {
   return isoDate(new Date());
 }
 
+const PRESETS: ReadonlyArray<{ days: number; label: string }> = [
+  { days: 1, label: "Today" },
+  { days: 7, label: "7d" },
+  { days: 30, label: "30d" },
+  { days: 90, label: "90d" },
+];
+
+function presetFrom(days: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() - (days - 1));
+  return isoDate(d);
+}
+
+function RangeControl({
+  from,
+  to,
+  onChange,
+}: {
+  from: string;
+  to: string;
+  onChange: (from: string, to: string) => void;
+}): React.ReactElement {
+  const today = defaultTo();
+  const activePreset = to === today ? PRESETS.find((p) => presetFrom(p.days) === from)?.days ?? null : null;
+  return (
+    <div className="flex flex-wrap items-end gap-3">
+      <div role="group" aria-label="Quick range" className="inline-flex h-9 items-center gap-0.5 rounded-lg border border-border bg-secondary p-[3px]">
+        {PRESETS.map((p) => {
+          const on = activePreset === p.days;
+          return (
+            <button
+              key={p.days}
+              type="button"
+              aria-pressed={on}
+              onClick={() => onChange(presetFrom(p.days), today)}
+              className={cn(
+                "h-full rounded-md px-3 text-[13px] font-medium outline-none transition-[background-color,color,box-shadow] duration-150 focus-visible:ring-[3px] focus-visible:ring-ring",
+                on
+                  ? "bg-card text-foreground shadow-[0_1px_2px_oklch(0_0_0/0.12),0_0_0_1px_var(--border)]"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              {p.label}
+            </button>
+          );
+        })}
+      </div>
+      <div className="flex items-end gap-2">
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="from" className="text-xs text-muted-foreground">From</Label>
+          <Input id="from" type="date" value={from} max={to} className="w-[9.5rem] tabular-nums" onChange={(e) => onChange(e.target.value, to)} />
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="to" className="text-xs text-muted-foreground">To</Label>
+          <Input id="to" type="date" value={to} min={from} className="w-[9.5rem] tabular-nums" onChange={(e) => onChange(from, e.target.value)} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function moneyLines(rows: ReadonlyArray<{ currency: string; micros: number }>): React.ReactNode {
+  if (rows.length === 0) return "—";
+  if (rows.length === 1) return formatMicros(rows[0]!.micros, rows[0]!.currency);
+  return (
+    <span className="flex flex-col gap-1 text-[18px]">
+      {rows.map((r) => (
+        <span key={r.currency}>{formatMicros(r.micros, r.currency)}</span>
+      ))}
+    </span>
+  );
+}
+
 export default function AnalyticsPage(): React.ReactElement {
   const [from, setFrom] = useState(defaultFrom);
   const [to, setTo] = useState(defaultTo);
@@ -49,6 +123,7 @@ export default function AnalyticsPage(): React.ReactElement {
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
+    if (!from || !to) return;
     setLoading(true);
     setError(null);
     try {
@@ -73,52 +148,34 @@ export default function AnalyticsPage(): React.ReactElement {
   }, [load]);
 
   const totals = summary?.totals;
-  const primaryCurrency = totals?.byCurrency[0]?.currency ?? "USD";
-  const costMicros = totals?.byCurrency.reduce((s, r) => s + r.costMicros, 0) ?? 0;
-  const priceMicros =
-    totals?.byCurrency.reduce((s, r) => s + r.priceMicros, 0) ?? 0;
-  const multiCurrency = (totals?.byCurrency.length ?? 0) > 1;
-  // Cache & reasoning aggregates. Hit rate is blended across providers:
-  // OpenAI reports cached tokens inside prompt, Anthropic separately — the
-  // denominator (prompt + cache write, floored by cache read) approximates
-  // total input served for both.
+  const byCurrency = totals?.byCurrency ?? [];
+  const cache = totals ? cacheHitRate(totals) : { rate: null, served: 0 };
   const cacheRead = totals?.cacheReadTokens ?? 0;
   const cacheWrite = totals?.cacheWriteTokens ?? 0;
   const reasoningTokens = totals?.reasoningTokens ?? 0;
-  const inputServed = Math.max((totals?.promptTokens ?? 0) + cacheWrite, cacheRead, 1);
-  const hitRate = cacheRead / inputServed;
-  const hasCacheActivity = cacheRead > 0 || cacheWrite > 0;
   // Share bars compare within currency only — never mix USD/AUD/CAD units.
   const maxPriceByCurrency = new Map<string, number>();
   for (const r of summary?.topCustomers ?? []) {
     const prev = maxPriceByCurrency.get(r.currency) ?? 0;
     if (r.priceMicros > prev) maxPriceByCurrency.set(r.currency, r.priceMicros);
   }
+  const rows = summary?.topCustomers ?? [];
 
   return (
-    <div className="flex flex-col gap-6 p-6 lg:p-8">
-      <PageHeader title="Analytics" icon={<BarChart3 strokeWidth={1.75} />} />
-
-      <div className="flex flex-wrap items-end gap-4">
-        <div className="flex flex-col gap-1.5">
-          <Label htmlFor="from">From</Label>
-          <Input
-            id="from"
-            type="date"
-            value={from}
-            onChange={(e) => setFrom(e.target.value)}
-          />
-        </div>
-        <div className="flex flex-col gap-1.5">
-          <Label htmlFor="to">To</Label>
-          <Input
-            id="to"
-            type="date"
-            value={to}
-            onChange={(e) => setTo(e.target.value)}
-          />
-        </div>
-      </div>
+    <div className="flex flex-col gap-6">
+      <PageHeader
+        title="Analytics"
+        description="Requests, tokens, upstream cost, and charged price for the selected range."
+      >
+        <RangeControl
+          from={from}
+          to={to}
+          onChange={(f, t) => {
+            setFrom(f);
+            setTo(t);
+          }}
+        />
+      </PageHeader>
 
       {error ? (
         <Alert variant="destructive">
@@ -126,199 +183,162 @@ export default function AnalyticsPage(): React.ReactElement {
         </Alert>
       ) : null}
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <StaggerItem index={0}>
-          <StatCard
-            label="Requests"
-            value={loading ? "…" : formatNumber(totals?.requests ?? 0)}
-            icon={<Hash className="size-4" />}
+      <ReadoutStrip label="Range totals">
+        <Readout label="Requests" loading={loading && !summary} value={formatNumber(totals?.requests ?? 0)} />
+        <Readout
+          label="Tokens"
+          loading={loading && !summary}
+          value={formatCompact(totals?.tokens ?? 0)}
+          hint={`${formatNumber(totals?.tokens ?? 0)} total`}
+        />
+        <Readout
+          label="Charged"
+          loading={loading && !summary}
+          value={moneyLines(byCurrency.map((r) => ({ currency: r.currency, micros: r.priceMicros })))}
+          hint={byCurrency.length > 1 ? "Per currency, never summed" : "Price billed to customers"}
+        />
+        <Readout
+          label="Upstream cost"
+          loading={loading && !summary}
+          value={moneyLines(byCurrency.map((r) => ({ currency: r.currency, micros: r.costMicros })))}
+          hint="Paid to providers"
+        />
+      </ReadoutStrip>
+
+      <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-2">
+        <Panel>
+          <PanelHeader title="Gross margin" description="Charged price over upstream cost, per currency." />
+          <div className="flex flex-col gap-5 px-5 py-4">
+            {byCurrency.length === 0 ? (
+              <p className="py-3 text-sm text-muted-foreground">{loading ? "Loading…" : "Nothing charged in this range."}</p>
+            ) : (
+              byCurrency.map((r) => {
+                const m = grossMargin(r.priceMicros, r.costMicros);
+                return (
+                  <div key={r.currency}>
+                    <div className="mb-2 flex items-baseline justify-between gap-3 text-[13px]">
+                      <span className="legend text-muted-foreground">{r.currency}</span>
+                      <span className="tabular-nums text-muted-foreground">
+                        {formatMicros(r.priceMicros - r.costMicros, r.currency)} kept ·{" "}
+                        <span className={cn("font-semibold", m !== null && m < 0 ? "text-destructive" : "text-foreground")}>
+                          {formatPercent(m)}
+                        </span>
+                      </span>
+                    </div>
+                    <Scale
+                      value={m === null ? null : Math.max(0, m)}
+                      label={`Gross margin ${r.currency}`}
+                      valueText={formatPercent(m)}
+                      marks={["0%", "25%", "50%", "75%", "100%"]}
+                      tone={m !== null && m < 0 ? "destructive" : "signal"}
+                    />
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </Panel>
+
+        <Panel>
+          <PanelHeader
+            title="Prompt cache & reasoning"
+            description="Hit rate is blended: OpenAI reports cached tokens inside input, Anthropic separately."
           />
-        </StaggerItem>
-        <StaggerItem index={1}>
-          <StatCard
-            label="Tokens"
-            value={loading ? "…" : formatNumber(totals?.tokens ?? 0)}
-            icon={<Activity className="size-4" />}
-          />
-        </StaggerItem>
-        <StaggerItem index={2}>
-          <StatCard
-            label={multiCurrency ? "Cost (sum*)" : "Cost"}
-            value={
-              loading
-                ? "…"
-                : multiCurrency
-                  ? totals!.byCurrency
-                      .map((r) => formatMicros(r.costMicros, r.currency))
-                      .join(" · ")
-                  : formatMicros(costMicros, primaryCurrency)
-            }
-            icon={<TrendingDown className="size-4" />}
-          />
-        </StaggerItem>
-        <StaggerItem index={3}>
-          <StatCard
-            label={multiCurrency ? "Revenue (by currency)" : "Revenue"}
-            value={
-              loading
-                ? "…"
-                : multiCurrency
-                  ? totals!.byCurrency
-                      .map((r) => formatMicros(r.priceMicros, r.currency))
-                      .join(" · ")
-                  : formatMicros(priceMicros, primaryCurrency)
-            }
-            icon={<TrendingUp className="size-4" />}
-          />
-        </StaggerItem>
+          <div className="flex flex-col gap-5 px-5 py-4">
+            <div>
+              <div className="mb-2 flex items-baseline justify-between gap-3 text-[13px]">
+                <span className="text-muted-foreground">
+                  {cache.rate === null
+                    ? "No cache activity in this range"
+                    : `${formatCompact(cacheRead)} of ${formatCompact(cache.served)} input tokens from cache`}
+                </span>
+                <span className="font-semibold tabular-nums">{formatPercent(cache.rate)}</span>
+              </div>
+              <Scale
+                value={cache.rate}
+                label="Prompt cache hit rate"
+                valueText={formatPercent(cache.rate)}
+                marks={["0%", "25%", "50%", "75%", "100%"]}
+                tone="success"
+              />
+            </div>
+            <dl className="m-0 grid grid-cols-3 divide-x divide-rule border-t border-rule">
+              {[
+                { label: "Cache read", value: cacheRead, title: "Input served from the provider prompt cache." },
+                { label: "Cache write", value: cacheWrite, title: "Tokens written into the cache (Anthropic cache creation)." },
+                { label: "Reasoning", value: reasoningTokens, title: "Hidden reasoning / extended-thinking output tokens." },
+              ].map((x) => (
+                <div key={x.label} className="px-3.5 pt-3 first:pl-0" title={x.title}>
+                  <dt className="legend text-muted-foreground">{x.label}</dt>
+                  <dd className="readout m-0 mt-1.5 text-[20px] font-semibold leading-none">{formatCompact(x.value)}</dd>
+                </div>
+              ))}
+            </dl>
+          </div>
+        </Panel>
       </div>
 
-      <FadeIn className="flex flex-col gap-3">
-        <div className="flex items-center gap-2">
-          <h2 className="text-base font-semibold">Prompt cache &amp; reasoning</h2>
-          <span className="text-xs text-muted-foreground" title="OpenAI reports cached tokens inside input; Anthropic reports them separately. The hit rate is a blended approximation across providers.">
-            blended across providers
-          </span>
-        </div>
-        <Card className="p-6">
-          <div className="grid grid-cols-1 gap-6 lg:grid-cols-4">
-            <div className="flex flex-col gap-3">
-              <span className="flex items-center gap-1.5 text-sm font-medium text-muted-foreground">
-                <Database className="size-4" /> Cache hit rate
-              </span>
-              <span className="text-3xl font-semibold tracking-tight tabular-nums leading-none">
-                {loading ? "…" : hasCacheActivity ? `${(hitRate * 100).toFixed(1)}%` : "—"}
-              </span>
-              <div className="h-2.5 w-full overflow-hidden rounded-full bg-muted">
-                <div
-                  className="h-full rounded-full bg-success transition-all duration-700 ease-out"
-                  style={{ width: loading ? "0%" : `${Math.round(hitRate * 100)}%` }}
-                />
-              </div>
-              <span className="text-xs text-muted-foreground">
-                {hasCacheActivity
-                  ? `${formatCompact(cacheRead)} of ${formatCompact(inputServed)} input tokens served from cache`
-                  : "No cache activity in this range"}
-              </span>
-            </div>
-            <StatCard
-              label="Cache read tokens"
-              value={loading ? "…" : formatNumber(cacheRead)}
-              hint="Input served from the provider prompt cache (billed at the cache-read rate when priced)."
-              icon={<Database className="size-4" />}
-              tone="success"
-              loading={loading}
+      <Panel className="overflow-hidden">
+        <PanelHeader
+          title="Top customers by spend"
+          description="Org totals above are computed server-side over all customers, not just these rows."
+        />
+        {rows.length === 0 ? (
+          loading ? (
+            <div className="px-5 py-10 text-center text-sm text-muted-foreground">Loading…</div>
+          ) : (
+            <EmptyState
+              icon={<BarChart3 />}
+              title="No usage in this range"
+              description="Widen the range, or send a request through the gateway with a customer API key."
             />
-            <StatCard
-              label="Cache write tokens"
-              value={loading ? "…" : formatNumber(cacheWrite)}
-              hint="Tokens written into the cache (Anthropic cache creation)."
-              icon={<Layers className="size-4" />}
-              loading={loading}
-            />
-            <StatCard
-              label="Reasoning tokens"
-              value={loading ? "…" : formatNumber(reasoningTokens)}
-              hint="Hidden reasoning/output-thinking tokens (o-series, extended thinking)."
-              icon={<Zap className="size-4" />}
-              tone="warning"
-              loading={loading}
-            />
-          </div>
-        </Card>
-      </FadeIn>
-
-      <FadeIn className="flex flex-col gap-3">
-        <h2 className="text-base font-semibold">Top customers by spend</h2>
-        <Card className="overflow-hidden">
+          )
+        ) : (
           <Table>
             <TableHeader>
               <TableRow>
                 <TableHead>Customer</TableHead>
-                <TableHead className="text-right">Requests</TableHead>
+                <TableHead className="hidden text-right md:table-cell">Requests</TableHead>
                 <TableHead className="text-right">Tokens</TableHead>
-                <TableHead className="text-right">Cache read</TableHead>
-                <TableHead className="text-right">Spend</TableHead>
-                <TableHead className="w-[30%]">Share</TableHead>
+                <TableHead className="hidden w-[11rem] lg:table-cell">Cache hit</TableHead>
+                <TableHead className="hidden text-right md:table-cell">Cost</TableHead>
+                <TableHead className="text-right">Charged</TableHead>
+                <TableHead className="hidden w-[14rem] sm:table-cell">Share of top spend</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {(summary?.topCustomers ?? []).map((row) => (
-                <TableRow key={`${row.customerId}:${row.currency}`}>
-                  <TableCell className="font-medium">{row.customerName}</TableCell>
-                  <TableCell className="text-right tabular-nums">
-                    {formatNumber(row.requests)}
-                  </TableCell>
-                  <TableCell className="text-right tabular-nums">
-                    {formatNumber(row.tokens)}
-                  </TableCell>
-                  <TableCell className="text-right">
-                    <div
-                      className="flex items-center justify-end gap-2"
-                      title={`${formatNumber(row.cacheReadTokens)} cached / ${formatNumber(row.promptTokens + row.cacheWriteTokens)} input tokens`}
-                    >
-                      <span className="tabular-nums text-xs text-muted-foreground">
-                        {formatCompact(row.cacheReadTokens)}
-                      </span>
-                      <div className="h-1.5 w-14 overflow-hidden rounded-full bg-muted">
-                        <div
-                          className="h-full rounded-full bg-success transition-all duration-500"
-                          style={{
-                            width: `${Math.round(
-                              (row.cacheReadTokens /
-                                Math.max(
-                                  row.promptTokens + row.cacheWriteTokens,
-                                  row.cacheReadTokens,
-                                  1,
-                                )) *
-                                100,
-                            )}%`,
-                          }}
-                        />
+              {rows.map((row) => {
+                const hit = cacheHitRate(row);
+                const share = row.priceMicros / Math.max(1, maxPriceByCurrency.get(row.currency) ?? 1);
+                return (
+                  <TableRow key={`${row.customerId}:${row.currency}`}>
+                    <TableCell className="max-w-[14rem] truncate font-medium">{row.customerName}</TableCell>
+                    <TableCell className="hidden text-right tabular-nums md:table-cell">{formatNumber(row.requests)}</TableCell>
+                    <TableCell className="text-right tabular-nums" title={formatNumber(row.tokens)}>
+                      {formatCompact(row.tokens)}
+                    </TableCell>
+                    <TableCell className="hidden lg:table-cell">
+                      <div className="flex items-center gap-3">
+                        <Scale size="sm" value={hit.rate} label={`${row.customerName} cache hit rate`} valueText={formatPercent(hit.rate)} tone="success" divisions={5} minor={2} className="w-20" />
+                        <span className="w-12 text-right text-xs tabular-nums text-muted-foreground">{formatPercent(hit.rate, 0)}</span>
                       </div>
-                    </div>
-                  </TableCell>
-                  <TableCell className="text-right tabular-nums">
-                    {formatMicros(row.priceMicros, row.currency)}
-                  </TableCell>
-                  <TableCell>
-                    <div className="h-2 w-full rounded-full bg-muted overflow-hidden">
-                      <div
-                        className={cn(
-                          "h-full rounded-full bg-primary transition-all duration-500",
-                        )}
-                        style={{
-                          width: `${Math.round(
-                            (row.priceMicros /
-                              Math.max(
-                                1,
-                                maxPriceByCurrency.get(row.currency) ?? 1,
-                              )) *
-                              100,
-                          )}%`,
-                        }}
-                      />
-                    </div>
-                  </TableCell>
-                </TableRow>
-              ))}
-              {!loading && (summary?.topCustomers.length ?? 0) === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={6} className="text-center text-muted-foreground">
-                    No usage in this range.
-                  </TableCell>
-                </TableRow>
-              ) : null}
+                    </TableCell>
+                    <TableCell className="hidden text-right tabular-nums text-muted-foreground md:table-cell">
+                      {formatMicros(row.costMicros, row.currency)}
+                    </TableCell>
+                    <TableCell className="text-right font-medium tabular-nums">
+                      {formatMicros(row.priceMicros, row.currency)}
+                    </TableCell>
+                    <TableCell className="hidden sm:table-cell">
+                      <Scale size="sm" value={share} label={`${row.customerName} share of top spend`} valueText={formatPercent(share, 0)} divisions={10} minor={2} />
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
             </TableBody>
           </Table>
-        </Card>
-        {totals ? (
-          <p className="text-xs text-muted-foreground flex items-center gap-1">
-            <Coins className="size-3" />
-            Org totals are server-side over all customers, not limited to the table page size.
-          </p>
-        ) : null}
-      </FadeIn>
+        )}
+      </Panel>
     </div>
   );
 }

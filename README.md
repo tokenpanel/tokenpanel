@@ -107,7 +107,7 @@ curl -fsSL https://raw.githubusercontent.com/tokenpanel/tokenpanel/main/manager/
 The installer:
 
 - Installs Docker if missing
-- Clones the stable `main` branch to `/opt/tokenpanel`
+- Clones TokenPanel to `/opt/tokenpanel` and checks out the latest release
 - Stores config in `/etc/tokenpanel`
 - Stores MongoDB data, backups, and certificates in `/var/tokenpanel/shared`
 - Starts an interactive setup wizard for domain, HTTPS, MongoDB, and admin settings
@@ -121,6 +121,13 @@ tokenpanel backup
 tokenpanel update
 tokenpanel logs -f
 ```
+
+Always install with the installer and update with `tokenpanel update`, which
+installs the latest release. Do not run production by hand with `git pull` or
+`docker compose`: the manager also takes backups, runs pre- and post-deploy
+database migrations in order, swaps containers only after health checks, and
+rolls back automatically when an update fails. Release notes are on the
+[GitHub Releases](https://github.com/tokenpanel/tokenpanel/releases) page.
 
 ## Production Configuration
 

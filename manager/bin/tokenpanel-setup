@@ -267,6 +267,17 @@ echo
 
 # ── Root check ──
 [ "$(id -u)" -eq 0 ] || die "must run as root (use sudo)"
+
+# ── Version check ──
+# Setup builds the checkout as it is. On a live install it must not change
+# the deployed version; that is `tokenpanel update`'s job.
+if command -v docker >/dev/null 2>&1; then
+  source "${SCRIPT_DIR}/../lib/build.sh"
+  setup_force=0
+  [ "${1:-}" = "--force" ] && setup_force=1
+  require_checkout_matches_deployed "tokenpanel-setup" "$setup_force" \
+    || die "setup refused — app unchanged"
+fi
 tp_require_tty "tokenpanel-setup is interactive and needs a TTY" || exit 1
 tp_read_required _ "Press ENTER to continue, Ctrl+C to cancel. " || exit 1
 

@@ -24,7 +24,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { Card } from "@/components/ui/card";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -45,18 +44,22 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Copy, Check, User, Mail, ShieldCheck, Lock, Settings } from "lucide-react";
+import { User, Mail, Lock } from "lucide-react";
 import { PageHeader } from "@/components/PageHeader";
 import { EmptyState } from "@/components/EmptyState";
-import { FadeIn } from "@/components/anim";
+import { Panel, PanelHeader, SpecList } from "@/components/Instrument";
+import { OneTimeSecret } from "@/components/OneTimeSecret";
+import { ThemeSegmented } from "@/components/ThemeSwitch";
+import { cn } from "@/lib/utils";
 
-export function statusVariant(status: string): "warning" | "success" | "destructive" {
+export function statusVariant(status: string): "warning" | "success" | "destructive" | "off" {
   switch (status) {
     case "pending":
       return "warning";
     case "accepted":
       return "success";
     case "expired":
+      return "off";
     case "revoked":
       return "destructive";
     default:
@@ -374,8 +377,8 @@ export default function SettingsPage(): React.ReactElement {
   const initials = (user?.username ?? "U").slice(0, 2).toUpperCase();
 
   return (
-    <div className="flex flex-col gap-6 p-6 lg:p-8">
-      <PageHeader title="Settings" icon={<Settings strokeWidth={1.75} />} />
+    <div className="flex flex-col gap-6">
+      <PageHeader title="Settings" description="Your account, appearance, and who can join this organization." />
 
       {error ? (
         <Alert variant="destructive">
@@ -383,68 +386,70 @@ export default function SettingsPage(): React.ReactElement {
         </Alert>
       ) : null}
 
-      <Tabs defaultValue="profile" className="gap-4">
-        <TabsList>
-          <TabsTrigger value="profile"><User className="size-4" />Profile</TabsTrigger>
-          <TabsTrigger value="invites"><Mail className="size-4" />Invites</TabsTrigger>
+      <Tabs defaultValue="profile" className="gap-5">
+        <TabsList className="self-start">
+          <TabsTrigger value="profile"><User />Account</TabsTrigger>
+          <TabsTrigger value="invites"><Mail />Team invites</TabsTrigger>
         </TabsList>
 
         <TabsContent value="profile">
-          <div className="flex max-w-2xl flex-col gap-4">
-            <Card className="p-6">
-              <div className="flex items-center gap-4">
-                <Avatar className="size-14">
-                  <AvatarFallback className="text-base">{initials}</AvatarFallback>
-                </Avatar>
-                <div className="flex flex-col gap-0.5">
-                  <span className="text-lg font-semibold">{user?.username ?? "—"}</span>
-                  <div className="flex items-center gap-2 mt-1">
-                    <Badge variant="secondary">{user?.role ?? "—"}</Badge>
-                    {isAdmin ? <ShieldCheck className="size-3.5 text-success" /> : null}
+          <div className="grid max-w-5xl grid-cols-1 items-start gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+            <div className="flex flex-col gap-6">
+              <Panel>
+                <div className="flex items-center gap-4 px-5 pb-4 pt-5">
+                  <Avatar className="size-12">
+                    <AvatarFallback className="text-sm">{initials}</AvatarFallback>
+                  </Avatar>
+                  <div className="min-w-0">
+                    <div className="truncate text-[17px] font-semibold">{user?.username ?? "—"}</div>
+                    <div className="truncate text-[13px] text-muted-foreground">{user?.email ?? ""}</div>
                   </div>
                 </div>
-              </div>
-              <div className="mt-6 grid grid-cols-[130px_1fr] gap-x-4 gap-y-2 text-sm">
-                <div className="text-muted-foreground">Username</div><div className="font-mono text-xs">{user?.username ?? "—"}</div>
-                <div className="text-muted-foreground">Role</div><div><Badge variant="secondary">{user?.role ?? "—"}</Badge></div>
-                <div className="text-muted-foreground">Organization</div><div className="font-mono text-xs">{user?.activeOrganizationId ?? "—"}</div>
-              </div>
-            </Card>
+                <SpecList
+                  className="px-5 pb-3"
+                  rows={[
+                    { label: "Role", value: <span><span className="capitalize">{user?.role ?? "—"}</span>{isAdmin ? " · full panel access" : ""}</span> },
+                    { label: "Organization ID", value: <span className="font-mono text-xs">{user?.activeOrganizationId ?? "—"}</span> },
+                  ]}
+                />
+              </Panel>
 
-            <Card className="p-6">
-              <h2 className="text-base font-semibold">Email</h2>
-              <p className="mt-1 text-sm text-muted-foreground">
-                The address used for your account. Must be unique.
-              </p>
-              <form className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-end" onSubmit={onSaveEmail}>
-                <div className="flex flex-1 flex-col gap-1.5">
-                  <Label htmlFor="profile-email">Email address</Label>
-                  <Input
-                    id="profile-email"
-                    type="email"
-                    value={emailValue}
-                    onChange={(e) => setEmailValue(e.target.value)}
-                    disabled={emailSaving}
-                    required
-                  />
+              <Panel>
+                <PanelHeader title="Appearance" description="Follow the system setting, or pin light or dark on this browser." />
+                <div className="px-5 py-4">
+                  <ThemeSegmented />
                 </div>
-                <Button type="submit" disabled={emailSaving || !emailDirty}>
-                  {emailSaving ? "Saving…" : "Save email"}
-                </Button>
-              </form>
-              {emailMsg ? (
-                <p className={`mt-2 text-sm ${emailMsg.kind === "success" ? "text-success" : "text-destructive"}`}>
-                  {emailMsg.text}
-                </p>
-              ) : null}
-            </Card>
+              </Panel>
 
-            <Card className="p-6">
-              <h2 className="text-base font-semibold">Password</h2>
-              <p className="mt-1 text-sm text-muted-foreground">
-                Enter your current password to set a new one. Minimum 8 characters.
-              </p>
-              <form className="mt-4 flex flex-col gap-3" onSubmit={onChangePassword}>
+              <Panel>
+                <PanelHeader title="Email" description="The address on your account. Must be unique across this instance." />
+                <form className="flex flex-col gap-3 px-5 py-4 sm:flex-row sm:items-end" onSubmit={onSaveEmail}>
+                  <div className="flex flex-1 flex-col gap-1.5">
+                    <Label htmlFor="profile-email">Email address</Label>
+                    <Input
+                      id="profile-email"
+                      type="email"
+                      value={emailValue}
+                      onChange={(e) => setEmailValue(e.target.value)}
+                      disabled={emailSaving}
+                      required
+                    />
+                  </div>
+                  <Button type="submit" disabled={emailSaving || !emailDirty}>
+                    {emailSaving ? "Saving…" : "Save email"}
+                  </Button>
+                </form>
+                {emailMsg ? (
+                  <p role="status" className={cn("px-5 pb-4 text-sm font-medium", emailMsg.kind === "success" ? "text-success" : "text-destructive")}>
+                    {emailMsg.text}
+                  </p>
+                ) : null}
+              </Panel>
+            </div>
+
+            <Panel>
+              <PanelHeader title="Password" description="Enter your current password to set a new one. At least 8 characters." />
+              <form className="flex flex-col gap-4 px-5 py-4" onSubmit={onChangePassword}>
                 <div className="flex flex-col gap-1.5">
                   <Label htmlFor="cur-pw">Current password</Label>
                   <PasswordInput
@@ -489,13 +494,13 @@ export default function SettingsPage(): React.ReactElement {
                     {pwSaving ? "Changing…" : "Change password"}
                   </Button>
                 </div>
+                {pwMsg ? (
+                  <p role="status" className={cn("text-sm font-medium", pwMsg.kind === "success" ? "text-success" : "text-destructive")}>
+                    {pwMsg.text}
+                  </p>
+                ) : null}
               </form>
-              {pwMsg ? (
-                <p className={`mt-2 text-sm ${pwMsg.kind === "success" ? "text-success" : "text-destructive"}`}>
-                  {pwMsg.text}
-                </p>
-              ) : null}
-            </Card>
+            </Panel>
           </div>
         </TabsContent>
 
@@ -503,30 +508,20 @@ export default function SettingsPage(): React.ReactElement {
           {canReadInvites ? (
             <div className="flex flex-col gap-4">
               {createdToken ? (
-                <Alert variant="info">
-                  <div className="flex flex-col gap-2">
-                    <div className="text-sm font-semibold">
-                      Invite created. Share this signup link — token shown only once.
-                    </div>
-                    <p className="text-sm text-muted-foreground">
-                      Send this URL to the invitee. They can use it to sign up and join your organization.
-                    </p>
-                    <div className="rounded border border-border bg-muted px-2 py-1.5 font-mono text-xs break-all">{signupUrl}</div>
-                    <div className="flex items-center gap-2">
-                      <code className="flex-1 rounded border border-border bg-muted px-2 py-1.5 font-mono text-xs break-all">{createdToken}</code>
-                      <Button variant="outline" size="sm" onClick={() => void copyToken(createdToken)}>
-                        {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
-                        {copied ? "Copied" : "Copy token"}
-                      </Button>
-                      <Button variant="ghost" size="sm" onClick={() => setCreatedToken(null)}>Dismiss</Button>
-                    </div>
-                  </div>
-                </Alert>
+                <OneTimeSecret
+                  className="mb-0"
+                  label="Invite created. Send this signup link to the invitee; it is shown only once."
+                  secret={signupUrl}
+                  copied={copied}
+                  onCopy={() => void copyToken(signupUrl)}
+                  onDismiss={() => setCreatedToken(null)}
+                />
               ) : null}
 
               {canWriteInvites ? (
-                <Card className="p-5">
-                  <form className="flex flex-col gap-4" onSubmit={onInvite}>
+                <Panel>
+                  <PanelHeader title="Invite someone" description="They get a signup link that joins this organization. Links expire after 7 days unless you set a TTL." />
+                  <form className="flex flex-col gap-5 px-5 py-4" onSubmit={onInvite}>
                     <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
                       <div className="flex flex-1 flex-col gap-1.5">
                         <Label htmlFor="invite-email">Email</Label>
@@ -547,7 +542,7 @@ export default function SettingsPage(): React.ReactElement {
                           onValueChange={(v) => setRole(v as UserRole)}
                           disabled={creating}
                         >
-                          <SelectTrigger id="invite-role" className="w-[120px]">
+                          <SelectTrigger id="invite-role" className="sm:w-[130px]">
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
@@ -559,7 +554,7 @@ export default function SettingsPage(): React.ReactElement {
                         </Select>
                       </div>
                       <div className="flex flex-col gap-1.5">
-                        <Label htmlFor="invite-ttl">TTL (hours, optional)</Label>
+                        <Label htmlFor="invite-ttl">Expires after (hours)</Label>
                         <Input
                           id="invite-ttl"
                           type="number"
@@ -568,11 +563,11 @@ export default function SettingsPage(): React.ReactElement {
                           value={inviteTtl}
                           disabled={creating}
                           onChange={(e) => setInviteTtl(e.target.value)}
-                          className="w-[160px]"
+                          className="sm:w-[150px]"
                         />
                       </div>
                       <Button type="submit" disabled={creating}>
-                        {creating ? "Inviting…" : "Invite User"}
+                        {creating ? "Creating link…" : "Create invite link"}
                       </Button>
                     </div>
 
@@ -580,7 +575,7 @@ export default function SettingsPage(): React.ReactElement {
                       <div className="flex flex-col gap-3">
                         <div className="flex flex-wrap items-center justify-between gap-2">
                           <div>
-                            <Label>Panel permissions</Label>
+                            <div className="text-[13px] font-medium">Panel permissions</div>
                             <p className="text-xs text-muted-foreground">
                               Only permissions you hold can be granted.
                               {permissionCount > 0
@@ -654,13 +649,14 @@ export default function SettingsPage(): React.ReactElement {
                             empty access.
                           </p>
                         ) : (
-                          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                          <div className="grid gap-x-8 gap-y-5 sm:grid-cols-2 lg:grid-cols-3">
                             {groupEntries.map(([group, items]) => (
-                              <div
+                              <fieldset
                                 key={group}
-                                className="flex flex-col gap-2 rounded-md border border-border p-3"
+                                className="flex flex-col gap-2.5 border-t border-rule pt-3"
                               >
-                                <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                                <legend className="sr-only">{group}</legend>
+                                <div className="legend text-muted-foreground">
                                   {group}
                                 </div>
                                 {items.map((def) => (
@@ -681,13 +677,13 @@ export default function SettingsPage(): React.ReactElement {
                                       <span className="font-medium leading-tight">
                                         {def.description}
                                       </span>
-                                      <code className="font-mono text-[10px] text-muted-foreground">
+                                      <code className="font-mono text-[11px] text-muted-foreground">
                                         {def.value}
                                       </code>
                                     </span>
                                   </label>
                                 ))}
-                              </div>
+                              </fieldset>
                             ))}
                           </div>
                         )}
@@ -699,33 +695,30 @@ export default function SettingsPage(): React.ReactElement {
                       </p>
                     )}
                   </form>
-                  <p className="mt-2 text-xs text-muted-foreground">
-                    Default TTL is 168 hours (7 days) if left blank. New invites default to member with no grants.
-                  </p>
-                </Card>
+                </Panel>
               ) : null}
 
               {loadingInvites ? null : invites.length === 0 ? (
-                <Card className="p-8">
+                <Panel>
                   <EmptyState
-                    icon={<Mail className="size-5" />}
+                    icon={<Mail />}
                     title="No invites yet"
-                    description="Invite new users to your organization to let them sign up."
+                    description="Invite links you create appear here with their status and expiry."
                   />
-                </Card>
+                </Panel>
               ) : (
-                <FadeIn>
-                  <Card className="overflow-hidden p-0">
+                <Panel className="overflow-hidden">
+                  <PanelHeader title="Invites" />
                     <Table>
                       <TableHeader>
                         <TableRow>
                           <TableHead>Email</TableHead>
-                          <TableHead>Role</TableHead>
-                          <TableHead>Permissions</TableHead>
+                          <TableHead className="hidden sm:table-cell">Role</TableHead>
+                          <TableHead className="hidden lg:table-cell">Permissions</TableHead>
                           <TableHead>Status</TableHead>
-                          <TableHead>Expires</TableHead>
-                          <TableHead>Created</TableHead>
-                          <TableHead className="text-right">Actions</TableHead>
+                          <TableHead className="hidden md:table-cell">Expires</TableHead>
+                          <TableHead className="hidden md:table-cell">Created</TableHead>
+                          <TableHead className="text-right"><span className="sr-only">Actions</span></TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
@@ -735,8 +728,8 @@ export default function SettingsPage(): React.ReactElement {
                           return (
                             <TableRow key={id || inv.email}>
                               <TableCell>{inv.email}</TableCell>
-                              <TableCell className="capitalize">{inv.role}</TableCell>
-                              <TableCell>
+                              <TableCell className="hidden capitalize sm:table-cell">{inv.role}</TableCell>
+                              <TableCell className="hidden whitespace-normal lg:table-cell">
                                 {inv.role === "admin" ? (
                                   <span className="text-xs text-muted-foreground">Full access</span>
                                 ) : perms.length === 0 ? (
@@ -746,7 +739,7 @@ export default function SettingsPage(): React.ReactElement {
                                     {perms.map((p) => (
                                       <span
                                         key={p}
-                                        className="rounded border border-border bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground"
+                                        className="rounded-[4px] bg-secondary px-1.5 py-0.5 font-mono text-[11px] text-secondary-foreground"
                                       >
                                         {p}
                                       </span>
@@ -755,16 +748,16 @@ export default function SettingsPage(): React.ReactElement {
                                 )}
                               </TableCell>
                               <TableCell>
-                                <Badge variant={statusVariant(inv.status)}>{inv.status}</Badge>
+                                <Badge variant={statusVariant(inv.status)} className="capitalize">{inv.status}</Badge>
                               </TableCell>
-                              <TableCell>{formatDate(inv.expiresAt)}</TableCell>
-                              <TableCell className="text-muted-foreground">
+                              <TableCell className="hidden md:table-cell">{formatDate(inv.expiresAt)}</TableCell>
+                              <TableCell className="hidden text-muted-foreground md:table-cell">
                                 {formatRelative(inv.createdAt)}
                               </TableCell>
                               <TableCell className="text-right">
                                 {inv.status === "pending" && canWriteInvites && id ? (
                                   <Button
-                                    variant="destructive"
+                                    variant="ghost-destructive"
                                     size="sm"
                                     disabled={revokingId === id}
                                     onClick={() => void onRevokeInvite(id)}
@@ -778,18 +771,17 @@ export default function SettingsPage(): React.ReactElement {
                         })}
                       </TableBody>
                     </Table>
-                  </Card>
-                </FadeIn>
+                </Panel>
               )}
             </div>
           ) : (
-            <Card className="max-w-2xl p-6">
+            <Panel className="max-w-2xl">
               <EmptyState
-                icon={<Lock className="size-5" />}
+                icon={<Lock />}
                 title="No invite access"
-                description="You need invites:read or invites:write to manage organization invites. Contact an admin if you need to invite a new user."
+                description="Managing invites needs invites:read or invites:write. Ask an admin to invite someone for you."
               />
-            </Card>
+            </Panel>
           )}
         </TabsContent>
 

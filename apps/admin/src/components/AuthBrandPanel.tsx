@@ -1,122 +1,139 @@
-import type { ReactElement } from "react";
-import {
-  Github,
-  KeyRound,
-  ShieldCheck,
-  Waypoints,
-  type LucideIcon,
-} from "lucide-react";
+import type { ReactElement, ReactNode } from "react";
+import { Github } from "lucide-react";
 import BrandLogo from "@/components/BrandLogo";
+import { WindowRuler } from "@/components/Scale";
 
 const GITHUB_REPO_URL = "https://github.com/tokenpanel/tokenpanel";
 
-interface Capability {
-  icon: LucideIcon;
-  title: string;
-  description: string;
+interface PlateRow {
+  legend: string;
+  text: string;
 }
 
-const CAPABILITIES: readonly Capability[] = [
+// Facts from the product README; no claims beyond what ships.
+const PLATE: readonly PlateRow[] = [
   {
-    icon: Waypoints,
-    title: "OpenAI & Anthropic-compatible gateway",
-    description: "One governed API surface for your apps and teams.",
+    legend: "Spend",
+    text: "Per-model price and upstream cost, tracked separately against prepaid balances.",
   },
   {
-    icon: ShieldCheck,
-    title: "Per-account budgets & rolling limits",
-    description: "Cap spend, tokens, and requests over custom windows.",
+    legend: "Access",
+    text: "Scoped API keys and model allow-lists behind one OpenAI- and Anthropic-compatible API.",
   },
   {
-    icon: KeyRound,
-    title: "API keys with model access controls",
-    description: "Issue scoped keys without exposing provider secrets.",
+    legend: "Limits",
+    text: "Rolling token, request, and spend caps over windows like 1h, 5h, weekly, or 30d.",
   },
 ];
 
-function CapabilityRow({
-  icon: Icon,
-  title,
-  description,
-  index,
-}: Capability & { index: number }): ReactElement {
+// The window lengths named in the Limits line, drawn on the console's ruler.
+const EXAMPLE_WINDOWS = [
+  { key: "1h", windowSeconds: 3600, caption: "" },
+  { key: "5h", windowSeconds: 18000, caption: "" },
+  { key: "1w", windowSeconds: 604800, caption: "" },
+  { key: "30d", windowSeconds: 2592000, caption: "" },
+] as const;
+
+/** The charcoal front plate beside every sign-in form (desktop). */
+function FrontPlate(): ReactElement {
   return (
-    <li
-      className="animate-fade-in-up flex gap-3.5 rounded-xl border border-sidebar-border/80 bg-sidebar-accent/35 p-3.5"
-      style={{ animationDelay: `${0.12 + index * 0.06}s` }}
-    >
-      <div className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-sidebar-border bg-sidebar-accent text-sidebar-foreground">
-        <Icon className="size-4" strokeWidth={1.75} />
-      </div>
-      <div className="min-w-0 flex flex-col gap-0.5 pt-0.5">
-        <span className="text-sm font-medium leading-snug text-sidebar-foreground">
-          {title}
-        </span>
-        <span className="text-[13px] leading-snug text-sidebar-foreground/70">
-          {description}
-        </span>
-      </div>
-    </li>
-  );
-}
-
-export function AuthBrandPanel(): ReactElement {
-  return (
-    <aside className="relative hidden min-h-[100dvh] w-[min(50%,34rem)] shrink-0 flex-col justify-between overflow-hidden border-r border-sidebar-border bg-sidebar px-10 py-10 text-sidebar-foreground lg:flex xl:w-[min(48%,38rem)] xl:px-12">
-      <div className="relative flex items-center gap-2.5">
-        <BrandLogo className="size-8 shadow-sm" />
-        <span className="text-[15px] font-semibold tracking-tight">TokenPanel</span>
+    <aside className="relative hidden w-[min(46%,40rem)] shrink-0 flex-col justify-between bg-sidebar px-10 py-9 text-sidebar-foreground lg:flex xl:px-14">
+      <div className="flex items-center gap-2.5">
+        <BrandLogo className="size-8 ring-1 ring-sidebar-border" />
+        <span className="text-[15px] font-semibold tracking-[-0.01em]">TokenPanel</span>
       </div>
 
-      <div className="relative flex w-full flex-col gap-9">
-        <div className="animate-fade-in-up flex flex-col gap-5">
-          <div className="flex flex-col gap-2.5">
-            <h2 className="text-[2rem] font-semibold leading-none tracking-tight xl:text-[2.375rem]">
-              TokenPanel
-            </h2>
-            <p className="text-base font-medium leading-snug tracking-tight text-sidebar-foreground/80">
-              AI spend control and access management
-            </p>
-          </div>
-          <p className="w-full text-[15px] leading-relaxed text-sidebar-foreground/72">
-            See what each account spends, decide who can call which models, and
-            set budgets and rolling limits before costs run away. Issue scoped
-            API keys and route traffic through one OpenAI- and
-            Anthropic-compatible API without sharing provider credentials.
-          </p>
-        </div>
+      <div className="flex max-w-[30rem] flex-col gap-10">
+        <h2 className="text-[34px] font-semibold leading-[1.1] tracking-[-0.025em] text-sidebar-foreground xl:text-[40px]">
+          AI spend control and access management.
+        </h2>
 
-        <ul className="flex w-full flex-col gap-2.5">
-          {CAPABILITIES.map((item, index) => (
-            <CapabilityRow key={item.title} {...item} index={index} />
+        <dl className="flex flex-col">
+          {PLATE.map((row) => (
+            <div
+              key={row.legend}
+              className="grid grid-cols-[5.5rem_1fr] gap-4 border-t border-sidebar-border py-4 last:border-b"
+            >
+              <dt className="legend pt-[3px] text-sidebar-legend">{row.legend}</dt>
+              <dd className="m-0 text-[14.5px] leading-relaxed text-sidebar-foreground/85">{row.text}</dd>
+            </div>
           ))}
-        </ul>
+        </dl>
+
+        <div aria-hidden>
+          <WindowRuler size="lg" markers={EXAMPLE_WINDOWS} className="text-sidebar-legend [&_.bg-signal]:bg-sidebar-primary" />
+        </div>
       </div>
 
-      <div className="relative flex items-center justify-between gap-4">
-        <p className="text-xs text-sidebar-foreground/55">
-          &copy; {new Date().getFullYear()} TokenPanel
-        </p>
+      <div className="flex items-center justify-between gap-4 text-xs text-sidebar-legend">
+        <span>Open source · AGPL-3.0</span>
         <a
           href={GITHUB_REPO_URL}
           target="_blank"
           rel="noopener noreferrer"
-          aria-label="TokenPanel on GitHub"
-          className="inline-flex items-center gap-1.5 text-xs text-sidebar-foreground/70 no-underline transition-colors hover:text-sidebar-foreground"
+          className="inline-flex items-center gap-1.5 rounded-sm text-sidebar-legend transition-colors hover:text-sidebar-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring"
         >
           <Github className="size-3.5" strokeWidth={1.75} aria-hidden />
-          GitHub
+          Source on GitHub
         </a>
       </div>
     </aside>
   );
 }
 
-export function AuthMobileBrand(): ReactElement {
+/** Mobile/tablet: the plate collapses into a charcoal band. */
+function PlateBand(): ReactElement {
   return (
-    <div className="mb-8 flex items-center gap-2.5 lg:hidden">
-      <BrandLogo className="size-8 shadow-sm" />
-      <span className="text-[15px] font-semibold tracking-tight">TokenPanel</span>
+    <div className="flex items-center gap-2.5 bg-sidebar px-5 py-4 text-sidebar-foreground lg:hidden">
+      <BrandLogo className="size-7 ring-1 ring-sidebar-border" />
+      <span className="text-[15px] font-semibold tracking-[-0.01em]">TokenPanel</span>
+      <span className="ml-auto text-xs text-sidebar-legend">Admin console</span>
+    </div>
+  );
+}
+
+export function AuthShell({
+  title,
+  description,
+  children,
+  footer,
+}: {
+  title: string;
+  description?: ReactNode;
+  children: ReactNode;
+  footer?: ReactNode;
+}): ReactElement {
+  return (
+    <div className="flex min-h-[100dvh] flex-col bg-background lg:flex-row">
+      <PlateBand />
+      <FrontPlate />
+      <main className="flex flex-1 flex-col px-5 pb-12 pt-10 sm:px-10 sm:pt-16 lg:justify-center lg:py-10">
+        <div className="mx-auto w-full max-w-[25rem]">
+          <header className="mb-7">
+            <h1 className="text-[26px] font-semibold leading-tight tracking-[-0.02em]">{title}</h1>
+            {description ? (
+              <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{description}</p>
+            ) : null}
+          </header>
+          {children}
+          {footer ? (
+            <div className="mt-8 border-t border-border pt-5 text-[13px] leading-relaxed text-muted-foreground">
+              {footer}
+            </div>
+          ) : null}
+        </div>
+      </main>
+    </div>
+  );
+}
+
+export function AuthLoading(): ReactElement {
+  return (
+    <div className="flex min-h-[100dvh] items-center justify-center bg-background" role="status">
+      <span className="flex items-center gap-2.5 text-sm text-muted-foreground">
+        <BrandLogo className="size-6" />
+        Loading…
+      </span>
     </div>
   );
 }

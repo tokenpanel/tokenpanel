@@ -120,9 +120,25 @@ fi
 
 # ── 7. Clone or update the repo ──
 echo
+# A live install is updated by the manager (backup, ordered migrations,
+# rollback), never by re-running the installer over it.
+if [ -d "$INSTALL_DIR/.git" ] && docker image inspect tokenpanel/app:current >/dev/null 2>&1; then
+  echo "✓ TokenPanel is already installed at ${INSTALL_DIR}"
+  echo
+  echo "  Update to the latest release:  sudo tokenpanel update"
+  echo "  Re-run setup (same version):   sudo ${INSTALL_DIR}/manager/bin/tokenpanel-setup"
+  exit 0
+fi
 if [ -d "$INSTALL_DIR/.git" ]; then
   echo "→ Existing install found at $INSTALL_DIR. Updating..."
-  git -C "$INSTALL_DIR" fetch --prune origin
+  tp_orig_head="$(git -C "$INSTALL_DIR" rev-parse HEAD)"
+  # Older installers made depth-1 clones; release ancestry needs full history.
+  # Tags are force-fetched and pruned so moved or deleted release tags apply.
+  tp_fetch_args=(fetch --tags --force --prune --prune-tags origin)
+  if [ "$(git -C "$INSTALL_DIR" rev-parse --is-shallow-repository 2>/dev/null)" = "true" ]; then
+    tp_fetch_args=(fetch --unshallow --tags --force --prune --prune-tags origin)
+  fi
+  git -C "$INSTALL_DIR" "${tp_fetch_args[@]}"
 
   # Detect local modifications, staged changes, or untracked files. A hard
   # reset to origin/$BRANCH would DISCARD all of them. This also protects the
@@ -146,8 +162,20 @@ if [ -d "$INSTALL_DIR/.git" ]; then
     esac
   fi
 
-  git -C "$INSTALL_DIR" reset --hard "origin/$BRANCH"
-  echo '✓ Repository updated'
+  git -C "$INSTALL_DIR" reset -q --hard "origin/$BRANCH"
+  # shellcheck source=lib/release.sh
+  source "$INSTALL_DIR/manager/lib/release.sh"
+  tp_target="$(latest_stable_tag "$INSTALL_DIR" "origin/$BRANCH")"
+  tp_target_ref="${tp_target:-origin/$BRANCH}"
+  # Never move an install backwards: a checkout already past the latest
+  # release (prerelease or pre-release main build) stays where it was.
+  if [ "$(tp_commit_of "$INSTALL_DIR" "$tp_target_ref")" != "$tp_orig_head" ] \
+    && git -C "$INSTALL_DIR" merge-base --is-ancestor "$tp_target_ref" "$tp_orig_head" 2>/dev/null; then
+    echo "→ Installed checkout is newer than ${tp_target:-origin/$BRANCH}; keeping it"
+    tp_target_ref="$tp_orig_head"
+  fi
+  git -C "$INSTALL_DIR" checkout -q --detach "$tp_target_ref"
+  echo "✓ Repository updated ($(tp_describe_commit "$INSTALL_DIR" HEAD))"
 else
   echo "→ Cloning TokenPanel to $INSTALL_DIR..."
   mkdir -p "$(dirname "$INSTALL_DIR")"
@@ -156,8 +184,17 @@ else
     err "move it aside or set TOKENPANEL_INSTALL_DIR to a different path"
     exit 1
   fi
-  git clone --branch "$BRANCH" --depth 1 "$REPO_URL" "$INSTALL_DIR"
-  echo '✓ Repository cloned'
+  # Full clone: updates compare release ancestry, which a shallow clone lacks.
+  git clone --branch "$BRANCH" "$REPO_URL" "$INSTALL_DIR"
+  # shellcheck source=lib/release.sh
+  source "$INSTALL_DIR/manager/lib/release.sh"
+  tp_target="$(latest_stable_tag "$INSTALL_DIR" "origin/$BRANCH")"
+  if [ -n "$tp_target" ]; then
+    git -C "$INSTALL_DIR" checkout -q --detach "$tp_target"
+    echo "✓ Repository cloned (release ${tp_target})"
+  else
+    echo "✓ Repository cloned (no release yet; using ${BRANCH})"
+  fi
 fi
 
 # ── 8. Hand off to setup wizard ──

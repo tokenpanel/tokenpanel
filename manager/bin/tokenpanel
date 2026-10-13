@@ -14,6 +14,7 @@ source "${SCRIPT_DIR}/../lib/prompt.sh"
 source "${SCRIPT_DIR}/../lib/preflight.sh"
 source "${SCRIPT_DIR}/../lib/health.sh"
 source "${SCRIPT_DIR}/../lib/lock.sh"
+source "${SCRIPT_DIR}/../lib/release.sh"
 
 MANAGER_VERSION="$(cat "${SCRIPT_DIR}/../VERSION" 2>/dev/null || echo 'unknown')"
 
@@ -50,7 +51,7 @@ Lifecycle:
   start        Start all services (preflight + health + post migrations)
   stop         Stop all services
   restart      Restart all services
-  rebuild      Rebuild image, recreate containers, apply post migrations
+  rebuild      Rebuild the deployed version's image, recreate, apply post migrations
 
 Updates:
   update       Update to latest stable (backup → build → migrate → swap)
@@ -82,9 +83,7 @@ cmd_status() {
   step "status" "containers:"
   docker compose -f "$APP_YML" ps --format 'table {{.Name}}\t{{.Status}}\t{{.Ports}}' 2>/dev/null || warn "containers not running"
 
-  local app_version
-  app_version="$(cd "$INSTALL_DIR" 2>/dev/null && git describe --tags 2>/dev/null || echo 'unknown')"
-  info "app version: $app_version"
+  info "app version: $(deployed_app_version)"
 
   local last_backup
   last_backup="$(find "$BACKUP_DIR" -maxdepth 1 -type f -name '*.gz' 2>/dev/null | sort | tail -1 || true)"
@@ -254,21 +253,50 @@ cmd_doctor() {
   [ "$fail" -eq 0 ] && ok "all checks passed" || { err "issues found"; exit 1; }
 }
 
+# Version of the deployed image. Falls back to the checkout for deployments
+# whose image commit cannot be resolved.
+deployed_app_version() {
+  local rev
+  rev="$(deployed_revision "$INSTALL_DIR")"
+  if [ -n "$rev" ]; then
+    tp_describe_commit "$INSTALL_DIR" "$rev"
+    return 0
+  fi
+  (cd "$INSTALL_DIR" 2>/dev/null && git describe --tags 2>/dev/null) || echo 'unknown'
+}
+
 cmd_version() {
   echo "TokenPanel Manager v${MANAGER_VERSION}"
-  local app_version commit
-  app_version="$(cd "$INSTALL_DIR" 2>/dev/null && git describe --tags 2>/dev/null || echo 'unknown')"
-  commit="$(cd "$INSTALL_DIR" 2>/dev/null && git rev-parse --short HEAD 2>/dev/null || echo 'unknown')"
-  echo "App: ${app_version}"
-  echo "Commit: ${commit}"
+  local rev checkout
+  rev="$(deployed_revision "$INSTALL_DIR")"
+  checkout="$(tp_commit_of "$INSTALL_DIR" HEAD 2>/dev/null || true)"
+  echo "App: $(deployed_app_version)"
+  local commit="${rev:-$checkout}"
+  if [ -n "$commit" ]; then
+    echo "Commit: ${commit:0:7}"
+  else
+    echo "Commit: unknown"
+  fi
+  if [ -n "$rev" ] && [ -n "$checkout" ] && [ "$rev" != "$checkout" ]; then
+    echo "Checkout: $(tp_describe_commit "$INSTALL_DIR" "$checkout") (differs from deployed app; run: tokenpanel update)"
+  fi
 }
 
 cmd_rebuild() {
+  local force=0
+  case "${1:-}" in
+    --force) force=1 ;;
+    '') ;;
+    *) die "usage: tokenpanel rebuild [--force]" ;;
+  esac
+
   source "${SCRIPT_DIR}/../lib/build.sh"
   source "${SCRIPT_DIR}/../lib/config_render.sh"
 
   acquire_manager_lock "rebuild" || die "could not acquire manager lock"
   preflight_quick || die "preflight failed"
+  require_checkout_matches_deployed "tokenpanel rebuild" "$force" \
+    || die "rebuild refused — app unchanged"
   step "rebuild" "building current checkout image..."
   CURRENT_IMAGE_ID="$(docker compose -f "$APP_YML" images api --format '{{.ID}}' 2>/dev/null | head -1)"
   build_current_checkout_image || die "build failed — old container still available"
@@ -369,6 +397,66 @@ cmd_reset() {
   info "to reinstall: tokenpanel-setup"
 }
 
+# Decide whether moving from the deployed commit to target_ref is allowed.
+# Returns 0 to proceed, 3 when there is nothing to do, 1 when refused.
+update_gate() {
+  local channel="$1" target_ref="$2" deployed_rev="$3" current_version="$4"
+  local relation
+  relation="$(tp_update_relation "$INSTALL_DIR" "$target_ref" "$deployed_rev")"
+  case "$relation" in
+    upgrade)
+      return 0
+      ;;
+    same)
+      if [ "$channel" = "stable" ]; then
+        ok "already up to date ($current_version) — nothing to update"
+        return 3
+      fi
+      info "$target_ref is already deployed — re-applying it"
+      return 0
+      ;;
+    downgrade)
+      if [ "$channel" = "stable" ]; then
+        ok "deployed build $current_version is newer than the latest release $target_ref — nothing to update"
+        return 3
+      fi
+      err "refusing downgrade: $current_version → $target_ref. Restore from backup instead."
+      return 1
+      ;;
+    diverged)
+      if [ "$channel" = "stable" ]; then
+        err "deployed build $current_version is not in the history of $target_ref"
+        err "to install it anyway: tokenpanel update $target_ref"
+        return 1
+      fi
+      warn "deployed build $current_version is not in the history of $target_ref — installing as requested"
+      ;;
+  esac
+
+  # Unknown history (legacy image without a resolvable commit) or a diverged
+  # explicit target: fall back to comparing version strings.
+  local cmp=0
+  semver_ge "$target_ref" "$current_version" || cmp=$?
+  if [ "$cmp" -eq 1 ]; then
+    err "refusing downgrade: $current_version → $target_ref. Restore from backup instead."
+    return 1
+  elif [ "$cmp" -eq 2 ] && [ "$relation" = "unknown" ]; then
+    warn "cannot determine deployed version ($current_version) — skipping downgrade check"
+  fi
+  return 0
+}
+
+# A refused or no-op update must not leave the checkout (and so the installed
+# manager) on another commit than the deployed image.
+restore_deployed_checkout() {
+  local deployed_rev="$1" head
+  [ -n "$deployed_rev" ] || return 0
+  head="$(tp_commit_of "$INSTALL_DIR" HEAD || true)"
+  [ "$head" != "$deployed_rev" ] || return 0
+  git -C "$INSTALL_DIR" checkout -q --detach "$deployed_rev" 2>/dev/null \
+    || warn "could not move $INSTALL_DIR back to the deployed commit ${deployed_rev:0:12}"
+}
+
 cmd_update() {
   local target_version="${1:-}"
 
@@ -394,31 +482,72 @@ cmd_update() {
   step "1/7" "preflight checks..."
   preflight_full || die "preflight failed — aborting (nothing changed)"
 
-  local current_version
-  current_version="${TOKENPANEL_UPDATE_FROM_VERSION:-$(cd "$INSTALL_DIR" 2>/dev/null && git describe --tags 2>/dev/null || echo 'unknown')}"
-  if [ -n "$target_version" ]; then
-    info "target: $target_version (current: $current_version)"
-    if [ "$current_version" != "unknown" ]; then
-      local cmp=0
-      semver_ge "$target_version" "$current_version" || cmp=$?
-      if [ "$cmp" -eq 1 ]; then
-        die "refusing downgrade: $current_version → $target_version. Restore from backup instead."
-      elif [ "$cmp" -eq 2 ]; then
-        warn "cannot compare versions ($current_version / $target_version) — skipping downgrade check"
-      fi
+  # `stable`: no version requested, install the latest release. `explicit`:
+  # the operator named a version. Refreshed managers inherit the channel, so a
+  # resolved tag keeps no-arg semantics (no-op when already current).
+  local channel="${TOKENPANEL_UPDATE_CHANNEL:-}"
+  if [ -z "$channel" ]; then
+    if [ -n "$target_version" ]; then channel="explicit"; else channel="stable"; fi
+  fi
+
+  # Managers older than the release channel do not set REFS_FETCHED; they
+  # checked out origin/main and invoked its manager with no target. Fetching
+  # here also converts their depth-1 clone so ancestry checks work.
+  if [ "${TOKENPANEL_UPDATE_REFS_FETCHED:-0}" != "1" ]; then
+    fetch_update_refs || die "could not fetch releases — aborting (app unchanged)"
+  fi
+
+  if [ -z "$target_version" ]; then
+    target_version="$(latest_stable_tag "$INSTALL_DIR")"
+    if [ -n "$target_version" ]; then
+      info "latest stable release: $target_version"
+    else
+      warn "no stable release published yet — updating to origin/main"
     fi
+  fi
+  local target_ref="${target_version:-origin/main}"
+  tp_commit_of "$INSTALL_DIR" "$target_ref" >/dev/null \
+    || die "unknown version '$target_ref' — aborting (nothing changed)"
+
+  # The deployed image, not the checkout, says what is running: a failed
+  # update or a rollback leaves the checkout on the target commit.
+  local deployed_rev current_version
+  deployed_rev="$(deployed_revision "$INSTALL_DIR")"
+  if [ -n "$deployed_rev" ]; then
+    current_version="$(tp_describe_commit "$INSTALL_DIR" "$deployed_rev")"
   else
-    info "current: $current_version, target: latest stable"
+    current_version="${TOKENPANEL_UPDATE_FROM_VERSION:-$(cd "$INSTALL_DIR" 2>/dev/null && git describe --tags 2>/dev/null || echo 'unknown')}"
+  fi
+  info "current: $current_version, target: $target_ref"
+
+  local gate_rc=0
+  update_gate "$channel" "$target_ref" "$deployed_rev" "$current_version" || gate_rc=$?
+  if [ "$gate_rc" -eq 3 ]; then
+    restore_deployed_checkout "$deployed_rev"
+    return 0
+  elif [ "$gate_rc" -ne 0 ]; then
+    restore_deployed_checkout "$deployed_rev"
+    die "update refused — app unchanged"
   fi
   ok "preflight passed"
 
   # The installed manager may be older than the target API. Load the target
   # manager before touching the current container so compatibility fixes in the
   # target release govern backup, migration, swap, and rollback behavior.
-  # Parent retains the manager lock while the refreshed child runs.
-  if [ "${TOKENPANEL_UPDATE_BOOTSTRAPPED:-0}" != "1" ]; then
-    step "bootstrap" "refreshing update manager..."
-    checkout_update_target "$target_version" \
+  # Parent retains the manager lock while the refreshed child runs. A refreshed
+  # manager hands off once more when its checkout is not the target: that is
+  # how managers that predate releases (which check out origin/main) reach the
+  # latest stable tag.
+  local head_commit target_commit
+  head_commit="$(tp_commit_of "$INSTALL_DIR" HEAD || true)"
+  target_commit="$(tp_commit_of "$INSTALL_DIR" "$target_ref")"
+  if [ "${TOKENPANEL_UPDATE_BOOTSTRAPPED:-0}" != "1" ] || [ "$head_commit" != "$target_commit" ]; then
+    local hops="${TOKENPANEL_UPDATE_HOPS:-0}"
+    case "$hops" in '' | *[!0-9]*) hops=0 ;; esac
+    [ "$hops" -lt 3 ] || die "update manager handoff loop — aborting (app unchanged)"
+
+    step "bootstrap" "loading the ${target_ref} update manager..."
+    checkout_update_ref "$target_ref" \
       || die "manager refresh failed — aborting (app unchanged)"
     ok "target manager loaded"
 
@@ -430,6 +559,9 @@ cmd_update() {
     TOKENPANEL_UPDATE_BOOTSTRAPPED=1 \
     TOKENPANEL_UPDATE_LOCK_FD="$MANAGER_LOCK_FD" \
     TOKENPANEL_UPDATE_FROM_VERSION="$current_version" \
+    TOKENPANEL_UPDATE_CHANNEL="$channel" \
+    TOKENPANEL_UPDATE_REFS_FETCHED=1 \
+    TOKENPANEL_UPDATE_HOPS="$((hops + 1))" \
       "$INSTALL_DIR/manager/bin/tokenpanel" "${update_args[@]}"
     return $?
   fi
@@ -544,10 +676,16 @@ cmd_update() {
     install_systemd_service || warn "could not refresh systemd unit — boot may still use raw compose; re-run tokenpanel-setup or install the unit manually"
   fi
 
+  local notes_url
+  notes_url="$(tp_release_notes_url "$INSTALL_DIR" "$target_version")"
+
   echo
   ok "══════════════════════════════════════"
-  ok "  Update complete: $current_version → ${target_version:-latest}"
+  ok "  Update complete: $current_version → ${target_version:-origin/main}"
   ok "  Backup: $(basename "$backup_file")"
+  if [ -n "$notes_url" ]; then
+    ok "  Release notes: $notes_url"
+  fi
   ok "══════════════════════════════════════"
 }
 
@@ -595,7 +733,7 @@ case "${1:-}" in
   start)    cmd_start ;;
   stop)     cmd_stop ;;
   restart)  cmd_restart ;;
-  rebuild)  cmd_rebuild ;;
+  rebuild)  shift; cmd_rebuild "$@" ;;
   destroy)  cmd_destroy ;;
   reset)    cmd_reset ;;
   logs)     shift; cmd_logs "$@" ;;

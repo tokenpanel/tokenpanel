@@ -1,0 +1,60 @@
+# git-cliff config: GitHub Release notes from Conventional Commits.
+# Used by .github/workflows/release.yml; preview with `bun run release:notes`.
+# https://git-cliff.org/docs/configuration
+
+[remote.github]
+owner = "tokenpanel"
+repo = "tokenpanel"
+
+[changelog]
+header = ""
+body = """
+{%- set repo_url = "https://github.com/" ~ remote.github.owner ~ "/" ~ remote.github.repo -%}
+{%- set breaking = commits | filter(attribute="breaking", value=true) -%}
+{%- if breaking | length > 0 %}
+### ⚠ Breaking changes
+{% for commit in breaking %}
+- {% if commit.scope %}**{{ commit.scope }}:** {% endif %}{{ commit.breaking_description | default(value=commit.message) | split(pat="
+") | join(sep=" ") | upper_first }} ([{{ commit.id | truncate(length=7, end="") }}]({{ repo_url }}/commit/{{ commit.id }}))
+{%- endfor %}
+{% endif %}
+{%- for group, commits in commits | group_by(attribute="group") %}
+### {{ group | striptags | trim }}
+{% for commit in commits %}
+- {% if commit.scope %}**{{ commit.scope }}:** {% endif %}{{ commit.message | upper_first }} ([{{ commit.id | truncate(length=7, end="") }}]({{ repo_url }}/commit/{{ commit.id }}))
+{%- endfor %}
+{% endfor %}
+{%- if version and previous and previous.version %}
+**Full changelog:** {{ repo_url }}/compare/{{ previous.version }}...{{ version }}
+{% endif -%}
+"""
+footer = ""
+trim = true
+
+[git]
+conventional_commits = true
+# Merge commits ("Merge branch 'dev'") and other non-conventional subjects are
+# left out of the notes.
+filter_unconventional = true
+split_commits = false
+protect_breaking_commits = true
+filter_commits = true
+topo_order = false
+sort_commits = "oldest"
+# Prerelease notes cover commits since the previous tag of any kind. For a
+# stable tag the release workflow passes a stable-only --tag-pattern, so notes
+# after v1.2.0-rc.1 still list everything since v1.1.0.
+tag_pattern = "^v[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?$"
+commit_parsers = [
+  { message = "^feat", group = "<!-- 0 -->Features" },
+  { message = "^fix", group = "<!-- 1 -->Bug fixes" },
+  { message = "^perf", group = "<!-- 2 -->Performance" },
+  { message = "^refactor", group = "<!-- 3 -->Refactoring" },
+  { message = "^docs", group = "<!-- 4 -->Documentation" },
+  { message = "^revert", group = "<!-- 5 -->Reverts" },
+  { message = "^build", group = "<!-- 6 -->Build" },
+  { message = "^ci", group = "<!-- 7 -->CI" },
+  { message = "^test", skip = true },
+  { message = "^style", skip = true },
+  { message = "^chore", skip = true },
+]

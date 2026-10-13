@@ -14,7 +14,7 @@ setup("first-run signup creates the initial admin", async ({ page }) => {
   // Fresh database → the SPA redirects to first-run signup.
   await page.waitForURL(/\/signup$/);
   await expect(
-    page.getByRole("heading", { name: "Create your admin account" }),
+    page.getByRole("heading", { name: "Set up TokenPanel" }),
   ).toBeVisible();
 
   await page.locator("#signup-email").fill(ADMIN_EMAIL);

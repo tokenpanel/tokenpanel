@@ -38,11 +38,11 @@ export function Slider({
       disabled={disabled}
       onChange={(e) => onChange(Number(e.target.value))}
       className={cn(
-        "tp-slider h-1.5 w-full cursor-pointer appearance-none rounded-full outline-none disabled:cursor-not-allowed disabled:opacity-50",
+        "tp-slider h-[3px] w-full cursor-pointer appearance-none rounded-full outline-none disabled:cursor-not-allowed disabled:opacity-50",
         className,
       )}
       style={{
-        background: `linear-gradient(to right, var(--primary) 0%, var(--primary) ${pct}%, var(--input) ${pct}%, var(--input) 100%)`,
+        background: `linear-gradient(to right, var(--signal) 0%, var(--signal) ${pct}%, var(--input) ${pct}%, var(--input) 100%)`,
       }}
       {...rest}
     />

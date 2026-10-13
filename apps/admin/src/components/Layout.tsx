@@ -15,6 +15,7 @@ import {
   Check,
   Plus,
   ShieldCheck,
+  PanelLeft,
 } from "lucide-react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 import { hasPermission, useAuth } from "../auth/AuthContext.tsx";
@@ -22,13 +23,6 @@ import type { PanelPermission } from "../auth/AuthContext.tsx";
 import { getJson } from "../api/client.ts";
 import type { OrganizationListResponse, Organization } from "../api/types.ts";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import {
-  Breadcrumb,
-  BreadcrumbItem,
-  BreadcrumbList,
-  BreadcrumbPage,
-  BreadcrumbSeparator,
-} from "@/components/ui/breadcrumb";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -50,11 +44,11 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarRail,
-  SidebarTrigger,
   useSidebar,
 } from "@/components/ui/sidebar";
 import { cn } from "@/lib/utils";
 import BrandLogo from "@/components/BrandLogo";
+import { ThemeCycleButton, ThemeSwitch } from "@/components/ThemeSwitch";
 
 interface NavItem {
   to: string;
@@ -131,14 +125,15 @@ export function orgInitials(name: string): string {
   return `${parts[0]?.[0] ?? ""}${parts[1]?.[0] ?? ""}`.toUpperCase();
 }
 
-function OrgSwitcher(): React.ReactElement {
-  const { user, switchOrganization } = useAuth();
-  const { state, isMobile } = useSidebar();
-  // Mobile sheet is always full-width chrome; collapse only applies on desktop.
-  const collapsed = !isMobile && state === "collapsed";
+/** Shared org list so the rail switcher and the top bar agree on the name. */
+function useOrganizations(): {
+  orgs: Organization[];
+  activeId: string;
+  setActiveId: (id: string) => void;
+} {
+  const { user } = useAuth();
   const [orgs, setOrgs] = useState<Organization[]>([]);
   const [activeId, setActiveId] = useState<string>(user?.activeOrganizationId ?? "");
-  const [switchingId, setSwitchingId] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -158,8 +153,38 @@ function OrgSwitcher(): React.ReactElement {
     };
   }, [user?.activeOrganizationId]);
 
+  return { orgs, activeId, setActiveId };
+}
+
+function OrgMark({ name, active, className }: { name: string; active?: boolean; className?: string }): React.ReactElement {
+  return (
+    <span
+      aria-hidden
+      className={cn(
+        "flex shrink-0 items-center justify-center rounded-[5px] font-semibold tracking-tight",
+        active
+          ? "bg-sidebar-foreground text-sidebar"
+          : "bg-sidebar-accent text-sidebar-foreground ring-1 ring-inset ring-sidebar-border",
+        className,
+      )}
+    >
+      {orgInitials(name)}
+    </span>
+  );
+}
+
+function OrgSwitcher({
+  orgs,
+  activeId,
+  setActiveId,
+}: ReturnType<typeof useOrganizations>): React.ReactElement {
+  const { user, switchOrganization } = useAuth();
+  const { state, isMobile } = useSidebar();
+  const collapsed = !isMobile && state === "collapsed";
+  const [switchingId, setSwitchingId] = useState<string | null>(null);
+
   const active = orgs.find((o) => o.id === activeId) ?? null;
-  const mark = orgInitials(active?.name ?? "Org");
+  const activeName = active?.name ?? "Organization";
 
   async function onSwitch(orgId: string) {
     if (orgId === activeId) return;
@@ -176,39 +201,24 @@ function OrgSwitcher(): React.ReactElement {
 
   const menu = (
     <>
-      <DropdownMenuLabel className="font-normal">
-        <div className="flex flex-col gap-0.5">
-          <span className="text-xs text-muted-foreground">Organizations</span>
-          <span className="text-sm font-medium truncate">
-            {active?.name ?? "Select organization"}
-          </span>
-        </div>
-      </DropdownMenuLabel>
-      <DropdownMenuSeparator />
+      <DropdownMenuLabel>Switch organization</DropdownMenuLabel>
       {orgs.map((org) => (
         <DropdownMenuItem
           key={org.id}
           onClick={() => void onSwitch(org.id)}
           disabled={switchingId === org.id || org.id === activeId}
-          className="gap-2"
+          className="gap-2.5 data-[disabled]:opacity-100"
         >
           <span
             className={cn(
-              "flex size-6 shrink-0 items-center justify-center rounded-md text-[10px] font-semibold",
-              org.id === activeId
-                ? "bg-foreground/10 text-foreground"
-                : "bg-muted text-muted-foreground",
+              "flex size-6 shrink-0 items-center justify-center rounded-[4px] text-[10px] font-semibold",
+              org.id === activeId ? "bg-foreground text-background" : "bg-secondary text-secondary-foreground",
             )}
           >
             {orgInitials(org.name)}
           </span>
           <span className="min-w-0 flex-1 truncate">{org.name}</span>
-          <Check
-            className={cn(
-              "size-3.5 shrink-0",
-              org.id === activeId ? "opacity-100 text-foreground" : "opacity-0",
-            )}
-          />
+          {org.id === activeId ? <Check className="size-3.5 text-signal" strokeWidth={2.5} /> : null}
         </DropdownMenuItem>
       ))}
       <DropdownMenuSeparator />
@@ -227,18 +237,14 @@ function OrgSwitcher(): React.ReactElement {
         <DropdownMenuTrigger asChild>
           <button
             type="button"
-            className={cn(
-              "flex size-8 items-center justify-center rounded-lg outline-none transition-all",
-              "bg-sidebar-accent text-sidebar-foreground ring-1 ring-inset ring-sidebar-border",
-              "hover:bg-sidebar-accent/80 focus-visible:ring-2 focus-visible:ring-sidebar-ring",
-            )}
-            aria-label="Switch organization"
-            title={active?.name ?? "Organizations"}
+            className="flex size-8 items-center justify-center rounded-md outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring"
+            aria-label={`Organization: ${activeName}. Switch organization`}
+            title={activeName}
           >
-            <span className="text-[10px] font-bold tracking-tight">{mark}</span>
+            <OrgMark name={activeName} active className="size-8 text-[11px]" />
           </button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent side="right" align="start" className="w-60">
+        <DropdownMenuContent side="right" align="start" className="w-64">
           {menu}
         </DropdownMenuContent>
       </DropdownMenu>
@@ -251,35 +257,24 @@ function OrgSwitcher(): React.ReactElement {
         <button
           type="button"
           className={cn(
-            "flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-left outline-none transition-all",
-            "border border-sidebar-border/80 bg-sidebar-accent/40",
-            "hover:bg-sidebar-accent hover:border-sidebar-border",
+            "group flex w-full items-center gap-2.5 rounded-lg p-1.5 pr-2 text-left outline-none transition-colors",
+            "bg-sidebar-accent/70 ring-1 ring-inset ring-sidebar-border hover:bg-sidebar-accent",
             "focus-visible:ring-2 focus-visible:ring-sidebar-ring",
           )}
-          aria-label="Switch organization"
+          aria-label={`Organization: ${activeName}. Switch organization`}
         >
-          <div
-            className={cn(
-              "flex size-8 shrink-0 items-center justify-center rounded-lg text-[11px] font-bold",
-              "bg-sidebar-accent text-sidebar-foreground ring-1 ring-inset ring-sidebar-border",
-            )}
-          >
-            {mark}
-          </div>
-          <div className="flex min-w-0 flex-1 flex-col leading-tight">
-            <span className="truncate text-sm font-medium text-sidebar-foreground">
-              {active?.name ?? "Organization"}
+          <OrgMark name={activeName} active className="size-8 text-[11px]" />
+          <span className="flex min-w-0 flex-1 flex-col leading-tight">
+            <span className="truncate text-[13px] font-medium text-sidebar-foreground">{activeName}</span>
+            <span className="truncate text-[11.5px] capitalize text-sidebar-legend">
+              {user?.role ?? "member"}
+              {orgs.length > 1 ? ` · ${orgs.length} orgs` : ""}
             </span>
-            <span className="truncate text-[11px] text-sidebar-foreground/70">
-              {orgs.length === 0
-                ? "No organizations"
-                : `${orgs.length} organization${orgs.length === 1 ? "" : "s"}`}
-            </span>
-          </div>
-          <ChevronsUpDown className="size-3.5 shrink-0 text-sidebar-foreground/60" />
+          </span>
+          <ChevronsUpDown className="size-3.5 shrink-0 text-sidebar-legend transition-colors group-hover:text-sidebar-foreground" />
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent side="bottom" align="start" className="w-64">
+      <DropdownMenuContent side="bottom" align="start" className="w-[var(--radix-dropdown-menu-trigger-width)] min-w-56">
         {menu}
       </DropdownMenuContent>
     </DropdownMenu>
@@ -292,26 +287,18 @@ function BrandHeader(): React.ReactElement {
   return (
     <div
       className={cn(
-        "relative flex h-14 items-center gap-3",
-        collapsed ? "justify-center px-0" : "px-2.5",
+        "flex h-14 items-center gap-2.5",
+        collapsed ? "justify-center px-0" : "px-3",
         // Room for sheet close (X) on mobile drawer
         isMobile && "pr-12",
       )}
     >
-      <BrandLogo className="size-8 shadow-md ring-1 ring-sidebar-border/60" />
-      <div
-        className={cn(
-          "flex min-w-0 flex-col leading-tight whitespace-nowrap overflow-hidden transition-[width,opacity] duration-200 ease-linear",
-          collapsed ? "w-0 opacity-0" : "w-auto opacity-100",
-        )}
-      >
-        <span className="text-[15px] font-semibold tracking-tight text-sidebar-foreground">
+      <BrandLogo className="size-7 ring-1 ring-sidebar-border" />
+      {collapsed ? null : (
+        <span className="text-[15px] font-semibold tracking-[-0.01em] text-sidebar-foreground">
           TokenPanel
         </span>
-        <span className="text-[11px] font-medium tracking-wide text-sidebar-foreground/70">
-          Admin console
-        </span>
-      </div>
+      )}
     </div>
   );
 }
@@ -330,10 +317,10 @@ function NavSections(): React.ReactElement {
   return (
     <>
       {sections.map((section) => (
-        <SidebarGroup key={section.label} className="py-1.5">
+        <SidebarGroup key={section.label} className="px-2 py-1">
           <SidebarGroupLabel>{section.label}</SidebarGroupLabel>
           <SidebarGroupContent>
-            <SidebarMenu>
+            <SidebarMenu className="gap-px">
               {section.items.map((item) => {
                 const Icon = item.icon;
                 const isActive =
@@ -341,17 +328,22 @@ function NavSections(): React.ReactElement {
                     ? location.pathname === "/"
                     : location.pathname.startsWith(item.to);
                 return (
-                  <SidebarMenuItem
-                    key={item.to}
-                    className={cn(
-                      isActive &&
-                        "before:absolute before:left-0 before:top-1/2 before:z-10 before:h-3.5 before:w-0.5 before:-translate-y-1/2 before:rounded-full before:bg-sidebar-foreground/80",
-                    )}
-                  >
-                    <SidebarMenuButton asChild isActive={isActive} tooltip={item.label}>
-                      <NavLink to={item.to} end={item.to === "/"}>
-                        <Icon className="size-4 shrink-0" strokeWidth={isActive ? 2 : 1.75} />
-                        <span>{item.label}</span>
+                  <SidebarMenuItem key={item.to}>
+                    <SidebarMenuButton
+                      asChild
+                      isActive={isActive}
+                      tooltip={item.label}
+                      className="h-8 data-[active=true]:bg-sidebar-accent data-[active=true]:text-sidebar-foreground"
+                    >
+                      <NavLink to={item.to} end={item.to === "/"} aria-current={isActive ? "page" : undefined}>
+                        <Icon className="size-4 shrink-0" strokeWidth={isActive ? 2 : 1.7} />
+                        <span className="flex-1">{item.label}</span>
+                        {isActive ? (
+                          <span
+                            aria-hidden
+                            className="ml-auto size-1.5 shrink-0 rounded-full bg-sidebar-primary shadow-[0_0_0_3px_oklch(0.66_0.19_266/0.18)] group-data-[collapsible=icon]:hidden"
+                          />
+                        ) : null}
                       </NavLink>
                     </SidebarMenuButton>
                   </SidebarMenuItem>
@@ -371,43 +363,45 @@ function SidebarUser(): React.ReactElement {
   const collapsed = !isMobile && state === "collapsed";
   const initials = (user?.username ?? "U").slice(0, 2).toUpperCase();
 
+  const content = (
+    <>
+      <DropdownMenuLabel className="flex flex-col gap-0.5">
+        <span className="text-sm font-medium text-foreground">{user?.username ?? ""}</span>
+        <span className="truncate text-xs font-normal text-muted-foreground">{user?.email ?? ""}</span>
+      </DropdownMenuLabel>
+      <DropdownMenuSeparator />
+      <DropdownMenuItem asChild>
+        <NavLink to="/settings">
+          <Settings className="size-4" />
+          <span>Account settings</span>
+        </NavLink>
+      </DropdownMenuItem>
+      <DropdownMenuItem onClick={() => void logout()}>
+        <LogOut className="size-4" />
+        <span>Sign out</span>
+      </DropdownMenuItem>
+    </>
+  );
+
   if (collapsed) {
     return (
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <button
             type="button"
-            className="flex size-8 items-center justify-center rounded-lg outline-none ring-1 ring-sidebar-border transition-colors hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-sidebar-ring"
-            aria-label="User menu"
+            className="flex size-8 items-center justify-center rounded-full outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring"
+            aria-label="Account menu"
             title={user?.username ?? "Account"}
           >
             <Avatar className="size-7">
-              <AvatarFallback className="bg-sidebar-accent text-[10px] font-semibold text-sidebar-foreground">
+              <AvatarFallback className="bg-sidebar-accent text-[10px] text-sidebar-foreground ring-1 ring-inset ring-sidebar-border">
                 {initials}
               </AvatarFallback>
             </Avatar>
           </button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent side="right" align="end" className="w-52">
-          <DropdownMenuLabel className="font-normal">
-            <div className="flex flex-col gap-0.5">
-              <span className="text-sm font-medium">{user?.username ?? ""}</span>
-              <span className="text-xs text-muted-foreground truncate">
-                {user?.email ?? ""}
-              </span>
-            </div>
-          </DropdownMenuLabel>
-          <DropdownMenuSeparator />
-          <DropdownMenuItem asChild>
-            <NavLink to="/settings">
-              <Settings className="size-4" />
-              <span>Settings</span>
-            </NavLink>
-          </DropdownMenuItem>
-          <DropdownMenuItem onClick={() => void logout()}>
-            <LogOut className="size-4" />
-            <span>Log out</span>
-          </DropdownMenuItem>
+        <DropdownMenuContent side="right" align="end" className="w-56">
+          {content}
         </DropdownMenuContent>
       </DropdownMenu>
     );
@@ -419,66 +413,79 @@ function SidebarUser(): React.ReactElement {
         <button
           type="button"
           className={cn(
-            "flex w-full items-center gap-2.5 rounded-xl px-2 py-2 text-left outline-none transition-all",
+            "flex min-w-0 flex-1 items-center gap-2.5 rounded-md p-1 pr-1.5 text-left outline-none transition-colors",
             "hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-sidebar-ring",
           )}
-          aria-label="User menu"
+          aria-label="Account menu"
         >
-          <Avatar className="size-8 ring-1 ring-sidebar-border/70">
-            <AvatarFallback className="bg-sidebar-accent text-xs font-semibold text-sidebar-foreground">
+          <Avatar className="size-7">
+            <AvatarFallback className="bg-sidebar-accent text-[10px] text-sidebar-foreground ring-1 ring-inset ring-sidebar-border">
               {initials}
             </AvatarFallback>
           </Avatar>
-          <div className="flex min-w-0 flex-1 flex-col leading-tight">
-            <span className="truncate text-sm font-medium text-sidebar-foreground">
-              {user?.username ?? ""}
-            </span>
-            <span className="truncate text-[11px] capitalize text-sidebar-foreground/70">
-              {user?.role ?? "member"}
-            </span>
-          </div>
-          <ChevronsUpDown className="size-3.5 shrink-0 text-sidebar-foreground/60" />
+          <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-sidebar-foreground">
+            {user?.username ?? ""}
+          </span>
+          <ChevronsUpDown className="size-3.5 shrink-0 text-sidebar-legend" />
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent side="top" align="start" className="w-56">
-        <DropdownMenuLabel className="font-normal">
-          <div className="flex flex-col gap-0.5">
-            <span className="text-sm font-medium">{user?.username ?? ""}</span>
-            <span className="text-xs text-muted-foreground truncate">
-              {user?.email ?? ""}
-            </span>
-          </div>
-        </DropdownMenuLabel>
-        <DropdownMenuSeparator />
-        <DropdownMenuItem asChild>
-          <NavLink to="/settings">
-            <Settings className="size-4" />
-            <span>Settings</span>
-          </NavLink>
-        </DropdownMenuItem>
-        <DropdownMenuItem onClick={() => void logout()}>
-          <LogOut className="size-4" />
-          <span>Log out</span>
-        </DropdownMenuItem>
+        {content}
       </DropdownMenuContent>
     </DropdownMenu>
   );
 }
 
-function HeaderBreadcrumb({ pathname }: { pathname: string }): React.ReactElement {
-  const label = pathLabel(pathname);
+function RailFooter(): React.ReactElement {
+  const { state, isMobile } = useSidebar();
+  const collapsed = !isMobile && state === "collapsed";
+  if (collapsed) {
+    return (
+      <div className="flex flex-col items-center gap-2 py-2.5">
+        <ThemeCycleButton />
+        <SidebarUser />
+      </div>
+    );
+  }
   return (
-    <Breadcrumb>
-      <BreadcrumbList>
-        <BreadcrumbItem>
-          <span className="text-muted-foreground">TokenPanel</span>
-        </BreadcrumbItem>
-        <BreadcrumbSeparator />
-        <BreadcrumbItem>
-          <BreadcrumbPage>{label}</BreadcrumbPage>
-        </BreadcrumbItem>
-      </BreadcrumbList>
-    </Breadcrumb>
+    <div className="flex flex-col gap-2.5 px-3 pb-3 pt-2.5">
+      <div className="flex items-center justify-between gap-3">
+        <span className="legend text-sidebar-legend">Theme</span>
+        <ThemeSwitch className="w-[6.75rem]" />
+      </div>
+      <div className="flex items-center gap-2">
+        <SidebarUser />
+        <span className="shrink-0 text-[10.5px] tabular-nums text-sidebar-legend">v0.1.0</span>
+      </div>
+    </div>
+  );
+}
+
+function TopBar({ orgName }: { orgName: string | null }): React.ReactElement {
+  const location = useLocation();
+  const { toggleSidebar } = useSidebar();
+  const label = pathLabel(location.pathname);
+  return (
+    <header className="sticky top-0 z-30 flex h-12 shrink-0 items-center gap-2 border-b border-border bg-background px-3 sm:px-5">
+      <button
+        type="button"
+        onClick={toggleSidebar}
+        aria-label="Toggle navigation"
+        className="flex size-8 items-center justify-center rounded-md text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring"
+      >
+        <PanelLeft className="size-4" strokeWidth={1.8} />
+      </button>
+      <span aria-hidden className="mx-1 h-4 w-px bg-border" />
+      <nav aria-label="Location" className="flex min-w-0 items-center gap-1.5 text-[13px]">
+        {orgName ? (
+          <>
+            <span className="truncate text-muted-foreground">{orgName}</span>
+            <span aria-hidden className="text-muted-foreground/60">/</span>
+          </>
+        ) : null}
+        <span className="truncate font-medium text-foreground">{label}</span>
+      </nav>
+    </header>
   );
 }
 
@@ -497,49 +504,39 @@ function CloseMobileSidebarOnNavigate(): null {
 }
 
 export default function Layout(): React.ReactElement {
-  const location = useLocation();
   const { user } = useAuth();
-  // Dark-only shell — no theme toggle / useTheme.
+  const orgState = useOrganizations();
+  const activeOrg = orgState.orgs.find((o) => o.id === orgState.activeId) ?? null;
 
   return (
     <div className="flex min-h-svh w-full">
       <CloseMobileSidebarOnNavigate />
-      <Sidebar collapsible="icon" className="border-r border-sidebar-border/80">
-        <SidebarHeader className="gap-0 p-0 group-data-[collapsible=icon]:px-0">
+      <Sidebar collapsible="icon" className="border-r-0">
+        <SidebarHeader className="gap-0 p-0">
           <BrandHeader />
-          <div className="px-2.5 pb-3 group-data-[collapsible=icon]:flex group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-1 group-data-[collapsible=icon]:pb-2">
-            <OrgSwitcher />
+          <div className="px-2.5 pb-2 group-data-[collapsible=icon]:flex group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-1">
+            <OrgSwitcher {...orgState} />
           </div>
-          <div className="mx-3 h-px bg-sidebar-border/80 group-data-[collapsible=icon]:mx-2" />
         </SidebarHeader>
 
-        <SidebarContent className="px-1 py-2 group-data-[collapsible=icon]:px-0">
+        <SidebarContent className="gap-1 py-1.5">
           <NavSections />
         </SidebarContent>
 
-        <SidebarFooter className="gap-0 p-0 group-data-[collapsible=icon]:px-0">
-          <div className="mx-3 h-px bg-sidebar-border/80 group-data-[collapsible=icon]:mx-2" />
-          <div className="flex items-center justify-between gap-1 px-2.5 py-1.5 group-data-[collapsible=icon]:hidden">
-            <span className="text-[10px] font-medium tracking-wide text-sidebar-foreground/55">
-              v0.1.0
-            </span>
-          </div>
-          <div className="px-2 pb-2.5 group-data-[collapsible=icon]:flex group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-1 group-data-[collapsible=icon]:py-2">
-            <SidebarUser />
-          </div>
+        <SidebarFooter className="gap-0 border-t border-sidebar-border p-0">
+          <RailFooter />
         </SidebarFooter>
         <SidebarRail />
       </Sidebar>
 
-      <SidebarInset>
-        <header className="glass sticky top-0 z-30 flex h-14 shrink-0 items-center gap-3 border-b border-border/80 px-4 sm:px-6">
-          <SidebarTrigger />
-          <HeaderBreadcrumb pathname={location.pathname} />
-        </header>
-        <main className="flex-1 overflow-y-auto">
+      <SidebarInset className="min-w-0">
+        <TopBar orgName={activeOrg?.name ?? null} />
+        <main className="flex-1">
           {/* Remount page tree on org switch so lists + one-time secrets
               cannot leak across organizations via stale local state. */}
-          <Outlet key={user?.activeOrganizationId ?? "no-org"} />
+          <div className="mx-auto w-full max-w-[1440px] px-4 pb-16 pt-6 sm:px-6 lg:px-8 lg:pt-8">
+            <Outlet key={user?.activeOrganizationId ?? "no-org"} />
+          </div>
         </main>
       </SidebarInset>
     </div>

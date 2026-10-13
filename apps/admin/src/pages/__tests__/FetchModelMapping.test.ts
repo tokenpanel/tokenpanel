@@ -33,7 +33,7 @@ function baseForm(over: Partial<FormState> = {}): FormState {
     costInputAudioUnits: "",
     costOutputAudioUnits: "",
     currency: "USD",
-    marginBps: "0",
+    marginPercent: "0",
     firstProviderId: "p1",
     firstUpstreamModelId: "",
     metadataRows: [],
@@ -70,8 +70,8 @@ test("slugifyModelId: lowercases, / -> -, preserves dots, strips other character
   expect(slugifyModelId("gpt-5.6 luna")).toBe("gpt-5.6luna");
 });
 
-test("formFromFetched: maps all fields, keeps currency/marginBps/firstProviderId", () => {
-  const f = formFromFetched(mkModel(), baseForm({ currency: "EUR", marginBps: "100", firstProviderId: "p9" }));
+test("formFromFetched: maps all fields, keeps currency/marginPercent/firstProviderId", () => {
+  const f = formFromFetched(mkModel(), baseForm({ currency: "EUR", marginPercent: "1", firstProviderId: "p9" }));
   expect(f.aliasId).toBe("openai-gpt-5");
   expect(f.displayName).toBe("GPT-5");
   expect(f.reasoning).toBe(true);
@@ -90,7 +90,7 @@ test("formFromFetched: maps all fields, keeps currency/marginBps/firstProviderId
   expect(f.firstUpstreamModelId).toBe("openai/gpt-5");
   // preserved from base
   expect(f.currency).toBe("EUR");
-  expect(f.marginBps).toBe("100");
+  expect(f.marginPercent).toBe("1");
   expect(f.firstProviderId).toBe("p9");
 });
 

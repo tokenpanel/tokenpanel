@@ -30,9 +30,9 @@ test.describe("admin console (authenticated)", () => {
     await page.goto("/providers");
     await expect(page.getByText("No providers yet")).toBeVisible();
 
-    // Empty state + header both render "Add Provider"; the header one is first.
-    await reliableClick(page.getByRole("button", { name: "Add Provider" }).first());
-    await expect(page.getByRole("heading", { name: "Add Provider" })).toBeVisible();
+    // Empty state + header both render "Add provider"; the header one is first.
+    await reliableClick(page.getByRole("button", { name: "Add provider" }).first());
+    await expect(page.getByRole("heading", { name: "Add provider" })).toBeVisible();
 
     // Selecting the OpenAI preset autofills the adapter + base URL.
     await reliableClick(page.locator("#prov-preset"));
@@ -46,6 +46,6 @@ test.describe("admin console (authenticated)", () => {
     await reliableClick(page.getByRole("button", { name: "Create provider" }));
 
     // Dialog closes and the new provider appears in the table.
-    await expect(page.getByRole("cell", { name: "E2E OpenAI" })).toBeVisible();
+    await expect(page.getByText("E2E OpenAI", { exact: true })).toBeVisible();
   });
 });

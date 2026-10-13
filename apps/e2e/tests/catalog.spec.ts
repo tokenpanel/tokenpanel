@@ -3,7 +3,8 @@ import {
   expect,
   reliableClick,
   selectOption,
-  acceptNextDialog,
+  setUpstreamModel,
+  confirmAction,
   rowWith,
   createProvider,
   discoverProvider,
@@ -40,7 +41,7 @@ test.describe("catalog: providers + models", () => {
       baseUrl: MOCK_BASE_URL,
       apiKey: MOCK_API_KEY,
     });
-    await expect(page.getByRole("cell", { name: LIFECYCLE_PROVIDER })).toBeVisible();
+    await expect(rowWith(page, LIFECYCLE_PROVIDER)).toBeVisible();
   });
 
   test("discovers upstream models and shows them in the cached panel", async ({ page }) => {
@@ -48,33 +49,33 @@ test.describe("catalog: providers + models", () => {
 
     // Expand the cached-models panel for this provider and confirm a discovered
     // model id from the mock provider is present.
-    await reliableClick(rowWith(page, LIFECYCLE_PROVIDER).getByRole("button", { name: "Models" }));
-    await expect(page.getByText("Cached Models")).toBeVisible();
+    await reliableClick(rowWith(page, LIFECYCLE_PROVIDER).getByRole("button", { name: "Models", exact: true }));
+    await expect(page.getByText("Discovered upstream models")).toBeVisible();
     await expect(page.getByRole("cell", { name: PRIMARY_UPSTREAM, exact: true }).first()).toBeVisible();
   });
 
   test("renames a provider", async ({ page }) => {
     await renameProvider(page, LIFECYCLE_PROVIDER, RENAMED_PROVIDER);
-    await expect(page.getByRole("cell", { name: RENAMED_PROVIDER })).toBeVisible();
+    await expect(rowWith(page, RENAMED_PROVIDER)).toBeVisible();
   });
 
   test("disables then re-enables a provider", async ({ page }) => {
     // Disable.
     await toggleProviderActive(page, RENAMED_PROVIDER);
     await expect(
-      rowWith(page, RENAMED_PROVIDER).getByRole("switch", { name: "Toggle provider active" }),
+      rowWith(page, RENAMED_PROVIDER).getByRole("switch"),
     ).not.toBeChecked();
 
     // Re-enable.
     await toggleProviderActive(page, RENAMED_PROVIDER);
     await expect(
-      rowWith(page, RENAMED_PROVIDER).getByRole("switch", { name: "Toggle provider active" }),
+      rowWith(page, RENAMED_PROVIDER).getByRole("switch"),
     ).toBeChecked();
   });
 
   test("deletes a provider and removes its row", async ({ page }) => {
     await deleteProvider(page, RENAMED_PROVIDER);
-    await expect(page.getByRole("cell", { name: RENAMED_PROVIDER })).not.toBeVisible();
+    await expect(rowWith(page, RENAMED_PROVIDER)).not.toBeVisible();
   });
 
   // ---------------------------------------------------------------------------
@@ -97,8 +98,8 @@ test.describe("catalog: providers + models", () => {
       upstream: PRIMARY_UPSTREAM,
     });
 
-    await expect(page.getByRole("cell", { name: MODEL_ALIAS })).toBeVisible();
-    await expect(page.getByRole("cell", { name: MODEL_NAME })).toBeVisible();
+    await expect(rowWith(page, MODEL_ALIAS)).toBeVisible();
+    await expect(rowWith(page, MODEL_NAME)).toBeVisible();
   });
 
   test("edits the model display name and reflects it in the list", async ({ page }) => {
@@ -107,37 +108,37 @@ test.describe("catalog: providers + models", () => {
     await expect(page.locator("#m-name")).toBeVisible();
 
     await page.locator("#m-name").fill(MODEL_NAME_UPDATED);
-    await reliableClick(page.getByRole("button", { name: "Save", exact: true }));
+    await reliableClick(page.getByRole("button", { name: "Save changes", exact: true }));
 
     await page.goto("/models");
-    await expect(page.getByRole("cell", { name: MODEL_NAME_UPDATED })).toBeVisible();
+    await expect(rowWith(page, MODEL_NAME_UPDATED)).toBeVisible();
   });
 
   test("adds a second fallback entry via the edit view", async ({ page }) => {
     await page.goto("/models");
     await reliableClick(rowWith(page, MODEL_ALIAS).getByRole("button", { name: "Edit" }));
-    await expect(page.getByText("Fallback chain")).toBeVisible();
+    await expect(page.getByText("Provider routing")).toBeVisible();
 
     // Open the inline add-entry form.
-    await reliableClick(page.getByRole("button", { name: "Add Provider Entry" }));
+    await reliableClick(page.getByRole("button", { name: "Add route" }));
     await expect(page.locator("#ae-prov")).toBeVisible();
 
     await selectOption(page, page.locator("#ae-prov"), MODEL_PROVIDER);
 
     // This provider's catalog is empty (never discovered), so #ae-up renders as
     // a plain text input — fill the upstream id directly (no manual toggle).
-    await page.locator("#ae-up").fill(FALLBACK_UPSTREAM);
+    await setUpstreamModel(page, page.locator("#ae-up"), FALLBACK_UPSTREAM);
     await reliableClick(page.getByRole("button", { name: "Add entry" }));
 
-    // Bug #3 fixed: the fallback chain live-refreshes after add, so the new
+    // Bug #3 fixed: provider routing live-refreshes after add, so the new
     // entry appears in place — no re-navigation needed.
     await expect(page.getByText(FALLBACK_UPSTREAM).first()).toBeVisible();
   });
 
-  test("reorders the fallback chain by drag-and-drop", async ({ page }) => {
+  test("reorders provider routing by drag-and-drop", async ({ page }) => {
     await page.goto("/models");
     await reliableClick(rowWith(page, MODEL_ALIAS).getByRole("button", { name: "Edit" }));
-    await expect(page.getByText("Fallback chain")).toBeVisible();
+    await expect(page.getByText("Provider routing")).toBeVisible();
 
     const rows = page.locator("[draggable='true']");
     await expect(rows).toHaveCount(2);
@@ -161,7 +162,7 @@ test.describe("catalog: providers + models", () => {
     const saveDone = page.waitForResponse(
       (r) => r.request().method() === "PATCH" && r.url().includes("/admin/models/"),
     );
-    await reliableClick(page.getByRole("button", { name: "Save", exact: true }));
+    await reliableClick(page.getByRole("button", { name: "Save changes", exact: true }));
     const resp = await saveDone;
     expect(resp.status(), "PATCH /admin/models/:id succeeds").toBe(200);
 
@@ -172,13 +173,12 @@ test.describe("catalog: providers + models", () => {
     await expect(page.getByLabel("Metadata value 1")).toHaveValue(META_VALUE);
   });
 
-  test("deletes the model via native confirm and removes it from the list", async ({ page }) => {
+  test("deletes the model via the confirm dialog and removes it from the list", async ({ page }) => {
     await page.goto("/models");
 
-    // Native confirm(): register the accept handler BEFORE triggering delete.
-    acceptNextDialog(page);
     await reliableClick(rowWith(page, MODEL_ALIAS).getByRole("button", { name: "Delete" }));
+    await confirmAction(page, "Delete model");
 
-    await expect(page.getByRole("cell", { name: MODEL_ALIAS })).not.toBeVisible();
+    await expect(rowWith(page, MODEL_ALIAS)).not.toBeVisible();
   });
 });

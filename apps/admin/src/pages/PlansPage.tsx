@@ -8,7 +8,6 @@ import { Field } from "@/components/ui/field";
 import { UnitsPreview } from "@/components/ui/units-preview";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
-import { Card } from "@/components/ui/card";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import {
   Select,
@@ -18,10 +17,16 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { CreditCard, Plus, ShieldCheck, X } from "lucide-react";
+import { Panel, PanelHeader, SpecList } from "@/components/Instrument";
+import { WindowRuler, type WindowMarker } from "@/components/Scale";
+import { useConfirm } from "@/components/ConfirmDialog";
+import { CurrencySelect } from "@/components/CurrencySelect";
+import { ModelAliasSelect } from "@/components/ModelPickers";
+import { cn } from "@/lib/utils";
 import { PageHeader } from "@/components/PageHeader";
 import { EmptyState } from "@/components/EmptyState";
-import { FadeIn, StaggerItem } from "@/components/anim";
 import { formatMicros } from "../utils/format.ts";
+import { limitCaption } from "../utils/limits.ts";
 import { hasPermission, useAuth } from "../auth/AuthContext.tsx";
 
 import {
@@ -92,10 +97,23 @@ const WINDOW_PRESETS: readonly { label: string; seconds: number }[] = [
 ];
 
 const DIMENSION_CAP_LABEL: Record<Dimension, string> = {
-  tokens: "max tokens",
-  requests: "max requests",
-  spend_units: "max spend",
-  spend_micros: "max spend",
+  tokens: "Max tokens",
+  requests: "Max requests",
+  spend_units: "Max spend",
+  spend_micros: "Max spend",
+};
+
+const DIMENSION_LABEL: Record<Dimension, string> = {
+  tokens: "Tokens",
+  requests: "Requests",
+  spend_units: "Spend",
+  spend_micros: "Spend",
+};
+
+const SCOPE_LABEL: Record<Scope, string> = {
+  customer: "Each customer",
+  plan: "Each subscriber (plan)",
+  model: "One model",
 };
 
 /** Spend dimensions carry a currency + decimal major-unit cap. */
@@ -259,15 +277,28 @@ function ruleSummary(r: RateLimitRule): string {
   const cap =
     r.dimension === "spend_units" || r.dimension === "spend_micros"
       ? formatMicros(r.capValue, r.currency ?? "USD")
-      : String(r.capValue);
-  const dim = r.dimension === "tokens" ? "tokens" : r.dimension === "requests" ? "requests" : "spend";
+      : r.capValue.toLocaleString();
+  const dim = r.dimension === "tokens" ? " tokens" : r.dimension === "requests" ? " requests" : "";
   const scope =
     r.scope === "model"
-      ? `${r.scope}${r.scopeTarget ? ` ${r.scopeTarget}` : ""}`
-      : r.scope;
-  return `${formatWindow(r.windowSeconds)} \u00B7 max ${cap} ${dim} \u00B7 ${scope} scope${r.active ? "" : " \u00B7 off"}`;
+      ? `model ${r.scopeTarget ?? ""}`.trim()
+      : r.scope === "plan"
+        ? "per subscriber"
+        : "per customer";
+  return `${formatWindow(r.windowSeconds)} window \u00B7 max ${cap}${dim} \u00B7 ${scope}${r.active ? "" : " \u00B7 not enforced"}`;
 }
 
+/** Short printed caption for a rule needle on the window ruler. */
+const ruleCaption = limitCaption;
+
+function ruleMarkers(rules: readonly RateLimitRule[]): WindowMarker[] {
+  return rules.map((r) => ({
+    key: r.id,
+    windowSeconds: r.windowSeconds,
+    caption: ruleCaption(r),
+    active: r.active,
+  }));
+}
 
 export default function PlansPage(): React.ReactElement {
   const { user } = useAuth();
@@ -281,6 +312,7 @@ export default function PlansPage(): React.ReactElement {
   const [draft, setDraft] = useState<DraftPlan>(emptyDraft());
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  const confirm = useConfirm();
 
   const loadPlans = useCallback(async () => {
     setLoading(true);
@@ -328,7 +360,13 @@ export default function PlansPage(): React.ReactElement {
   const onDelete = useCallback(
     async (plan: Plan) => {
       if (!canWrite) return;
-      if (!window.confirm(`Deactivate plan "${plan.name}"? This is a soft delete.`)) return;
+      const ok = await confirm({
+        title: `Deactivate ${plan.name}?`,
+        description: "The plan can no longer be assigned to new customers. Existing subscriptions keep their terms.",
+        confirmLabel: "Deactivate plan",
+        destructive: true,
+      });
+      if (!ok) return;
       try {
         await deleteJson<PlansResponse>(`/admin/plans/${plan._id}`);
         await loadPlans();
@@ -336,7 +374,7 @@ export default function PlansPage(): React.ReactElement {
         setError(err instanceof ApiError ? err.message : "Delete failed.");
       }
     },
-    [loadPlans, canWrite],
+    [loadPlans, canWrite, confirm],
   );
 
   const onSubmit = useCallback(
@@ -452,15 +490,40 @@ export default function PlansPage(): React.ReactElement {
     });
   }, [draft.rateLimits]);
 
+  const draftMarkers = useMemo<WindowMarker[]>(
+    () =>
+      draft.rateLimits.flatMap((r) => {
+        const seconds = Number(r.windowSeconds);
+        if (!Number.isFinite(seconds) || seconds <= 0) return [];
+        let cap = Number(r.capValue);
+        if (isSpendDimension(r.dimension)) {
+          try {
+            cap = parseMajorToMicros(r.capValue);
+          } catch {
+            return [];
+          }
+        }
+        if (!Number.isFinite(cap)) return [];
+        return [{
+          key: r.id,
+          windowSeconds: seconds,
+          caption: ruleCaption({ dimension: r.dimension, capValue: cap, currency: r.currency, scope: r.scope, scopeTarget: r.scopeTarget }),
+          active: r.active,
+        }];
+      }),
+    [draft.rateLimits],
+  );
+
   return (
-    <div className="flex flex-col gap-6 p-6 lg:p-8">
-      <PageHeader title="Plans" icon={<CreditCard strokeWidth={1.75} />}>
-        {showForm ? (
-          <Button variant="outline" size="sm" onClick={cancelForm} disabled={saving}>Cancel</Button>
-        ) : canWrite ? (
-          <Button size="sm" onClick={startCreate}>
-            <Plus className="size-4" />
-            Add Plan
+    <div className="flex flex-col gap-6">
+      <PageHeader
+        title="Plans"
+        description="Subscriptions with a price, included credit and tokens, and default rolling limits."
+      >
+        {showForm ? null : canWrite ? (
+          <Button onClick={startCreate}>
+            <Plus />
+            Add plan
           </Button>
         ) : null}
       </PageHeader>
@@ -475,226 +538,265 @@ export default function PlansPage(): React.ReactElement {
         <Alert>
           <ShieldCheck className="size-4" />
           <AlertDescription>
-            You can view plans but need{" "}
-            <code className="font-mono text-xs">plans:write</code> to create, edit, or deactivate them.
+            Read-only access. Creating, editing, or deactivating plans needs{" "}
+            <code className="font-mono text-xs">plans:write</code>.
           </AlertDescription>
         </Alert>
       ) : null}
 
       {showForm && canWrite ? (
-        <FadeIn className="flex flex-col gap-5 rounded-lg border border-border bg-card p-6 shadow-xs">
-        <form className="flex flex-col gap-5" onSubmit={onSubmit}>
-          <h2 className="text-lg font-semibold">{editing ? "Edit plan" : "New plan"}</h2>
-          {formError ? (
-            <Alert variant="destructive">
-              <AlertDescription>{formError}</AlertDescription>
-            </Alert>
-          ) : null}
+        <Panel>
+          <PanelHeader
+            title={editing ? `Edit ${editing.name}` : "New plan"}
+            description="Subscribers get the included credit and tokens each interval, capped by the rolling limits below."
+          />
+          <form className="flex flex-col" onSubmit={onSubmit}>
+            {formError ? (
+              <div className="px-5 pt-4">
+                <Alert variant="destructive">
+                  <AlertDescription>{formError}</AlertDescription>
+                </Alert>
+              </div>
+            ) : null}
 
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-            <Field id="plan-name" label="Name">
-              <Input id="plan-name" type="text" maxLength={120} value={draft.name} required disabled={saving} onChange={(e) => setField("name", e.target.value)} />
-            </Field>
-            <Field id="plan-interval" label="Interval">
-              <Select value={draft.interval} onValueChange={(v) => setField("interval", v as Interval)} disabled={saving}>
-                <SelectTrigger id="plan-interval">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {INTERVALS.map((i) => (<SelectItem key={i} value={i}>{i}</SelectItem>))}
-                </SelectContent>
-              </Select>
-            </Field>
-            <Field id="plan-interval-count" label="Interval count">
-              <Input id="plan-interval-count" type="number" min={1} step={1} value={draft.intervalCount} required disabled={saving} onChange={(e) => setField("intervalCount", e.target.value)} />
-            </Field>
-          </div>
+            <fieldset className="grid grid-cols-1 gap-4 border-b border-rule px-5 py-5 sm:grid-cols-[2fr_1fr_1fr]">
+              <legend className="sr-only">Basics</legend>
+              <Field id="plan-name" label="Name">
+                <Input id="plan-name" type="text" maxLength={120} value={draft.name} required disabled={saving} onChange={(e) => setField("name", e.target.value)} />
+              </Field>
+              <Field id="plan-interval" label="Billing interval">
+                <Select value={draft.interval} onValueChange={(v) => setField("interval", v as Interval)} disabled={saving}>
+                  <SelectTrigger id="plan-interval" className="capitalize">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {INTERVALS.map((i) => (<SelectItem key={i} value={i} className="capitalize">{i}</SelectItem>))}
+                  </SelectContent>
+                </Select>
+              </Field>
+              <Field id="plan-interval-count" label="Every" hint={`Bills every ${draft.intervalCount || "1"} ${draft.interval}${Number(draft.intervalCount) > 1 ? "s" : ""}`}>
+                <Input id="plan-interval-count" type="number" min={1} step={1} value={draft.intervalCount} required disabled={saving} onChange={(e) => setField("intervalCount", e.target.value)} />
+              </Field>
+              <Field id="plan-description" label="Description" optional className="sm:col-span-3">
+                <Textarea id="plan-description" maxLength={2000} rows={2} value={draft.description} disabled={saving} onChange={(e) => setField("description", e.target.value)} />
+              </Field>
+            </fieldset>
 
-          <Field id="plan-description" label="Description">
-            <Textarea id="plan-description" maxLength={2000} rows={3} value={draft.description} disabled={saving} onChange={(e) => setField("description", e.target.value)} />
-          </Field>
+            <fieldset className="grid grid-cols-2 gap-4 border-b border-rule px-5 py-5 lg:grid-cols-[1.4fr_0.6fr_1.4fr_0.6fr_1.4fr]">
+              <legend className="sr-only">Pricing</legend>
+              <Field id="plan-price-amount" label="Price" tooltip="Amount charged per billing interval in major units (e.g. 9.99 = $9.99 USD).">
+                <Input id="plan-price-amount" type="number" min={0} step="any" value={draft.priceAmount} required disabled={saving} onChange={(e) => setField("priceAmount", e.target.value)} />
+                <UnitsPreview value={draft.priceAmount} currency={draft.priceCurrency} />
+              </Field>
+              <Field id="plan-price-currency" label="Currency">
+                <CurrencySelect id="plan-price-currency" value={draft.priceCurrency} disabled={saving} onChange={(v) => setField("priceCurrency", v)} />
+              </Field>
+              <Field id="plan-credit-amount" label="Included credit" tooltip="Balance granted each interval in major units (e.g. 10 = $10.00 USD).">
+                <Input id="plan-credit-amount" type="number" min={0} step="any" value={draft.includedCreditAmount} required disabled={saving} onChange={(e) => setField("includedCreditAmount", e.target.value)} />
+                <UnitsPreview value={draft.includedCreditAmount} currency={draft.includedCreditCurrency} />
+              </Field>
+              <Field id="plan-credit-currency" label="Currency">
+                <CurrencySelect id="plan-credit-currency" value={draft.includedCreditCurrency} disabled={saving} onChange={(v) => setField("includedCreditCurrency", v)} />
+              </Field>
+              <Field id="plan-tokens" label="Included tokens" className="col-span-2 lg:col-span-1">
+                <Input id="plan-tokens" type="number" min={0} step={1} value={draft.includedTokens} required disabled={saving} onChange={(e) => setField("includedTokens", e.target.value)} />
+              </Field>
+            </fieldset>
 
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3 lg:grid-cols-5">
-            <Field
-              id="plan-price-amount"
-              label="Price"
-              tooltip="Amount charged per billing interval in major units (e.g. 9.99 = $9.99 USD)."
-            >
-              <Input id="plan-price-amount" type="number" min={0} step="any" value={draft.priceAmount} required disabled={saving} onChange={(e) => setField("priceAmount", e.target.value)} />
-              <UnitsPreview value={draft.priceAmount} currency={draft.priceCurrency} />
-            </Field>
-            <Field id="plan-price-currency" label="Price currency">
-              <Input id="plan-price-currency" type="text" maxLength={3} value={draft.priceCurrency} required disabled={saving} onChange={(e) => setField("priceCurrency", e.target.value.toUpperCase())} />
-            </Field>
-            <Field
-              id="plan-credit-amount"
-              label="Included credit"
-              tooltip="Balance granted each interval in major units (e.g. 10 = $10.00 USD). Rolls over if unused (subject to plan policy)."
-            >
-              <Input id="plan-credit-amount" type="number" min={0} step="any" value={draft.includedCreditAmount} required disabled={saving} onChange={(e) => setField("includedCreditAmount", e.target.value)} />
-              <UnitsPreview value={draft.includedCreditAmount} currency={draft.includedCreditCurrency} />
-            </Field>
-            <Field id="plan-credit-currency" label="Credit currency">
-              <Input id="plan-credit-currency" type="text" maxLength={3} value={draft.includedCreditCurrency} required disabled={saving} onChange={(e) => setField("includedCreditCurrency", e.target.value.toUpperCase())} />
-            </Field>
-            <Field id="plan-tokens" label="Included tokens">
-              <Input id="plan-tokens" type="number" min={0} step={1} value={draft.includedTokens} required disabled={saving} onChange={(e) => setField("includedTokens", e.target.value)} />
-            </Field>
-          </div>
+            <fieldset className="flex flex-col gap-4 px-5 py-5">
+              <legend className="sr-only">Rolling limits</legend>
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <h3 className="text-[15px] font-semibold">Rolling limits</h3>
+                  <p className="mt-0.5 text-[13px] text-muted-foreground">Default caps for subscribers. Each window rolls continuously.</p>
+                </div>
+                <Button type="button" variant="outline" size="sm" onClick={addRule} disabled={saving}>
+                  <Plus />
+                  Add limit
+                </Button>
+              </div>
 
-          <div className="flex items-center justify-between border-b border-border pb-1.5">
-            <div>
-              <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Rate limits</div>
-              <div className="text-sm text-muted-foreground">Default rules applied to subscribers of this plan.</div>
-            </div>
-            <Button type="button" variant="outline" size="sm" onClick={addRule} disabled={saving}>
-              <Plus className="size-4" />
-              Add Rule
-            </Button>
-          </div>
-
-          {draft.rateLimits.length === 0 ? (
-            <div className="rounded-md bg-muted/40 px-3.5 py-2.5 text-sm text-muted-foreground">No rate limits configured.</div>
-          ) : (
-            <div className="flex flex-col gap-3">
-              {draft.rateLimits.map((rule, idx) => {
-                const summary = draftSummary[idx] ?? "";
-                return (
-                  <div key={rule.id} className="relative grid grid-cols-1 gap-3 rounded-md border border-border p-4 sm:grid-cols-2 lg:grid-cols-3">
-                    <button
-                      type="button"
-                      className="absolute -right-2 -top-2 flex size-6 items-center justify-center rounded-full border border-border bg-background text-muted-foreground hover:bg-muted"
-                      aria-label="Remove rule"
-                      onClick={() => removeRule(idx)}
-                      disabled={saving}
-                    >
-                      <X className="size-3.5" />
-                    </button>
-
-                    <div className="flex flex-col gap-1.5 sm:col-span-2 lg:col-span-3">
-                      <Label>Window (seconds)</Label>
-                      <Input className="max-w-[200px]" type="number" min={1} max={31536000} step={1} value={rule.windowSeconds} required disabled={saving} onChange={(e) => updateRule(idx, "windowSeconds", e.target.value)} />
-                      <div className="flex gap-1.5">
-                        {WINDOW_PRESETS.map((p) => (
-                          <button
-                            key={p.seconds}
-                            type="button"
-                            className="rounded border border-border px-2 py-0.5 text-xs text-muted-foreground hover:bg-muted disabled:opacity-50"
-                            disabled={saving}
-                            onClick={() => updateRule(idx, "windowSeconds", String(p.seconds))}
-                          >
-                            {p.label}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-
-                    <Field id={`rule-dim-${rule.id}`} label="Dimension">
-                      <Select value={rule.dimension} onValueChange={(v) => updateRule(idx, "dimension", v as Dimension)} disabled={saving}>
-                        <SelectTrigger id={`rule-dim-${rule.id}`}>
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {DIMENSIONS.map((d) => (<SelectItem key={d} value={d}>{d}</SelectItem>))}
-                        </SelectContent>
-                      </Select>
-                    </Field>
-                    <Field id={`rule-cap-${rule.id}`} label={DIMENSION_CAP_LABEL[rule.dimension]}>
-                      <Input id={`rule-cap-${rule.id}`} type="number" min={isSpendDimension(rule.dimension) ? 0 : 1} step={isSpendDimension(rule.dimension) ? "any" : 1} value={rule.capValue} required disabled={saving} onChange={(e) => updateRule(idx, "capValue", e.target.value)} />
-                    </Field>
-                    <Field id={`rule-scope-${rule.id}`} label="Scope" tooltip="Whether the limit applies per-customer, per-key, or per-organization.">
-                      <Select value={rule.scope} onValueChange={(v) => updateRule(idx, "scope", v as Scope)} disabled={saving}>
-                        <SelectTrigger id={`rule-scope-${rule.id}`}>
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {SCOPES.map((s) => (<SelectItem key={s} value={s}>{s}</SelectItem>))}
-                        </SelectContent>
-                      </Select>
-                    </Field>
-
-                    {rule.scope === "model" && (
-                      <Field id={`rule-target-${rule.id}`} label="Model alias">
-                        <Input id={`rule-target-${rule.id}`} type="text" maxLength={120} value={rule.scopeTarget} placeholder="model alias" disabled={saving} onChange={(e) => updateRule(idx, "scopeTarget", e.target.value)} />
-                      </Field>
-                    )}
-
-                    {isSpendDimension(rule.dimension) && (
-                      <Field id={`rule-cur-${rule.id}`} label="Currency">
-                        <Input id={`rule-cur-${rule.id}`} type="text" maxLength={3} value={rule.currency} disabled={saving} onChange={(e) => updateRule(idx, "currency", e.target.value.toUpperCase())} />
-                      </Field>
-                    )}
-
-                    <div className="flex flex-col gap-1.5 sm:col-span-2 lg:col-span-3">
-                      <label className="inline-flex cursor-pointer items-center gap-1.5 text-sm">
-                        <Checkbox checked={rule.active} onCheckedChange={(v) => updateRule(idx, "active", v === true)} disabled={saving} />
-                        Active
-                      </label>
-                      <div className="text-[11px] text-muted-foreground">{summary}</div>
-                    </div>
+              {draft.rateLimits.length === 0 ? (
+                <p className="rounded-lg border border-dashed border-border px-4 py-5 text-center text-sm text-muted-foreground">
+                  No limits. Subscribers are capped only by their balance.
+                </p>
+              ) : (
+                <>
+                  <div className="pb-2 pt-1">
+                    <WindowRuler markers={draftMarkers} />
                   </div>
-                );
-              })}
-            </div>
-          )}
+                  <ul className="flex flex-col">
+                    {draft.rateLimits.map((rule, idx) => {
+                      const summary = draftSummary[idx] ?? "";
+                      return (
+                        <li key={rule.id} className={cn("border-t border-rule py-3", !rule.active && "border-dashed")}>
+                          <div className="flex flex-wrap items-center gap-3">
+                            <label className="inline-flex cursor-pointer items-center gap-2 text-[13px] font-medium">
+                              <Checkbox checked={rule.active} onCheckedChange={(v) => updateRule(idx, "active", v === true)} disabled={saving} />
+                              Enforced
+                            </label>
+                            <span className="min-w-0 flex-1 truncate text-xs tabular-nums text-muted-foreground">{summary}</span>
+                            <Button type="button" variant="ghost" size="icon-sm" aria-label="Remove limit" onClick={() => removeRule(idx)} disabled={saving}>
+                              <X />
+                            </Button>
+                          </div>
+                          <div className="grid grid-cols-1 gap-4 pt-3 sm:grid-cols-2 lg:grid-cols-[1.5fr_1fr_1fr_1fr]">
+                            <div className="flex flex-col gap-1.5">
+                              <Label htmlFor={`rule-window-${rule.id}`}>Window</Label>
+                              <div className="flex gap-2">
+                                <Input id={`rule-window-${rule.id}`} aria-describedby={`rule-window-unit-${rule.id}`} className="w-28" type="number" min={1} max={31536000} step={1} value={rule.windowSeconds} required disabled={saving} onChange={(e) => updateRule(idx, "windowSeconds", e.target.value)} />
+                                <span id={`rule-window-unit-${rule.id}`} className="self-center text-xs text-muted-foreground">seconds</span>
+                              </div>
+                              <div className="flex flex-wrap gap-1" role="group" aria-label="Window presets">
+                                {WINDOW_PRESETS.map((p) => {
+                                  const on = rule.windowSeconds === String(p.seconds);
+                                  return (
+                                    <button
+                                      key={p.seconds}
+                                      type="button"
+                                      aria-pressed={on}
+                                      className={cn(
+                                        "h-6 rounded-[5px] border px-2 text-xs font-medium tabular-nums outline-none transition-colors focus-visible:ring-[3px] focus-visible:ring-ring disabled:opacity-50",
+                                        on ? "border-primary bg-primary text-primary-foreground" : "border-border text-muted-foreground hover:bg-accent hover:text-foreground",
+                                      )}
+                                      disabled={saving}
+                                      onClick={() => updateRule(idx, "windowSeconds", String(p.seconds))}
+                                    >
+                                      {p.label}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </div>
 
-          <div className="flex justify-end gap-2 pt-1">
-            <Button type="button" variant="outline" onClick={cancelForm} disabled={saving}>Cancel</Button>
-            <Button type="submit" disabled={saving}>{saving ? "Saving\u2026" : editing ? "Save changes" : "Create plan"}</Button>
-          </div>
-        </form>
-        </FadeIn>
+                            <Field id={`rule-dim-${rule.id}`} label="Measures">
+                              <Select value={rule.dimension} onValueChange={(v) => updateRule(idx, "dimension", v as Dimension)} disabled={saving}>
+                                <SelectTrigger id={`rule-dim-${rule.id}`}>
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  {DIMENSIONS.map((d) => (<SelectItem key={d} value={d}>{DIMENSION_LABEL[d]}</SelectItem>))}
+                                </SelectContent>
+                              </Select>
+                            </Field>
+                            <Field id={`rule-cap-${rule.id}`} label={DIMENSION_CAP_LABEL[rule.dimension]}>
+                              <Input id={`rule-cap-${rule.id}`} type="number" min={isSpendDimension(rule.dimension) ? 0 : 1} step={isSpendDimension(rule.dimension) ? "any" : 1} value={rule.capValue} required disabled={saving} onChange={(e) => updateRule(idx, "capValue", e.target.value)} />
+                            </Field>
+                            <Field id={`rule-scope-${rule.id}`} label="Applies to" tooltip="Customer and plan scope count all of a customer's usage; model scope counts one model alias.">
+                              <Select value={rule.scope} onValueChange={(v) => updateRule(idx, "scope", v as Scope)} disabled={saving}>
+                                <SelectTrigger id={`rule-scope-${rule.id}`}>
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  {SCOPES.map((sc) => (<SelectItem key={sc} value={sc}>{SCOPE_LABEL[sc]}</SelectItem>))}
+                                </SelectContent>
+                              </Select>
+                            </Field>
+
+                            {rule.scope === "model" && (
+                              <Field id={`rule-target-${rule.id}`} label="Model alias">
+                                <ModelAliasSelect id={`rule-target-${rule.id}`} value={rule.scopeTarget} disabled={saving} onChange={(v) => updateRule(idx, "scopeTarget", v)} />
+                              </Field>
+                            )}
+
+                            {isSpendDimension(rule.dimension) && (
+                              <Field id={`rule-cur-${rule.id}`} label="Currency">
+                                <CurrencySelect id={`rule-cur-${rule.id}`} value={rule.currency} disabled={saving} onChange={(v) => updateRule(idx, "currency", v)} />
+                              </Field>
+                            )}
+                          </div>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </>
+              )}
+            </fieldset>
+
+            <div className="flex justify-end gap-2 border-t border-rule px-5 py-4">
+              <Button type="button" variant="outline" onClick={cancelForm} disabled={saving}>Cancel</Button>
+              <Button type="submit" disabled={saving}>{saving ? "Saving\u2026" : editing ? "Save changes" : "Create plan"}</Button>
+            </div>
+          </form>
+        </Panel>
       ) : null}
 
-      {loading ? null : plans.length === 0 && !showForm ? (
-        <EmptyState
-          icon={<CreditCard className="size-5" />}
-          title="No plans yet"
-          description={
-            canWrite
-              ? "Create your first subscription plan with pricing and rate-limit defaults."
-              : "No plans configured yet. An admin with plans:write can add them."
-          }
-          action={
-            canWrite ? (
-              <Button size="sm" onClick={startCreate}>
-                <Plus className="size-4" />
-                Add Plan
-              </Button>
-            ) : undefined
-          }
-        />
+      {loading ? (
+        <div className="grid grid-cols-1 gap-5 md:grid-cols-2 2xl:grid-cols-3" aria-hidden>
+          {Array.from({ length: 3 }).map((_, i) => (
+            <div key={i} className="skeleton h-72 rounded-xl" />
+          ))}
+        </div>
+      ) : plans.length === 0 && !showForm ? (
+        <Panel>
+          <EmptyState
+            icon={<CreditCard />}
+            title="No plans yet"
+            description={
+              canWrite
+                ? "A plan bundles a recurring price, included credit and tokens, and default rolling limits for its subscribers."
+                : "No plans configured yet. Someone with plans:write can add them."
+            }
+            action={
+              canWrite ? (
+                <Button size="sm" onClick={startCreate}>
+                  <Plus />
+                  Add plan
+                </Button>
+              ) : undefined
+            }
+          />
+        </Panel>
       ) : (
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {plans.map((plan, i) => (
-            <StaggerItem key={plan._id} index={i} step={0.05}>
-              <Card className="flex h-full flex-col gap-3 p-5">
-                <div className="flex items-center justify-between gap-3">
-                  <h3 className="text-base font-semibold">{plan.name}</h3>
-                  <Badge variant={plan.active ? "success" : "secondary"}>{plan.active ? "active" : "inactive"}</Badge>
+        <div className="grid grid-cols-1 gap-5 md:grid-cols-2 2xl:grid-cols-3">
+          {plans.map((plan) => (
+            <Panel key={plan._id} as="article" className={cn("flex flex-col", !plan.active && "opacity-75")}>
+              <div className="flex items-start justify-between gap-3 px-5 pt-4">
+                <div className="min-w-0">
+                  <h2 className="truncate text-[17px] font-semibold">{plan.name}</h2>
+                  {plan.description ? <p className="mt-1 line-clamp-2 text-[13px] text-muted-foreground">{plan.description}</p> : null}
                 </div>
-                {plan.description ? <p className="text-sm text-muted-foreground">{plan.description}</p> : null}
-                <div className="flex flex-col gap-1 text-sm">
-                  <span>Price: <strong>{formatAmountMicros(plan.price.amountMicros, plan.price.currency)}</strong> / {plan.intervalCount} {plan.interval}{plan.intervalCount > 1 ? "s" : ""}</span>
-                  <span>Credit: <strong>{formatAmountMicros(plan.includedCredit.amountMicros, plan.includedCredit.currency)}</strong></span>
-                  <span>Tokens: <strong>{plan.includedTokens.toLocaleString()}</strong></span>
-                  <span>Rate limits: <strong>{plan.rateLimits.length}</strong></span>
+                <Badge variant={plan.active ? "success" : "off"}>{plan.active ? "Active" : "Inactive"}</Badge>
+              </div>
+              <div className="flex items-baseline gap-1.5 px-5 pt-4">
+                <span className="readout text-[30px] font-semibold leading-none">{formatAmountMicros(plan.price.amountMicros, plan.price.currency)}</span>
+                <span className="text-[13px] text-muted-foreground">
+                  / {plan.intervalCount > 1 ? `${plan.intervalCount} ` : ""}{plan.interval}{plan.intervalCount > 1 ? "s" : ""}
+                </span>
+              </div>
+              <SpecList
+                className="px-5 pt-3"
+                rows={[
+                  { label: "Included credit", value: <span className="tabular-nums">{formatAmountMicros(plan.includedCredit.amountMicros, plan.includedCredit.currency)}</span> },
+                  { label: "Included tokens", value: <span className="tabular-nums">{plan.includedTokens.toLocaleString()}</span> },
+                ]}
+              />
+              <div className="px-5 pb-5 pt-4">
+                <div className="legend mb-1 text-muted-foreground">
+                  Rolling limits{plan.rateLimits.length > 0 ? ` · ${plan.rateLimits.length}` : ""}
                 </div>
                 {plan.rateLimits.length > 0 ? (
-                  <ul className="flex flex-col gap-1 text-xs text-muted-foreground">
-                    {plan.rateLimits.map((r) => (
-                      <li key={r.id}>{ruleSummary(r)}</li>
-                    ))}
-                  </ul>
-                ) : null}
-                {canWrite ? (
-                  <div className="mt-auto flex gap-2 pt-1">
-                    <Button variant="outline" size="sm" onClick={() => startEdit(plan)}>Edit</Button>
-                    <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive" onClick={() => void onDelete(plan)}>Delete</Button>
-                  </div>
-                ) : null}
-              </Card>
-            </StaggerItem>
+                  <>
+                    <WindowRuler markers={ruleMarkers(plan.rateLimits)} className="mt-2" />
+                    <ul className="mt-3 flex flex-col gap-1 text-xs text-muted-foreground">
+                      {plan.rateLimits.map((r) => (
+                        <li key={r.id} className={cn("tabular-nums", !r.active && "line-through")}>{ruleSummary(r)}</li>
+                      ))}
+                    </ul>
+                  </>
+                ) : (
+                  <p className="py-1 text-[13px] text-muted-foreground">None. Capped by balance only.</p>
+                )}
+              </div>
+              {canWrite ? (
+                <div className="mt-auto flex gap-2 border-t border-rule px-5 py-3">
+                  <Button variant="outline" size="sm" onClick={() => startEdit(plan)}>Edit</Button>
+                  {plan.active ? (
+                    <Button variant="ghost-destructive" size="sm" onClick={() => void onDelete(plan)}>Deactivate</Button>
+                  ) : null}
+                </div>
+              ) : null}
+            </Panel>
           ))}
         </div>
       )}

@@ -41,14 +41,14 @@ function Field({
       <div className="flex min-h-[1.25rem] items-end gap-1">
         <Label htmlFor={id}>
           {label}
-          {optional ? <span className="ml-1 font-normal text-muted-foreground/70">(optional)</span> : null}
+          {optional ? <span className="ml-1 font-normal text-muted-foreground">(optional)</span> : null}
         </Label>
         {tooltip ? (
           <Tooltip>
             <TooltipTrigger asChild>
               <button
                 type="button"
-                className="inline-flex shrink-0 items-center text-muted-foreground/70 transition-colors hover:text-muted-foreground"
+                className="inline-flex shrink-0 items-center rounded-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 aria-label={`Info: ${tooltip}`}
               >
                 <Info className="size-3.5" />
@@ -61,7 +61,7 @@ function Field({
         ) : null}
       </div>
       {children}
-      {error ? <span className="text-xs text-destructive">{error}</span> : null}
+      {error ? <span role="alert" className="text-xs font-medium text-destructive">{error}</span> : null}
       {hint && !error ? <span className="text-xs text-muted-foreground">{hint}</span> : null}
     </div>
   );

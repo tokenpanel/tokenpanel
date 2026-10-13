@@ -29,3 +29,6 @@ apps/e2e/playwright-report/
 
 # bun test coverage output
 coverage/
+
+# Impeccable design-skill workspace (local only)
+.impeccable/

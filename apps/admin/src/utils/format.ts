@@ -76,6 +76,11 @@ function currencySymbol(code: string): string {
   }
 }
 
+/** Deterministic thousands grouping for money (1234567 → "1,234,567"). */
+function groupThousands(whole: number): string {
+  return String(whole).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+}
+
 /**
  * Format integer micros as display money with adaptive precision. Amounts at or
  * above one minor unit render at the currency's standard exponent; sub-minor
@@ -96,11 +101,42 @@ export function formatMicros(amountMicros: number, currency: string): string {
   if (abs !== 0 && abs < minorMicros) {
     return `${sign}${symbol}${formatMicrosToMajor(abs)} ${code}`;
   }
-  const whole = Math.floor(abs / 1_000_000);
+  const whole = groupThousands(Math.floor(abs / 1_000_000));
   if (exp === 0) return `${sign}${symbol}${whole} ${code}`;
   const fracMicros = abs % 1_000_000;
   const frac = String(fracMicros).padStart(6, "0").slice(0, exp);
   return `${sign}${symbol}${whole}.${frac} ${code}`;
+}
+
+/**
+ * Money at a fixed number of decimals (2–6), rounded half away from zero in
+ * integer micros. For columns where every row must share one precision so
+ * amounts align; pair with a title carrying the exact `formatMicros` value.
+ */
+export function formatMicrosFixed(amountMicros: number, currency: string, decimals: number): string {
+  const dp = Math.min(6, Math.max(0, Math.trunc(decimals)));
+  const code = currency.toUpperCase();
+  const symbol = currencySymbol(code);
+  const sign = amountMicros < 0 ? "-" : "";
+  const abs = Math.abs(amountMicros);
+  const step = 10 ** (6 - dp);
+  const rounded = Math.floor((abs + step / 2) / step) * step;
+  const whole = groupThousands(Math.floor(rounded / 1_000_000));
+  if (dp === 0) return `${sign}${symbol}${whole} ${code}`;
+  const frac = String(rounded % 1_000_000).padStart(6, "0").slice(0, dp);
+  return `${sign}${symbol}${whole}.${frac} ${code}`;
+}
+
+/** Decimals needed so every amount in a column shows at least one significant sub-unit digit (2–4). */
+export function columnDecimals(amounts: readonly number[], currency: string): number {
+  const base = currencyExponent(currency);
+  let dp = base;
+  for (const a of amounts) {
+    const abs = Math.abs(a);
+    if (abs === 0) continue;
+    while (dp < 4 && abs < 10 ** (6 - dp)) dp += 1;
+  }
+  return dp;
 }
 
 export function formatDate(value: string | Date | null | undefined): string {

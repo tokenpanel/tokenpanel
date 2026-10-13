@@ -11,7 +11,7 @@ test.describe("login", () => {
     await page.goto("/");
     await page.evaluate(() => localStorage.clear());
     await page.goto("/login");
-    await expect(page.getByRole("heading", { name: "Welcome back" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
   }
 
   test("signs out and signs back in with valid credentials", async ({ page }) => {

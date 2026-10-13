@@ -165,6 +165,16 @@ tp_update_relation() {
   fi
 }
 
+# Deployed commit when the checkout is on a different commit; prints nothing
+# when they match or the deployed commit is unknown.
+tp_checkout_drift() {
+  local dir="$1" deployed head
+  deployed="$(deployed_revision "$dir")"
+  [ -n "$deployed" ] || return 0
+  head="$(tp_commit_of "$dir" HEAD || true)"
+  [ "$head" = "$deployed" ] || printf '%s\n' "$deployed"
+}
+
 # GitHub Release page for a tag when origin is a GitHub repository.
 tp_release_notes_url() {
   local dir="$1" tag="$2" url path

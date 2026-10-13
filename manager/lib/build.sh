@@ -73,6 +73,28 @@ build_current_checkout_image() {
   ok "image built: tokenpanel/app:${new_version_tag}"
 }
 
+# `rebuild` and `tokenpanel-setup` build the checkout as it is. Refuse when that
+# would change the deployed version: versions change only through
+# `tokenpanel update`, which adds backup, ordered migrations, and rollback.
+require_checkout_matches_deployed() {
+  local cmd="$1" force="${2:-0}" deployed head
+  deployed="$(tp_checkout_drift "$INSTALL_DIR")"
+  [ -n "$deployed" ] || return 0
+  head="$(tp_commit_of "$INSTALL_DIR" HEAD || true)"
+
+  local have want
+  have="$(tp_describe_commit "$INSTALL_DIR" "$head")"
+  want="$(tp_describe_commit "$INSTALL_DIR" "$deployed")"
+  if [ "$force" = "1" ]; then
+    warn "--force: building checkout $have although $want is deployed"
+    return 0
+  fi
+  err "$cmd would deploy checkout $have, but $want is deployed"
+  err "change versions with: tokenpanel update [version]"
+  err "to build the checkout anyway: $cmd --force"
+  return 1
+}
+
 promote_new_image_current() {
   if [ -z "${NEW_IMAGE_TAG:-}" ]; then
     err "cannot promote image: NEW_IMAGE_TAG is empty"

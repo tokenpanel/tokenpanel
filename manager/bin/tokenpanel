@@ -51,7 +51,7 @@ Lifecycle:
   start        Start all services (preflight + health + post migrations)
   stop         Stop all services
   restart      Restart all services
-  rebuild      Rebuild image, recreate containers, apply post migrations
+  rebuild      Rebuild the deployed version's image, recreate, apply post migrations
 
 Updates:
   update       Update to latest stable (backup → build → migrate → swap)
@@ -283,11 +283,20 @@ cmd_version() {
 }
 
 cmd_rebuild() {
+  local force=0
+  case "${1:-}" in
+    --force) force=1 ;;
+    '') ;;
+    *) die "usage: tokenpanel rebuild [--force]" ;;
+  esac
+
   source "${SCRIPT_DIR}/../lib/build.sh"
   source "${SCRIPT_DIR}/../lib/config_render.sh"
 
   acquire_manager_lock "rebuild" || die "could not acquire manager lock"
   preflight_quick || die "preflight failed"
+  require_checkout_matches_deployed "tokenpanel rebuild" "$force" \
+    || die "rebuild refused — app unchanged"
   step "rebuild" "building current checkout image..."
   CURRENT_IMAGE_ID="$(docker compose -f "$APP_YML" images api --format '{{.ID}}' 2>/dev/null | head -1)"
   build_current_checkout_image || die "build failed — old container still available"
@@ -724,7 +733,7 @@ case "${1:-}" in
   start)    cmd_start ;;
   stop)     cmd_stop ;;
   restart)  cmd_restart ;;
-  rebuild)  cmd_rebuild ;;
+  rebuild)  shift; cmd_rebuild "$@" ;;
   destroy)  cmd_destroy ;;
   reset)    cmd_reset ;;
   logs)     shift; cmd_logs "$@" ;;

@@ -120,6 +120,15 @@ fi
 
 # ── 7. Clone or update the repo ──
 echo
+# A live install is updated by the manager (backup, ordered migrations,
+# rollback), never by re-running the installer over it.
+if [ -d "$INSTALL_DIR/.git" ] && docker image inspect tokenpanel/app:current >/dev/null 2>&1; then
+  echo "✓ TokenPanel is already installed at ${INSTALL_DIR}"
+  echo
+  echo "  Update to the latest release:  sudo tokenpanel update"
+  echo "  Re-run setup (same version):   sudo ${INSTALL_DIR}/manager/bin/tokenpanel-setup"
+  exit 0
+fi
 if [ -d "$INSTALL_DIR/.git" ]; then
   echo "→ Existing install found at $INSTALL_DIR. Updating..."
   tp_orig_head="$(git -C "$INSTALL_DIR" rev-parse HEAD)"

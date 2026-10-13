@@ -44,13 +44,11 @@ manager/
 curl -fsSL https://raw.githubusercontent.com/tokenpanel/tokenpanel/main/manager/install.sh | sudo bash
 ```
 
-## Manual install
-
-```bash
-git clone https://github.com/tokenpanel/tokenpanel /opt/tokenpanel
-cd /opt/tokenpanel/manager
-sudo bin/tokenpanel-setup
-```
+The installer is the only supported way to install TokenPanel, and
+`tokenpanel update` the only supported way to update it. Do not clone the
+repository, `git pull`, or run `docker compose` against it by hand: those skip
+the release checkout, backups, pre/post migrations, health-gated swap, and
+rollback that the manager performs.
 
 ## Commands
 
@@ -68,7 +66,7 @@ tokenpanel migrate      # run pending migrations (default phase: pre)
 tokenpanel logs [-f]    # tail container logs
 tokenpanel enter [svc]  # exec shell into container
 tokenpanel doctor       # diagnostics
-tokenpanel rebuild      # rebuild image + recreate + post migrations (keeps data)
+tokenpanel rebuild      # rebuild the deployed version (refuses a different checkout; --force)
 tokenpanel destroy      # remove containers (keeps data)
 tokenpanel reset        # WIPE everything (strong confirm)
 tokenpanel version      # manager + app versions

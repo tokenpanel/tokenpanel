@@ -2,6 +2,8 @@
 # Build on host — docker build + tags.
 # Shared by setup, rebuild, and the 6-phase update flow.
 
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/release.sh"
+
 CURRENT_IMAGE_ID=""
 NEW_IMAGE_TAG=""
 
@@ -34,6 +36,17 @@ docker_build_prod() {
   for tag in "$@"; do
     args+=(-t "$tag")
   done
+
+  # Record the source commit in the image. The update gate and `status` read
+  # it to know what is deployed, even after a failed update or a rollback left
+  # the checkout on another commit.
+  local revision version
+  revision="$(git -C "$INSTALL_DIR" rev-parse HEAD 2>/dev/null || true)"
+  if [ -n "$revision" ]; then
+    version="$(tp_describe_commit "$INSTALL_DIR" "$revision")"
+    args+=(--label "${TP_IMAGE_REVISION_LABEL}=${revision}")
+    args+=(--label "${TP_IMAGE_VERSION_LABEL}=${version}")
+  fi
   args+=("$INSTALL_DIR")
 
   # Fail immediately on compile/config errors — do not blind-retry full builds.
@@ -77,41 +90,48 @@ promote_new_image_current() {
   ok "promoted tokenpanel/app:${NEW_IMAGE_TAG} to current"
 }
 
-checkout_update_target() {
-  local target_version="${1:-}"
-
-  # Fetch latest refs — abort on failure instead of swallowing git errors.
-  # The old `|| true` let a broken fetch silently proceed to a build of stale
-  # code, which is worse than failing the update. `local` is declared on its
-  # own line so its (always-zero) exit status does not mask the command
-  # substitution evaluated in the `if` conditions below.
+fetch_update_refs() {
+  # Abort on fetch failure instead of building stale code. `local` is declared
+  # on its own line so its (always-zero) exit status does not mask the command
+  # substitution evaluated in the `if` condition.
   local git_err
-  info "fetching latest code..."
-  if ! git_err="$(git -C "$INSTALL_DIR" fetch --tags --prune origin 2>&1)"; then
+  info "fetching releases..."
+  if tp_is_shallow_checkout "$INSTALL_DIR"; then
+    info "converting shallow install checkout to full history (one-time)..."
+  fi
+  if ! git_err="$(tp_fetch_release_refs "$INSTALL_DIR" 2>&1)"; then
     err "git fetch failed — aborting update (nothing changed):"
     printf '%s\n' "$git_err" >&2
     return 1
   fi
+}
 
-  if [ -n "$target_version" ]; then
-    info "target: $target_version"
-    if ! git_err="$(git -C "$INSTALL_DIR" checkout --detach "$target_version" 2>&1)"; then
-      err "git checkout '$target_version' failed — aborting update (nothing changed):"
-      printf '%s\n' "$git_err" >&2
-      return 1
-    fi
-  else
-    # A prior version-targeted update intentionally leaves HEAD detached. A
-    # regular `git pull` then fails, so always build the fetched stable ref.
-    info "checking out latest main (stable channel)..."
-    if ! git_err="$(git -C "$INSTALL_DIR" checkout --detach origin/main 2>&1)"; then
-      err "git checkout origin/main failed — aborting update (nothing changed):"
-      printf '%s\n' "$git_err" >&2
-      return 1
+checkout_update_ref() {
+  local ref="$1" git_err
+  if ! git_err="$(git -C "$INSTALL_DIR" checkout --detach "$ref" 2>&1)"; then
+    err "git checkout '$ref' failed — aborting update (nothing changed):"
+    printf '%s\n' "$git_err" >&2
+    return 1
+  fi
+}
+
+# Resolve the update ref: the requested version, else the latest stable
+# release tag, else origin/main while no release exists yet. HEAD is always
+# detached so a later update never depends on a local branch.
+checkout_update_target() {
+  local target_version="${1:-}"
+  fetch_update_refs || return 1
+
+  local ref="$target_version"
+  if [ -z "$ref" ]; then
+    ref="$(latest_stable_tag "$INSTALL_DIR")"
+    if [ -z "$ref" ]; then
+      info "no stable release yet — checking out origin/main"
+      ref="origin/main"
     fi
   fi
-
-  return 0
+  info "target: $ref"
+  checkout_update_ref "$ref"
 }
 
 build_update_image() {

@@ -32,6 +32,7 @@
     "schema:snapshot": "bun run --filter @tokenpanel/db db:schema-snapshot",
     "schema:check": "bun run --filter @tokenpanel/db db:schema-check",
     "release:check": "bun run config:check && bun run config:policy && bun run schema:check",
+    "release:notes": "bunx git-cliff@2.14.2 --unreleased --strip all",
     "clean": "turbo run clean && rm -rf node_modules",
     "start": "turbo run start",
     "docker:start": "docker compose --profile dev --env-file .env up --build -d --remove-orphans",

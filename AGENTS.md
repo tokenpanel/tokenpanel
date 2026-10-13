@@ -170,6 +170,15 @@ installer. All scripts are bash (no node/bun dependency for the manager itself).
 - Keep old readers and writers valid throughout additive pre-migrations. New
   config/template requirements need backward-compatible defaults until old
   generated installations are explicitly upgraded.
+- The manager at the tip of `main` is a permanent trampoline: managers that
+  predate release tags resolve "latest" as `origin/main` and run its
+  `manager/bin/tokenpanel update` with `TOKENPANEL_UPDATE_BOOTSTRAPPED=1`,
+  `TOKENPANEL_UPDATE_LOCK_FD`, `TOKENPANEL_UPDATE_FROM_VERSION` and no target.
+  `main` must keep accepting that call and handing off to the latest stable
+  tag. Never remove or rename those env keys.
+- The deployed version is the image's `org.opencontainers.image.revision`
+  label (legacy images: their `git describe` tag), not the checkout, which a
+  failed update or rollback leaves on the target commit.
 - Test upgrade paths, not only clean installs: at minimum N-1 and oldest
   supported release to current, including backup restart, failed-swap rollback,
   missing new capabilities (404/unknown command/missing env), and retry after
@@ -199,6 +208,31 @@ Policy rules enforced by `@tokenpanel/config`:
    `bun run --filter @tokenpanel/db db:new-migration`.
 3. Run `bun run schema:snapshot` and commit the updated
    `packages/db/generated/schema-snapshot.json` with the schema/migration change.
+
+### Cutting a release
+
+A release is an annotated or lightweight git tag `vMAJOR.MINOR.PATCH` on
+`main` (prereleases: `vX.Y.Z-rc.N`, from any branch). Flow: commit to `dev`
+with Conventional Commits, merge `dev` into `main` (merge commit, not squash,
+so every commit stays in history), then:
+
+```bash
+bun run release:notes                      # preview notes for unreleased commits
+git tag v0.2.0 origin/main && git push origin v0.2.0
+```
+
+`.github/workflows/release.yml` validates the tag (stable must be on `main`),
+generates notes with git-cliff (`cliff.toml`; stable notes span back to the
+previous stable tag, skipping rc tags) and publishes the GitHub Release.
+Re-running the workflow refreshes the notes. `feat` → Features, `fix` → Bug
+fixes, `!`/`BREAKING CHANGE:` → Breaking changes; `chore`/`test`/`style` and
+merge commits are omitted.
+
+`tokenpanel update` (no version) installs the highest stable tag reachable from
+`origin/main` (`manager/lib/release.sh`); prereleases only via
+`tokenpanel update vX.Y.Z-rc.N`. Before the first tag it falls back to
+`origin/main`. Never move or delete a published tag: managers that predate the
+release channel fail their fetch on a clobbered tag.
 
 ### Release readiness
 

@@ -105,8 +105,9 @@ export const createProvider = (input: {
       return yield* Effect.fail(
         new ValidationError({
           code: "validation_error",
-          message: `unknown_sdk_type: ${input.sdkType}`,
+          message: `Unknown provider SDK type: ${input.sdkType}`,
           mode: "default_400",
+          issues: [{ path: "sdkType", message: `Unknown provider SDK type: ${input.sdkType}` }],
         }),
       );
     }
@@ -167,8 +168,9 @@ export const updateProvider = (input: {
       return yield* Effect.fail(
         new ValidationError({
           code: "validation_error",
-          message: `unknown_sdk_type: ${input.patch.sdkType}`,
+          message: `Unknown provider SDK type: ${input.patch.sdkType}`,
           mode: "default_400",
+          issues: [{ path: "sdkType", message: `Unknown provider SDK type: ${input.patch.sdkType}` }],
         }),
       );
     }
@@ -365,8 +367,9 @@ export const discoverProviderModels = (input: {
       return yield* Effect.fail(
         new ValidationError({
           code: "validation_error",
-          message: `unknown_sdk_type: ${provider.sdkType}`,
+          message: `Unknown provider SDK type: ${provider.sdkType}`,
           mode: "default_400",
+          issues: [{ path: "sdkType", message: `Unknown provider SDK type: ${provider.sdkType}` }],
         }),
       );
     }

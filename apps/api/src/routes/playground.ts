@@ -20,19 +20,19 @@ import type { ChatRequest, ChatMessage, ContentPart } from "../providers/index.t
 import { toOpenAIFinishReason, toOpenAIToolCallDeltas } from "../providers/index.ts";
 import {
   applyDoneUsage,
-  classifyGenerationFailure,
   completeGeneration,
   emptyStreamUsage,
   openStreamGeneration,
   type GenerationCompleteResult,
 } from "../domains/providers/generation.ts";
 import { CustomerRepository } from "../domains/ports/customer-repository.ts";
+import { standardErrorBody } from "../http/renderers/standard.ts";
 import {
-  formatOpenAIErrorBody,
-  openAISseTerminalFromAppError,
-} from "../http/renderers/openai.ts";
-import { isAppError, SystemError } from "../errors/families.ts";
-import { publicMessageForCode, SAFE_MESSAGES } from "../errors/safe-messages.ts";
+  standardGenerationError,
+  standardStreamError,
+} from "../http/stream-errors.ts";
+import { SystemError } from "../errors/families.ts";
+import { SAFE_MESSAGES } from "../errors/safe-messages.ts";
 import {
   mapExitToHttpResponse,
   runOpenAIEffect,
@@ -106,31 +106,6 @@ function translateMessage(m: PlaygroundMessage): ChatMessage {
     content,
     toolCallId: m.tool_call_id,
     toolCalls: m.tool_calls ? [...m.tool_calls] : undefined,
-  };
-}
-
-function formatError(code: string, message: string, extra?: Record<string, unknown>, status?: number) {
-  const type =
-    status === 401
-      ? "authentication_error"
-      : status === 403
-        ? "permission_error"
-        : status === 404
-          ? "not_found_error"
-          : status === 429
-            ? "rate_limit_error"
-            : status !== undefined && status >= 500
-              ? "api_error"
-              : code === "rate_limited"
-                ? "rate_limit_error"
-                : "invalid_request_error";
-  return {
-    error: {
-      message,
-      type,
-      code,
-      ...(extra ?? {}),
-    },
   };
 }
 
@@ -388,27 +363,22 @@ playground.post("/chat", sValidator("json", PlaygroundChatBody), async (c) => {
           clientDisconnected = true;
         }
       };
-      const enqueueTerminalError = (code: string, message: string) => {
+      // Admin surface: standard OpenAI-shaped events plus upstream debug
+      // detail (classified message, upstream status and redacted body).
+      const enqueueTerminalError = (code: string) => {
         if (terminalErrorEmitted || clientDisconnected) return;
         terminalErrorEmitted = true;
-        enqueue(formatError(code, publicMessageForCode(code, message)));
+        enqueue(standardErrorBody("openai", standardStreamError(code)));
       };
-      const enqueueAppError = (err: unknown) => {
-        const classified = isAppError(err)
-          ? err
-          : classifyGenerationFailure(err);
-        if (isAppError(classified) && !terminalErrorEmitted) {
-          terminalErrorEmitted = true;
-          try {
-            controller.enqueue(
-              encoder.encode(openAISseTerminalFromAppError(classified)),
-            );
-          } catch {
-            clientDisconnected = true;
-          }
-        } else if (!terminalErrorEmitted) {
-          enqueueTerminalError("upstream_error", SAFE_MESSAGES.upstream_error);
-        }
+      const enqueueAppError = (err: unknown, streamCommitted = false) => {
+        if (terminalErrorEmitted || clientDisconnected) return;
+        terminalErrorEmitted = true;
+        enqueue(
+          standardErrorBody(
+            "openai",
+            standardGenerationError(err, { streamCommitted, debug: true }),
+          ),
+        );
       };
       // SSE heartbeat: keeps the connection alive through proxies during
       // upstream silence. Comment lines are ignored by all SSE clients.
@@ -430,11 +400,7 @@ playground.post("/chat", sValidator("json", PlaygroundChatBody), async (c) => {
           }
           if (event.kind !== "chunk") {
             if (event.kind === "terminal_fail" && !clientDisconnected) {
-              enqueueAppError(
-                classifyGenerationFailure(event.err, {
-                  streamCommitted: event.streamCommitted,
-                }),
-              );
+              enqueueAppError(event.err, event.streamCommitted);
             }
             continue;
           }
@@ -465,20 +431,14 @@ playground.post("/chat", sValidator("json", PlaygroundChatBody), async (c) => {
           } else if (chunk.type === "done") {
             applyDoneUsage(usage, chunk);
           } else if (chunk.type === "error") {
-            enqueueTerminalError(
-              "upstream_error",
-              chunk.error?.message ?? SAFE_MESSAGES.upstream_error,
-            );
+            enqueueTerminalError(chunk.error?.code ?? "upstream_error");
           }
         }
 
         if (clientDisconnected || abortSignal.aborted) {
           // no fabricated body
         } else if (!usage.streamComplete) {
-          enqueueTerminalError(
-            "stream_truncated",
-            "Upstream stream ended without a terminal event; response may be incomplete",
-          );
+          enqueueTerminalError("stream_truncated");
         } else {
           enqueue({
             id,
@@ -589,7 +549,6 @@ playground.post("/chat", sValidator("json", PlaygroundChatBody), async (c) => {
   });
 });
 
-void formatOpenAIErrorBody;
 
 function pickExtras(body: PlaygroundChatBody): Record<string, unknown> {
   const extra: Record<string, unknown> = {};

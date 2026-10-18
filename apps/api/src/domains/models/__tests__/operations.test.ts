@@ -235,7 +235,7 @@ test("createModel: fails ValidationError when a referenced provider is missing",
     }).pipe(Effect.provide(Layer.merge(layer, cryptoLayer()))),
   );
   const err = expectError(exit, ValidationError);
-  expect(err.message).toBe("provider_not_found");
+  expect(err.message).toBe("Provider not found");
   expect(calls.inserts).toHaveLength(0);
 });
 
@@ -510,7 +510,7 @@ test("updateModel: ValidationError when replacement entries reference unknown pr
     }).pipe(Effect.provide(Layer.merge(layer, cryptoLayer()))),
   );
   const err = expectError(exit, ValidationError);
-  expect(err.message).toBe("provider_not_found");
+  expect(err.message).toBe("Provider not found");
   expect(calls.updates).toHaveLength(0);
 });
 
@@ -575,7 +575,7 @@ test("reorderFallbacks: ValidationError entry_not_found for unknown entry id", a
     }).pipe(Effect.provide(layer)),
   );
   const err = expectError(exit, ValidationError);
-  expect(err.message).toBe("entry_not_found: ghost");
+  expect(err.message).toBe("Model entry not found: ghost");
   expect(calls.setEntries).toHaveLength(0);
 });
 
@@ -665,7 +665,7 @@ test("addModelEntry: ValidationError when the entry provider is unknown", async 
     }).pipe(Effect.provide(Layer.merge(layer, cryptoLayer()))),
   );
   const err = expectError(exit, ValidationError);
-  expect(err.message).toBe("provider_not_found");
+  expect(err.message).toBe("Provider not found");
   expect(calls.countProviders[0]!.ids).toEqual([providerIdB]);
   expect(calls.setEntries).toHaveLength(0);
 });

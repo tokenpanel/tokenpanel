@@ -2,7 +2,6 @@ import { test, expect } from "bun:test";
 import { ObjectId } from "mongodb";
 import {
   translateAnthropicMessage,
-  anthropicError,
   buildAnthropicChatRequest,
   anthropicMessageJson,
   effectiveAnthropicMaxTokens,
@@ -557,17 +556,4 @@ test("anthropicToolInstructions: consecutive parallel tool calls each get their 
     { index: 0, id: "c1", name: "get_weather" },
     { index: 1, id: "c2", name: "get_time" },
   ]);
-});
-// ---------------------------------------------------------------------------
-// Error envelope — Anthropic spec
-// ---------------------------------------------------------------------------
-
-test("anthropicError: wraps type+message+extra in {type:'error', error:{}}", () => {
-  const e = anthropicError("invalid_request_error", "bad input");
-  expect(e).toEqual({ type: "error", error: { type: "invalid_request_error", message: "bad input" } });
-});
-
-test("anthropicError: merges extra fields into error object", () => {
-  const e = anthropicError("rate_limit_error", "too many", { retryAfterSeconds: 60 });
-  expect((e.error as Record<string, unknown>).retryAfterSeconds).toBe(60);
 });

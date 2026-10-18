@@ -18,6 +18,8 @@ import {
   sanitizeFieldErrors,
   sanitizeValidationMessage,
 } from "../renderers/validation.ts";
+import { renderStandardValidation } from "../renderers/standard.ts";
+import { errorStyleOf } from "../error-context.ts";
 
 export type ValidationTarget = keyof ValidationTargets;
 
@@ -120,6 +122,13 @@ export function safeParseSchema<A, I>(
 
 type HookResult = Response | void | undefined | Promise<Response | void | undefined>;
 
+/** Effect issues → standard `{ path, message }` (path dot-joined). */
+export function standardIssues(
+  issues: readonly EffectIssue[],
+): { path: string; message: string }[] {
+  return issues.map((i) => ({ path: i.path.map(String).join("."), message: i.message }));
+}
+
 /**
  * Hono middleware: validate json/query/param/header/form via Effect Schema.
  * Types `c.req.valid(target)` as schema output type A.
@@ -159,6 +168,14 @@ export function sValidator<
     }
 
     if (!result.success) {
+      const style = errorStyleOf(c);
+      if (style.standard) {
+        const r = renderStandardValidation(
+          style.surface,
+          standardIssues(result.error.issues),
+        );
+        return c.json(r.body as object, 400, r.headers);
+      }
       return c.json(
         {
           success: false as const,

@@ -33,6 +33,7 @@ import {
 import { withParseApi } from "../../http/validation/with-parse-api.ts";
 import type { CustomerDoc, ManagementScope } from "@tokenpanel/db";
 import type { PublicPrincipal } from "../../middleware/public-auth.ts";
+import { notFoundResponse } from "../../http/error-context.ts";
 
 type ManagementAuthVariables = PublicAuthVariables;
 
@@ -113,7 +114,7 @@ app.get(
   async (c) => {
     const orgId = c.get("orgId");
     const id = c.req.param("id");
-    if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
+    if (!ObjectId.isValid(id)) return notFoundResponse(c);
     const redact = !hasBalancesRead(c);
     return runManagementEffect(
       c,
@@ -137,7 +138,7 @@ app.get(
   async (c) => {
     const orgId = c.get("orgId");
     const id = c.req.param("id");
-    if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
+    if (!ObjectId.isValid(id)) return notFoundResponse(c);
     const q = c.req.valid("query");
     return runManagementEffect(
       c,
@@ -158,7 +159,7 @@ app.get(
   async (c) => {
     const orgId = c.get("orgId");
     const id = c.req.param("id");
-    if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
+    if (!ObjectId.isValid(id)) return notFoundResponse(c);
     return runManagementEffect(
       c,
       getActiveSubscription({
@@ -176,7 +177,7 @@ app.get(
   async (c) => {
     const orgId = c.get("orgId");
     const id = c.req.param("id");
-    if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
+    if (!ObjectId.isValid(id)) return notFoundResponse(c);
     return runManagementEffect(
       c,
       listCustomerLimits({
@@ -194,7 +195,7 @@ app.get(
   async (c) => {
     const orgId = c.get("orgId");
     const id = c.req.param("id");
-    if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
+    if (!ObjectId.isValid(id)) return notFoundResponse(c);
     return runManagementEffect(
       c,
       listCustomerBudgets({
@@ -213,7 +214,7 @@ app.get(
   async (c) => {
     const orgId = c.get("orgId");
     const id = c.req.param("id");
-    if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
+    if (!ObjectId.isValid(id)) return notFoundResponse(c);
     const q = c.req.valid("query");
     return runManagementEffect(
       c,
@@ -268,7 +269,7 @@ app.get(
   async (c) => {
     const orgId = c.get("orgId");
     const id = c.req.param("id");
-    if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
+    if (!ObjectId.isValid(id)) return notFoundResponse(c);
     return runManagementEffect(
       c,
       getModel({ organizationId: orgId.toHexString(), modelId: id }).pipe(
@@ -300,7 +301,7 @@ app.get(
   async (c) => {
     const orgId = c.get("orgId");
     const id = c.req.param("id");
-    if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
+    if (!ObjectId.isValid(id)) return notFoundResponse(c);
     return runManagementEffect(
       c,
       getPlan({ organizationId: orgId.toHexString(), planId: id }),

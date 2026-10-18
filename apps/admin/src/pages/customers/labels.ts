@@ -62,22 +62,7 @@ export function subStatusLabel(status: SubscriptionStatus | string): string {
 }
 
 export function errorMessage(err: unknown, fallback: string): string {
-  if (err instanceof ApiError) {
-    if (err.status === 409) {
-      const body = err.body as { error?: string } | null;
-      if (body?.error === "subscription_already_active") {
-        return "Already has an active subscription.";
-      }
-      if (body?.error === "duplicate_external_id_or_email") {
-        return "External ID or email already in use.";
-      }
-      if (body?.error === "plan_not_active") {
-        return "Selected plan is not active.";
-      }
-      return err.message;
-    }
-    if (err.status === 404) return "Not found.";
-    return err.message;
-  }
+  // The API's standard error message is written for people already.
+  if (err instanceof ApiError) return err.message;
   return fallback;
 }

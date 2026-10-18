@@ -1,5 +1,7 @@
 import {
   expect,
+  MOCK_ERROR_MESSAGE,
+  MOCK_ERROR_TRIGGER,
   MOCK_REPLY,
   reliableClick,
   setupMockPipeline,
@@ -70,5 +72,98 @@ test.describe("gateway / billing / analytics / playground", () => {
     // than asserted here.
     await expect(page.getByText(MOCK_REPLY).first()).toBeVisible();
     await expect(page.getByRole("button", { name: "Send", exact: true })).toBeVisible();
+  });
+
+  test("/v1 errors follow the OpenAI/Anthropic contracts and never leak upstream", async ({ request }) => {
+    test.skip(!pipeline, "pipeline not provisioned");
+    const auth = { Authorization: `Bearer ${pipeline!.apiKey}` };
+    const messages = [{ role: "user", content: `Please fail: ${MOCK_ERROR_TRIGGER}` }];
+    const assertNoUpstreamLeak = (text: string) => {
+      expect(text).not.toContain(MOCK_ERROR_MESSAGE);
+      expect(text).not.toContain("HTTP 400");
+      expect(text).not.toContain("chatComplete");
+      expect(text).not.toContain("streamChat");
+    };
+    const providerRejected = {
+      error: {
+        message: "The model provider rejected the request.",
+        type: "server_error",
+        param: null,
+        code: "provider_rejected",
+      },
+    };
+
+    // One behavior: the TokenPanel-Version header changes nothing on /v1.
+    for (const headers of [auth, { ...auth, "TokenPanel-Version": "2" }]) {
+      const res = await request.post("/v1/chat/completions", {
+        headers,
+        data: { model: pipeline!.modelAlias, messages, stream: false },
+      });
+      expect(res.status()).toBe(502);
+      expect(res.headers()["x-should-retry"]).toBe("false");
+      expect(res.headers()["tokenpanel-version"]).toBeUndefined();
+      const text = await res.text();
+      assertNoUpstreamLeak(text);
+      expect(JSON.parse(text)).toEqual(providerRejected);
+    }
+
+    const stream = await request.post("/v1/chat/completions", {
+      headers: auth,
+      data: { model: pipeline!.modelAlias, messages, stream: true },
+    });
+    const streamText = await stream.text();
+    assertNoUpstreamLeak(streamText);
+    expect(streamText).toContain(`data: ${JSON.stringify(providerRejected)}`);
+
+    const anthropic = await request.post("/v1/messages", {
+      headers: auth,
+      data: { model: pipeline!.modelAlias, max_tokens: 64, messages },
+    });
+    expect(anthropic.status()).toBe(502);
+    const anthropicText = await anthropic.text();
+    assertNoUpstreamLeak(anthropicText);
+    expect(JSON.parse(anthropicText)).toEqual({
+      type: "error",
+      error: {
+        type: "api_error",
+        code: "provider_rejected",
+        message: "The model provider rejected the request.",
+      },
+    });
+
+    const anthropicStream = await request.post("/v1/messages", {
+      headers: auth,
+      data: { model: pipeline!.modelAlias, max_tokens: 64, messages, stream: true },
+    });
+    const anthropicStreamText = await anthropicStream.text();
+    assertNoUpstreamLeak(anthropicStreamText);
+    expect(anthropicStreamText).toContain("event: error\n");
+    expect(anthropicStreamText).toContain('"code":"provider_rejected"');
+
+    const badKey = await request.post("/v1/chat/completions", {
+      headers: { Authorization: "Bearer tp_live_not_a_real_key" },
+      data: { model: pipeline!.modelAlias, messages },
+    });
+    expect(badKey.status()).toBe(401);
+    expect((await badKey.json()).error).toMatchObject({
+      type: "invalid_request_error",
+      code: "invalid_api_key",
+    });
+  });
+
+  test("playground keeps an upstream error and the provider's reason visible", async ({ page }) => {
+    test.skip(!pipeline, "pipeline not provisioned");
+    await page.goto("/playground");
+
+    const composer = page.getByRole("textbox", { name: "Message", exact: true });
+    await expect(composer).toBeVisible();
+    await composer.fill(`Please fail: ${MOCK_ERROR_TRIGGER}`);
+    await reliableClick(page.getByRole("button", { name: "Send", exact: true }));
+
+    // Stream finished (composer back to Send), and the error is still shown:
+    // the classified status plus the upstream body's own message.
+    await expect(page.getByRole("button", { name: "Send", exact: true })).toBeVisible();
+    await expect(page.getByText("HTTP 400").first()).toBeVisible();
+    await expect(page.getByText(MOCK_ERROR_MESSAGE).first()).toBeVisible();
   });
 });

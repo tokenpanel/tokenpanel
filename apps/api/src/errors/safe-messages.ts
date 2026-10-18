@@ -76,7 +76,8 @@ export function classifyJwtMessage(raw: string): {
 export function looksLikeUnsafeDiagnostic(text: string): boolean {
   return (
     /ECONNREFUSED|ENOTFOUND|ECONNRESET|MongoServer|mongodb(\+srv)?:\/\//i.test(text) ||
-    /at\s+\S+\s+\(/i.test(text) || // stack-ish
+    // stack frame ("at fn (file:1:2)"); \b keeps "streamChat failed (HTTP 400)" clean
+    /\bat\s+\S+\s+\(/i.test(text) ||
     /api[_-]?key|password|secret|authorization|bearer\s+\S+/i.test(text) ||
     /sk-[a-zA-Z0-9]{10,}/i.test(text)
   );

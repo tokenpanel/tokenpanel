@@ -79,6 +79,8 @@ export class ConflictError extends Data.TaggedError("ConflictError")<{
   readonly code: string;
   readonly message: string;
   readonly fields?: readonly string[];
+  /** Safe structured context for clients (e.g. remaining record counts). */
+  readonly details?: Readonly<Record<string, unknown>>;
 }> {}
 
 export class InvalidStateError extends Data.TaggedError("InvalidStateError")<{

@@ -162,11 +162,15 @@ test.describe("gateway behaviors: billing / rate-limit / fallback / protocols", 
 
     const limited = await chat();
     expect(limited.status(), "request 3 over cap → 429").toBe(429);
+    // OpenAI rate-limit contract: SDKs raise RateLimitError and honor the
+    // retry headers; TokenPanel's limit details ride along in `details`.
+    expect(limited.headers()["retry-after"]).toBeTruthy();
+    expect(limited.headers()["x-should-retry"]).toBe("true");
     const body = await limited.json();
     expect(body.error.type).toBe("rate_limit_error");
-    expect(body.error.code).toBe("rate_limited");
-    expect(body.error.dimension).toBe("requests");
-    expect(body.error.cap).toBe(2);
+    expect(body.error.code).toBe("rate_limit_exceeded");
+    expect(body.error.details.dimension).toBe("requests");
+    expect(body.error.details.cap).toBe(2);
   });
 
   test("fails over to the next entry when the primary provider is dead", async ({

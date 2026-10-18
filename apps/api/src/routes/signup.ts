@@ -12,17 +12,7 @@ export const signupRoutes = new Hono<{ Variables: AuthVariables }>();
 
 signupRoutes.post(
   "/signup",
-  sValidator("json", signupBody, (result, c) => {
-    if (!result.success) {
-      return c.json(
-        {
-          error: "validation_error",
-          details: result.error.flatten().fieldErrors,
-        },
-        422,
-      );
-    }
-  }),
+  sValidator("json", signupBody),
   async (c) => {
     const body = c.req.valid("json");
     return runAdminEffect(

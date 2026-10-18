@@ -39,7 +39,6 @@ import {
   Trash2,
   Plus,
   Loader2,
-  AlertCircle,
   ChevronDown,
   ChevronUp,
   Bot,
@@ -66,6 +65,8 @@ type Role = "system" | "user" | "assistant";
 interface ChatMessage {
   role: Role;
   content: string;
+  /** Failed reply: shown in the transcript, never sent back as context. */
+  error?: { message: string; detail: string | null; model: string } | undefined;
 }
 
 interface StreamState {
@@ -75,6 +76,7 @@ interface StreamState {
     reasoning: string;
     done: boolean;
     error: string | null;
+    errorDetail: string | null;
     provider: { providerId: string; upstreamModelId: string; sdkType: string } | null;
     cost: { costMicros: number; priceMicros: number; currency: string } | null;
     billed: boolean;
@@ -205,12 +207,12 @@ export default function PlaygroundPage(): React.ReactElement {
 
     // Initialise a stream-state per selected model.
     const init: StreamState = {};
-    for (const alias of selectedModelAliases) init[alias] = { content: "", reasoning: "", done: false, error: null, provider: null, cost: null, billed: false, usage: null };
+    for (const alias of selectedModelAliases) init[alias] = { content: "", reasoning: "", done: false, error: null, errorDetail: null, provider: null, cost: null, billed: false, usage: null };
     setStreamStates(init);
 
     const bodyMessages: Array<{ role: Role; content: string }> = [];
     if (systemPrompt.trim()) bodyMessages.push({ role: "system", content: systemPrompt.trim() });
-    for (const m of newMessages) bodyMessages.push({ role: m.role, content: m.content });
+    for (const m of newMessages) if (!m.error) bodyMessages.push({ role: m.role, content: m.content });
 
     const payload: Record<string, unknown> = {
       messages: bodyMessages,
@@ -245,12 +247,26 @@ export default function PlaygroundPage(): React.ReactElement {
     // follow-up message has full context. When only one model is selected, fold
     // its content as a single assistant turn; with multiple, keep them separate
     // by prefixing the model alias (so the next round sees distinct replies).
+    // Failed replies are folded too so the error stays visible once the stream
+    // panels are cleared; send() leaves them out of the next request.
     const folded: ChatMessage[] = [];
     results.forEach((r, i) => {
       if (r.status !== "fulfilled") return;
       const st = r.value;
-      if (st.error || !st.content) return;
       const alias = selectedModelAliases[i]!;
+      if (st.error) {
+        folded.push({
+          role: "assistant",
+          content: st.content,
+          error: {
+            message: st.error,
+            detail: st.errorDetail,
+            model: models.find((m) => m.aliasId === alias)?.displayName ?? alias,
+          },
+        });
+        return;
+      }
+      if (!st.content) return;
       if (selectedModelAliases.length === 1) {
         folded.push({ role: "assistant", content: st.content });
       } else {
@@ -262,7 +278,7 @@ export default function PlaygroundPage(): React.ReactElement {
   }
 
   async function streamOne(aliasId: string, payload: Record<string, unknown>, signal: AbortSignal): Promise<StreamState[string]> {
-    let st: StreamState[string] = { content: "", reasoning: "", done: false, error: null, provider: null, cost: null, billed: false, usage: null };
+    let st: StreamState[string] = { content: "", reasoning: "", done: false, error: null, errorDetail: null, provider: null, cost: null, billed: false, usage: null };
     const sync = (): void => setStreamStates((s) => (s[aliasId] ? { ...s, [aliasId]: st } : s));
     try {
       // Use central client (API_BASE + Bearer + 401 invalidation) — not raw same-origin fetch.
@@ -277,6 +293,7 @@ export default function PlaygroundPage(): React.ReactElement {
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
+      let sawDone = false;
       while (true) {
         const { value, done } = await reader.read();
         if (done) break;
@@ -288,7 +305,10 @@ export default function PlaygroundPage(): React.ReactElement {
           line = line.trim();
           if (!line.startsWith("data:")) continue;
           const data = line.slice(5).trim();
-          if (data === "[DONE]") continue;
+          if (data === "[DONE]") {
+            sawDone = true;
+            continue;
+          }
           let evt: Record<string, unknown>;
           try {
             evt = JSON.parse(data) as Record<string, unknown>;
@@ -299,7 +319,11 @@ export default function PlaygroundPage(): React.ReactElement {
           sync();
         }
       }
-      st = { ...st, done: true };
+      // The API ends every complete stream with [DONE] and every failed one
+      // with an error event; neither means the connection dropped mid-reply.
+      st = !sawDone && !st.error
+        ? { ...st, done: true, error: "Connection closed before the model finished responding" }
+        : { ...st, done: true };
       sync();
       flushStreamStates();
       return st;
@@ -342,7 +366,6 @@ export default function PlaygroundPage(): React.ReactElement {
         </PageHeader>
         {loadError && (
           <Alert variant="destructive">
-            <AlertCircle className="size-4" />
             <AlertDescription>{loadError}</AlertDescription>
           </Alert>
         )}
@@ -482,7 +505,7 @@ export default function PlaygroundPage(): React.ReactElement {
                     </div>
                   )}
                   {messages.map((m, i) => (
-                    <MessageBubble key={i} role={m.role} content={m.content} />
+                    <MessageBubble key={i} role={m.role} content={m.content} error={m.error} />
                   ))}
                   {Object.entries(streamStates).map(([alias, st]) => (
                     <StreamPanel
@@ -560,8 +583,22 @@ export default function PlaygroundPage(): React.ReactElement {
 // flash" flicker) and thrashing the markdown DOM. Stable identity = React
 // reconciles in place = zero flicker.
 
-function MessageBubble({ role, content }: { role: Role; content: string }): React.ReactElement {
+function MessageBubble({ role, content, error }: { role: Role; content: string; error?: ChatMessage["error"] }): React.ReactElement {
   const isUser = role === "user";
+  if (error) {
+    return (
+      <div className="flex justify-start">
+        <div className="flex max-w-[85%] min-w-0 flex-col gap-2 rounded-lg border border-border bg-card px-3.5 py-2.5 text-sm text-card-foreground">
+          <div className="flex items-center gap-2 text-xs">
+            <span className="text-[13px] font-semibold text-foreground">{error.model}</span>
+            <Badge variant="destructive" className="ml-auto">Error</Badge>
+          </div>
+          {content ? <StreamingMarkdown content={content} /> : null}
+          <ErrorAlert message={error.message} detail={error.detail} />
+        </div>
+      </div>
+    );
+  }
   return (
     <div className={cn("flex", isUser ? "justify-end" : "justify-start")}>
       <div
@@ -577,6 +614,19 @@ function MessageBubble({ role, content }: { role: Role; content: string }): Reac
         )}
       </div>
     </div>
+  );
+}
+
+function ErrorAlert({ message, detail }: { message: string; detail: string | null }): React.ReactElement {
+  return (
+    <Alert variant="destructive">
+      <AlertDescription className="flex min-w-0 flex-col gap-1 text-xs">
+        <span>{message}</span>
+        {detail ? (
+          <span className="whitespace-pre-wrap break-words font-mono text-[11px]">{detail}</span>
+        ) : null}
+      </AlertDescription>
+    </Alert>
   );
 }
 
@@ -631,12 +681,7 @@ function StreamPanel({ displayName, state, streaming: isStreaming, modelReasonin
         {state.content ? (
           <StreamingMarkdown content={state.content} streaming={isActivelyStreaming} />
         ) : null}
-        {state.error ? (
-          <Alert variant="destructive">
-            <AlertCircle className="size-4" />
-            <AlertDescription className="text-xs">{state.error}</AlertDescription>
-          </Alert>
-        ) : null}
+        {state.error ? <ErrorAlert message={state.error} detail={state.errorDetail} /> : null}
         {(state.usage || state.cost) && !isActivelyStreaming && (
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-rule pt-2 text-[11.5px] tabular-nums text-muted-foreground">
             {state.usage && (

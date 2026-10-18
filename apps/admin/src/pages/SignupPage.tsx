@@ -182,19 +182,9 @@ export default function SignupPage(): ReactElement {
       navigate("/", { replace: true });
     } catch (err) {
       if (err instanceof ApiError) {
-        if (err.status === 422 && err.body && typeof err.body === "object" && "details" in err.body) {
-          const details = (err.body as { details?: Record<string, string[]> }).details;
-          if (details) {
-            const mapped: FieldErrors = {};
-            for (const key of Object.keys(details) as (keyof FieldErrors)[]) {
-              const msgs = details[key];
-              const first = Array.isArray(msgs) ? msgs[0] : undefined;
-              if (first !== undefined) {
-                mapped[key] = first;
-              }
-            }
-            setFieldErrors(mapped);
-          }
+        if (err.code === "validation_error") {
+          setFieldErrors(err.fieldErrors() as FieldErrors);
+          setError(err.message);
         } else if (err.status === 409) {
           setError(err.message || "Setup could not be completed.");
         } else {
@@ -240,24 +230,9 @@ export default function SignupPage(): ReactElement {
           setError("Too many attempts. Wait a few minutes and try again.");
         } else if (err.status === 409) {
           setError(err.message || "Username or email is already taken.");
-        } else if (
-          err.status === 422 &&
-          err.body &&
-          typeof err.body === "object" &&
-          "details" in err.body
-        ) {
-          const details = (err.body as { details?: Record<string, string[]> }).details;
-          if (details) {
-            const mapped: FieldErrors = {};
-            for (const key of Object.keys(details) as (keyof FieldErrors)[]) {
-              const msgs = details[key];
-              const first = Array.isArray(msgs) ? msgs[0] : undefined;
-              if (first !== undefined) {
-                mapped[key] = first;
-              }
-            }
-            setFieldErrors(mapped);
-          }
+        } else if (err.code === "validation_error") {
+          setFieldErrors(err.fieldErrors() as FieldErrors);
+          setError(err.message);
         } else {
           setError(err.message || `Invite accept failed (${err.status}).`);
         }

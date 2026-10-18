@@ -5,6 +5,8 @@ export type StreamPanelState = {
   reasoning: string;
   done: boolean;
   error: string | null;
+  /** Upstream provider's own reason (playground error `upstream.detail`). */
+  errorDetail: string | null;
   provider: {
     providerId: string;
     upstreamModelId: string;
@@ -79,11 +81,37 @@ export function applyEventToState(
     };
   }
   if (obj === "error" || (evt.error && typeof evt.error === "object")) {
-    const e =
-      (evt.error as { message?: string } | undefined)?.message ?? "error";
-    return { ...cur, done: true, error: e };
+    const e = evt.error as
+      | { message?: string; upstream?: { detail?: string } }
+      | undefined;
+    return {
+      ...cur,
+      done: true,
+      error: e?.message ?? "error",
+      errorDetail: upstreamErrorDetail(e?.upstream?.detail),
+    };
   }
   return cur;
+}
+
+/**
+ * Upstream bodies are usually `{"error":{"message":…}}` or `{"message":…}`;
+ * show that message when present, else the raw (bounded) body.
+ */
+export function upstreamErrorDetail(raw: string | undefined): string | null {
+  if (!raw) return null;
+  try {
+    const j = JSON.parse(raw) as {
+      error?: { message?: unknown } | string;
+      message?: unknown;
+    };
+    if (typeof j.error === "string") return j.error;
+    if (typeof j.error?.message === "string") return j.error.message;
+    if (typeof j.message === "string") return j.message;
+  } catch {
+    /* not JSON (or truncated) */
+  }
+  return raw;
 }
 
 export function round(n: number, dp: number): number {

@@ -22,6 +22,7 @@ control (token usage, account balances, subscriptions, budgets, rolling limits).
 - **Contracts**: no env, I/O, Node, Mongo, or UI. Admin may import contracts, never `@tokenpanel/db`. Migrations use frozen snapshots, never live contracts.
 - **DB access**: schemas in `packages/db/src/schemas/*.ts` export `…Doc` (with `_id`, `createdAt`, `updatedAt`) and `…CreateInput` (ObjectIds as strings, coerced). Use the typed `getDb()`; never `db.collection("…")` outside `packages/db`. Executables call `configureDb({ uri, databaseName })` first.
 - **Money**: integer micros (`amountMicros`, 10⁻⁶ major unit) + ISO currency code, never floats. Admin enters major units; `packages/contracts/src/money-micros.ts` converts at the boundary.
+- **Errors**: every AppError maps to one code in `apps/api/src/errors/catalog.ts` (one status per code, TokenPanel-written messages; upstream detail only as admin `upstream`). `/v1/*` renders it in the OpenAI/Anthropic error contracts (`http/renderers/standard.ts`, no versioning); admin always standard; `/api/management/*` keeps frozen version 1 errors unless `TokenPanel-Version: 2`. Add new codes to the catalogue and the wiki Errors page.
 - **Env**: Bun auto-loads `.env` in dev (no dotenv). The API parses config once (`parseApiRuntimeConfig`, `apps/api/src/config/runtime.ts`) and exits if config is invalid or MongoDB is unreachable.
 
 ## Migrations

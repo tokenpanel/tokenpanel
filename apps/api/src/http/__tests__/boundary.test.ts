@@ -448,7 +448,7 @@ test("runManagementEffect: enumeration-safe 401 without message leak", async () 
   expect(text).not.toContain("jwt");
 });
 
-test("runOpenAIEffect: failure renders OpenAI envelope with typed error", async () => {
+test("runOpenAIEffect: failure renders the OpenAI error contract", async () => {
   const res = await runOpenAIEffect(
     makeCtx(),
     Effect.fail(
@@ -463,8 +463,8 @@ test("runOpenAIEffect: failure renders OpenAI envelope with typed error", async 
   const body = (await res.json()) as {
     error: { type: string; code: string };
   };
-  expect(body.error.type).toBe("authentication_error");
-  expect(body.error.code).toBe("unauthorized");
+  expect(body.error.type).toBe("invalid_request_error");
+  expect(body.error.code).toBe("invalid_api_key");
 });
 
 test("runAnthropicEffect: failure renders Anthropic error envelope", async () => {

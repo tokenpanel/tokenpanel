@@ -6,6 +6,7 @@ import {
 } from "../domains/auth/authz.ts";
 import type { AuthzPrincipal } from "../domains/auth/types.ts";
 import { runMiddlewareEffect } from "../http/adapters/boundary.ts";
+import { respondWithCode } from "../http/error-context.ts";
 import { isAppError } from "../errors/families.ts";
 import { renderAdminError } from "../http/renderers/admin.ts";
 import { Effect } from "effect";
@@ -57,7 +58,9 @@ export function requireManagementScope(scope: ManagementScope): MiddlewareHandle
     const principal = c.get("principal") as PublicPrincipal | undefined;
 
     if (!principal || principal.kind !== "management") {
-      return c.json({ error: "unauthorized" }, 401);
+      return respondWithCode(c, "unauthorized", () =>
+        c.json({ error: "unauthorized" }, 401),
+      );
     }
     const authz: AuthzPrincipal = {
       kind: "management_key",

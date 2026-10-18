@@ -4,7 +4,7 @@
  * Order: bootApi (config → mongo → pre migrations → ManagedRuntime) →
  * compose Hono → Bun.serve → WorkerControl.start → register shutdown.
  */
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { cors } from "hono/cors";
 import { serveStatic } from "hono/bun";
@@ -39,6 +39,13 @@ import publicAnthropic from "./routes/public/anthropic.ts";
 import { requirePublicPrincipal } from "./middleware/public-auth.ts";
 import { requireManagementPrincipal } from "./middleware/management-auth.ts";
 import { securityHeaders } from "./middleware/security-headers.ts";
+import {
+  API_VERSION_HEADER,
+  apiVersionMiddleware,
+  errorStyleOf,
+  renderedJson,
+} from "./http/error-context.ts";
+import { renderStandardCode } from "./http/renderers/standard.ts";
 import "./providers/index.ts";
 import {
   bootApi,
@@ -81,8 +88,13 @@ app.use("*", securityHeaders);
 // Chat (/v1, playground) may carry base64 media → higher cap; admin/management
 // stay on the tighter default. Applied as one middleware so limits do not stack
 // (a global 1 MiB would reject chat before a route-level 10 MiB ran).
-const bodyTooLarge = (c: { json: (b: unknown, s: 413) => Response }) =>
-  c.json({ error: "payload_too_large", message: "Request body too large" }, 413);
+const bodyTooLarge = (c: Context) => {
+  const style = errorStyleOf(c);
+  if (style.standard) {
+    return renderedJson(c, renderStandardCode(style.surface, "payload_too_large"));
+  }
+  return c.json({ error: "payload_too_large", message: "Request body too large" }, 413);
+};
 
 app.use("*", async (c, next) => {
   const path = c.req.path;
@@ -107,11 +119,17 @@ app.use(
       return allowedOrigins.includes(origin) ? origin : null;
     },
     allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowHeaders: ["Content-Type", "Authorization"],
+    allowHeaders: ["Content-Type", "Authorization", API_VERSION_HEADER],
+    // Browser SDK clients need the retry hints; TokenPanel-Version for the
+    // Management API.
+    exposeHeaders: [API_VERSION_HEADER, "Retry-After", "x-should-retry"],
     credentials: false,
     maxAge: 600,
   }),
 );
+
+// After CORS so version errors still carry CORS headers.
+app.use("*", apiVersionMiddleware);
 
 app.get("/health", async (c) => {
   try {
@@ -178,10 +196,18 @@ app.notFound((c) => {
   if (c.req.method === "GET" && wantsHtml && !wantsSse && hasAdminDist) {
     return c.body(Bun.file(join(adminDistDir, "index.html")).stream());
   }
+  const style = errorStyleOf(c);
+  if (style.standard) {
+    return renderedJson(c, renderStandardCode(style.surface, "not_found"));
+  }
   return c.json({ error: "not_found" }, 404);
 });
 app.onError((err, c) => {
   console.error(err);
+  const style = errorStyleOf(c);
+  if (style.standard) {
+    return renderedJson(c, renderStandardCode(style.surface, "internal_error"));
+  }
   return c.json({ error: "internal_server_error" }, 500);
 });
 

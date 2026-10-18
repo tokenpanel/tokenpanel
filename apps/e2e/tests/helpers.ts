@@ -12,6 +12,9 @@ export const MOCK_BASE_URL = "http://mock-provider:8080/v1";
 export const MOCK_API_KEY = "mock-key-123";
 export const MOCK_MODELS = ["mock-gpt", "mock-gpt-mini"] as const;
 export const MOCK_REPLY = "Hello from the mock provider!";
+/** A message containing this makes the mock provider answer HTTP 400. */
+export const MOCK_ERROR_TRIGGER = "mock-upstream-error";
+export const MOCK_ERROR_MESSAGE = "Mock provider rejected the request";
 export const E2E_BASE_URL = process.env.E2E_BASE_URL ?? "http://localhost:3099";
 
 // ---------------------------------------------------------------------------

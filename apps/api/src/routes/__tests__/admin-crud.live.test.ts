@@ -186,10 +186,10 @@ beforeAll(async () => {
   createAppRuntime(layer, { install: true });
 
   adminApp = new Hono<{ Variables: AuthVariables }>();
-  adminApp.route("/v1/admin/organizations", organizationRoutes);
-  adminApp.route("/v1/admin/models", createModelRoutes());
-  adminApp.route("/v1/admin/plans", plansApp);
-  adminApp.route("/v1/admin/api-keys", apiKeysApp);
+  adminApp.route("/admin/organizations", organizationRoutes);
+  adminApp.route("/admin/models", createModelRoutes());
+  adminApp.route("/admin/plans", plansApp);
+  adminApp.route("/admin/api-keys", apiKeysApp);
 
   publicApp = new Hono<{ Variables: PublicAuthVariables }>();
   publicApp.use("/v1/*", requirePublicPrincipal);
@@ -211,7 +211,7 @@ afterAll(async () => {
 describe("organizations CRUD (live HTTP)", () => {
   test("create → list → update persists org rows and moves the session", async () => {
     // Before create the user belongs to the base org only.
-    const beforeList = await req("GET", "/v1/admin/organizations");
+    const beforeList = await req("GET", "/admin/organizations");
     expect(beforeList.status).toBe(200);
     const before = (await beforeList.json()) as {
       items: { id: string; role?: string | null }[];
@@ -220,7 +220,7 @@ describe("organizations CRUD (live HTTP)", () => {
     expect(before.items.map((i) => i.id)).toEqual([orgIdHex]);
     expect(before.activeOrganizationId).toBe(orgIdHex);
 
-    const created = await req("POST", "/v1/admin/organizations", {
+    const created = await req("POST", "/admin/organizations", {
       name: "Foo Inc",
     });
     expect(created.status).toBe(201);
@@ -255,12 +255,12 @@ describe("organizations CRUD (live HTTP)", () => {
 
     // The response token is bound to the NEW org (the session moved);
     // the old admin token no longer matches the session's organizationId.
-    const stale = await req("GET", "/v1/admin/organizations");
+    const stale = await req("GET", "/admin/organizations");
     expect(stale.status).toBe(401);
 
     const listRes = await req(
       "GET",
-      "/v1/admin/organizations",
+      "/admin/organizations",
       undefined,
       createdBody.token,
     );
@@ -276,7 +276,7 @@ describe("organizations CRUD (live HTTP)", () => {
 
     const patched = await req(
       "PATCH",
-      `/v1/admin/organizations/${createdHex}`,
+      `/admin/organizations/${createdHex}`,
       { name: "Foo Renamed", defaultCurrency: "GBP" },
       createdBody.token,
     );
@@ -313,7 +313,7 @@ describe("models CRUD (live HTTP)", () => {
   });
 
   test("create with unknown provider id → 400 provider_not_found, nothing stored", async () => {
-    const res = await req("POST", "/v1/admin/models", {
+    const res = await req("POST", "/admin/models", {
       ...validCreateBody(),
       aliasId: "ghost",
       entries: [
@@ -321,12 +321,20 @@ describe("models CRUD (live HTTP)", () => {
       ],
     });
     expect(res.status).toBe(400);
-    expect(await res.json()).toEqual({ error: "provider_not_found" });
+    expect(await res.json()).toEqual({
+      error: {
+        code: "validation_error",
+        message: "Provider not found",
+        details: {
+          issues: [{ path: "entries.providerId", message: "Provider not found" }],
+        },
+      },
+    });
     expect(await db!.models.countDocuments({})).toBe(0);
   });
 
   test("create → list → update replaces entries in place", async () => {
-    const created = await req("POST", "/v1/admin/models", validCreateBody());
+    const created = await req("POST", "/admin/models", validCreateBody());
     expect(created.status).toBe(201);
     const body = (await created.json()) as {
       _id: string;
@@ -366,13 +374,13 @@ describe("models CRUD (live HTTP)", () => {
     expect(rawCreated).not.toBeNull();
     expect(rawCreated!.aliasId).toBe("gpt-x");
 
-    const listRes = await req("GET", "/v1/admin/models");
+    const listRes = await req("GET", "/admin/models");
     expect(listRes.status).toBe(200);
     const list = (await listRes.json()) as { items: { _id: string }[] };
     expect(list.items.map((m) => m._id)).toContain(modelHex);
 
     // Entries replace (not append): one new entry swaps out the old one.
-    const patched = await req("PATCH", `/v1/admin/models/${modelHex}`, {
+    const patched = await req("PATCH", `/admin/models/${modelHex}`, {
       displayName: "GPT X Renamed",
       entries: [
         {
@@ -415,14 +423,16 @@ describe("subscription plans CRUD (live HTTP)", () => {
     // Unknown plan id up front: not_found, nothing created.
     const missing = await req(
       "DELETE",
-      `/v1/admin/plans/${new ObjectId().toHexString()}`,
+      `/admin/plans/${new ObjectId().toHexString()}`,
     );
     expect(missing.status).toBe(404);
-    expect(await missing.json()).toEqual({ error: "not_found" });
+    expect(await missing.json()).toEqual({
+      error: { code: "not_found", message: "Plan not found" },
+    });
 
     // price.currency is organization-owned: the base org is EUR, so the
     // stored plan currency is resolved from the org despite the "USD" body.
-    const created = await req("POST", "/v1/admin/plans", {
+    const created = await req("POST", "/admin/plans", {
       name: "Pro",
       price: { amountMicros: 2_000_000, currency: "USD" },
       interval: "month",
@@ -459,14 +469,14 @@ describe("subscription plans CRUD (live HTTP)", () => {
       currency: "EUR",
     });
 
-    const listRes = await req("GET", "/v1/admin/plans");
+    const listRes = await req("GET", "/admin/plans");
     expect(listRes.status).toBe(200);
     const list = (await listRes.json()) as { items: { _id: string }[] };
     expect(list.items.map((p) => p._id)).toContain(planHex);
 
     // Amount updates, currency stays stamped to the org currency even when
     // the request body claims USD.
-    const patched = await req("PATCH", `/v1/admin/plans/${planHex}`, {
+    const patched = await req("PATCH", `/admin/plans/${planHex}`, {
       name: "Pro Plus",
       price: { amountMicros: 3_000_000, currency: "USD" },
     });
@@ -482,7 +492,7 @@ describe("subscription plans CRUD (live HTTP)", () => {
     });
 
     // DELETE is a soft deactivate.
-    const deactivated = await req("DELETE", `/v1/admin/plans/${planHex}`);
+    const deactivated = await req("DELETE", `/admin/plans/${planHex}`);
     expect(deactivated.status).toBe(200);
     expect(await deactivated.json()).toEqual({ ok: true });
 
@@ -499,15 +509,17 @@ describe("api keys issue/list/revoke (live HTTP)", () => {
   test("issue → list → use → revoke → use rejected, all states persisted", async () => {
     // Foreign key first: issuing for an unknown customer fails 404 without
     // leaving a row behind.
-    const missing = await req("POST", "/v1/admin/api-keys", {
+    const missing = await req("POST", "/admin/api-keys", {
       customerId: new ObjectId().toHexString(),
       name: "ghost-key",
     });
     expect(missing.status).toBe(404);
-    expect(await missing.json()).toEqual({ error: "customer_not_found" });
+    expect(await missing.json()).toEqual({
+      error: { code: "customer_not_found", message: "Customer not found." },
+    });
     expect(await db!.apiKeys.countDocuments({})).toBe(0);
 
-    const issued = await req("POST", "/v1/admin/api-keys", {
+    const issued = await req("POST", "/admin/api-keys", {
       customerId: customerHex,
       name: "ci-key",
     });
@@ -548,7 +560,7 @@ describe("api keys issue/list/revoke (live HTTP)", () => {
     // List exposes metadata but neither plaintext nor hash.
     const listRes = await req(
       "GET",
-      `/v1/admin/api-keys?customerId=${customerHex}`,
+      `/admin/api-keys?customerId=${customerHex}`,
     );
     expect(listRes.status).toBe(200);
     const listText = await listRes.text();
@@ -567,7 +579,7 @@ describe("api keys issue/list/revoke (live HTTP)", () => {
     const before = await probeUseKey(plaintextKey);
     expect(before.status).toBe(200);
 
-    const revoked = await req("DELETE", `/v1/admin/api-keys/${keyHex}`);
+    const revoked = await req("DELETE", `/admin/api-keys/${keyHex}`);
     expect(revoked.status).toBe(200);
     expect(await revoked.json()).toEqual({ ok: true, status: "revoked" });
 
@@ -579,13 +591,13 @@ describe("api keys issue/list/revoke (live HTTP)", () => {
     expect(rawRevoked!.status).toBe("revoked");
 
     // GET by id still resolves it — with revoked status.
-    const fetched = await req("GET", `/v1/admin/api-keys/${keyHex}`);
+    const fetched = await req("GET", `/admin/api-keys/${keyHex}`);
     expect(fetched.status).toBe(200);
     const fetchedBody = (await fetched.json()) as { status: string };
     expect(fetchedBody.status).toBe("revoked");
 
     // List keeps the row (no hard delete) and reports revoked status.
-    const afterList = await req("GET", "/v1/admin/api-keys");
+    const afterList = await req("GET", "/admin/api-keys");
     expect(afterList.status).toBe(200);
     const afterListBody = (await afterList.json()) as {
       items: { _id: string; status: string }[];
@@ -598,6 +610,14 @@ describe("api keys issue/list/revoke (live HTTP)", () => {
     // The same plaintext now fails auth on the public surface.
     const after = await probeUseKey(plaintextKey);
     expect(after.status).toBe(401);
-    expect(await after.json()).toEqual({ error: "unauthorized" });
+    // OpenAI error format on /v1 (SDKs raise AuthenticationError).
+    expect(await after.json()).toEqual({
+      error: {
+        message: "Missing or invalid credentials.",
+        type: "invalid_request_error",
+        param: null,
+        code: "invalid_api_key",
+      },
+    });
   });
 });

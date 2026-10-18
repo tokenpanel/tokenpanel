@@ -10,6 +10,12 @@ import type { CustomerDoc, TypedDb } from "@tokenpanel/db";
 import type { PublicPrincipal } from "../middleware/public-auth.ts";
 import { CustomersRepo } from "../infrastructure/mongo/repositories/customers.ts";
 import type { SettlementActor } from "../domains/settlement/settle.ts";
+import {
+  AuthorizationError,
+  NotFoundError,
+  SystemError,
+  type AppError,
+} from "../errors/families.ts";
 
 /**
  * Error thrown by resolveChatContext when the request cannot proceed.
@@ -23,6 +29,34 @@ export class V1ChatError extends Error {
     this.name = "V1ChatError";
     this.status = status;
     this.code = code;
+  }
+}
+
+/** Same failure as a typed AppError (standard / TokenPanel-Version 2). */
+export function v1ChatErrorToAppError(err: unknown): AppError | null {
+  if (!(err instanceof V1ChatError)) return null;
+  switch (err.code) {
+    case "missing_scope":
+      return new AuthorizationError({
+        code: "missing_scope",
+        message: err.message,
+        scope: "chat:write",
+      });
+    case "customer_not_found":
+      return new NotFoundError({ code: "customer_not_found", message: err.message });
+    case "customer_inactive":
+      return new AuthorizationError({
+        code: "forbidden",
+        message: err.message,
+        reason: "customer_inactive",
+      });
+    default:
+      // Raw cause stays private (logged via diagnostic only).
+      return new SystemError({
+        code: "system_error",
+        message: "Internal server error",
+        diagnostic: err.message,
+      });
   }
 }
 

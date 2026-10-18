@@ -144,8 +144,9 @@ export const createModel = (input: {
       return yield* Effect.fail(
         new ValidationError({
           code: "validation_error",
-          message: "provider_not_found",
+          message: "Provider not found",
           mode: "default_400",
+          issues: [{ path: "entries.providerId", message: "Provider not found" }],
         }),
       );
     }
@@ -234,8 +235,9 @@ export const updateModel = (input: {
         return yield* Effect.fail(
           new ValidationError({
             code: "validation_error",
-            message: "provider_not_found",
+            message: "Provider not found",
             mode: "default_400",
+            issues: [{ path: "entries.providerId", message: "Provider not found" }],
           }),
         );
       }
@@ -324,8 +326,9 @@ export const reorderFallbacks = (input: {
         return yield* Effect.fail(
           new ValidationError({
             code: "validation_error",
-            message: `entry_not_found: ${e.id}`,
+            message: `Model entry not found: ${e.id}`,
             mode: "default_400",
+            issues: [{ path: "entries.id", message: `Model entry not found: ${e.id}` }],
           }),
         );
       }
@@ -385,8 +388,9 @@ export const addModelEntry = (input: {
       return yield* Effect.fail(
         new ValidationError({
           code: "validation_error",
-          message: "provider_not_found",
+          message: "Provider not found",
           mode: "default_400",
+          issues: [{ path: "entries.providerId", message: "Provider not found" }],
         }),
       );
     }

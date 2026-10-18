@@ -7,7 +7,11 @@
  */
 import { Cause, Exit, type Effect } from "effect";
 import type { Context } from "hono";
-import { toHttpResponse } from "../../errors/boundary.ts";
+import { toHttpResponse, type RenderStyle } from "../../errors/boundary.ts";
+import { logFieldsForAppError } from "../../errors/observability.ts";
+import { policyFor } from "../../errors/policy.ts";
+import { errorStyleOf } from "../error-context.ts";
+import { renderStandardError } from "../renderers/standard.ts";
 import type { HttpSurface } from "../../errors/variants.ts";
 import type { AppError } from "../../errors/families.ts";
 import { isAppError } from "../../errors/families.ts";
@@ -40,10 +44,14 @@ export type DomainEffectOptions<A, E> = {
   readonly successStatus?: number;
   readonly mapSuccess?: SuccessMapper<A>;
   /**
-   * Optional override before default toHttpResponse rendering.
-   * Return null/undefined to fall through to surface renderer.
+   * Legacy (version 1) override before default toHttpResponse rendering.
+   * Return null/undefined to fall through to surface renderer. Never used
+   * under the standard (admin, TokenPanel-Version 2): put client-facing data
+   * on the AppError instead so the catalogue renders it.
    */
   readonly mapError?: ErrorMapper<E>;
+  /** Standard only: convert a non-AppError failure into an AppError. */
+  readonly toAppError?: (err: E) => AppError | null | undefined;
   /** Injected correlation; default: newCorrelationIds() per request. */
   readonly correlation?: CorrelationIds;
   /** Structured log sink; default: redacted console. */
@@ -109,6 +117,11 @@ export function mapExitToHttpResponse<A, E>(
 ): Response | Promise<Response> {
   const correlation = options.correlation ?? newCorrelationIds();
   const log = options.log ?? defaultLog;
+  const requestStyle = errorStyleOf(c);
+  const style: RenderStyle = {
+    standard: requestStyle.standard,
+    debug: requestStyle.debug,
+  };
 
   if (Exit.isSuccess(exit)) {
     if (options.mapSuccess) {
@@ -118,13 +131,33 @@ export function mapExitToHttpResponse<A, E>(
   }
 
   const first = causeFailures[0];
-  if (first !== undefined && options.mapError) {
+  if (style.standard) {
+    if (first !== undefined && !isAppError(first) && options.toAppError) {
+      const converted = options.toAppError(first);
+      if (converted) {
+        log(
+          logFieldsForAppError(converted, {
+            level: policyFor(converted._tag).logLevel,
+            correlation,
+            surface: options.surface,
+            ...(options.operation !== undefined
+              ? { operation: options.operation }
+              : {}),
+          }),
+        );
+        return renderedToResponse(
+          renderStandardError(options.surface, converted, style),
+          correlation,
+        );
+      }
+    }
+  } else if (first !== undefined && options.mapError) {
     const override = options.mapError(first, c);
     if (override) return renderedToResponse(override, correlation);
   }
 
   // Password-change contract: invalid_credentials includes message.
-  if (first !== undefined && isAppError(first as AppError)) {
+  if (!style.standard && first !== undefined && isAppError(first as AppError)) {
     const appErr = first as AppError;
     if (
       options.surface === "admin" &&
@@ -146,6 +179,7 @@ export function mapExitToHttpResponse<A, E>(
 
   const outcome = toHttpResponse(exit, {
     surface: options.surface,
+    style,
     correlation,
     log,
     ...(options.operation !== undefined
@@ -268,8 +302,10 @@ export async function runMiddlewareEffect<A, E, R extends AppServices>(
   c: Context,
   program: Effect.Effect<A, E, R>,
   options: {
+    /** Legacy (version 1) envelope surface; the standard uses the path's. */
     readonly surface: HttpSurface;
     readonly onSuccess: (value: A) => void;
+    /** Legacy (version 1) override; ignored under the standard. */
     readonly mapError?: ErrorMapper<E>;
   },
   runtime?: AppRuntime,
@@ -287,12 +323,14 @@ export async function runMiddlewareEffect<A, E, R extends AppServices>(
   }
   const failures = [...Cause.failures(exit.cause)];
   const first = failures[0];
-  if (first !== undefined && options.mapError) {
+  const requestStyle = errorStyleOf(c);
+  if (!requestStyle.standard && first !== undefined && options.mapError) {
     const override = options.mapError(first, c);
     if (override) return renderedToResponse(override, correlation);
   }
   const outcome = toHttpResponse(exit, {
-    surface: options.surface,
+    surface: requestStyle.standard ? requestStyle.surface : options.surface,
+    style: { standard: requestStyle.standard, debug: requestStyle.debug },
     correlation,
     log: defaultLog,
   });

@@ -17,9 +17,9 @@ import {
 import { runAdminEffect } from "../http/adapters/boundary.ts";
 import { sValidator } from "../http/validation/validator.ts";
 import { getAdapter, listAdapters } from "../providers/registry.ts";
-import { isAppError } from "../errors/families.ts";
 import { getApiRuntimeConfig } from "../config/state.ts";
 import { parseObjectIdParam } from "./route-utils.ts";
+import { notFoundResponse } from "../http/error-context.ts";
 
 export { maskProvider, parseObjectIdParam };
 
@@ -72,7 +72,7 @@ providerRoutes.post(
 providerRoutes.get("/:id", requirePermission("providers:read"), async (c) => {
   const orgId = c.get("orgId");
   const id = c.req.param("id");
-  if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
+  if (!ObjectId.isValid(id)) return notFoundResponse(c);
   return runAdminEffect(
     c,
     getProvider({
@@ -90,7 +90,7 @@ providerRoutes.patch(
   async (c) => {
     const orgId = c.get("orgId");
     const id = c.req.param("id");
-    if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
+    if (!ObjectId.isValid(id)) return notFoundResponse(c);
     const body = c.req.valid("json");
     const known = new Set(listAdapters());
     return runAdminEffect(
@@ -112,7 +112,7 @@ providerRoutes.delete(
   async (c) => {
     const orgId = c.get("orgId");
     const id = c.req.param("id");
-    if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
+    if (!ObjectId.isValid(id)) return notFoundResponse(c);
     return runAdminEffect(
       c,
       deleteProvider({
@@ -121,20 +121,6 @@ providerRoutes.delete(
       }),
       {
         operation: "deleteProvider",
-        mapError: (err) => {
-          if (
-            isAppError(err) &&
-            err._tag === "ConflictError" &&
-            err.code === "provider_in_use"
-          ) {
-            return {
-              status: 409,
-              body: { error: "provider_in_use", message: err.message },
-              headers: {},
-            };
-          }
-          return null;
-        },
       },
     );
   },
@@ -147,7 +133,7 @@ providerRoutes.get(
   async (c) => {
     const orgId = c.get("orgId");
     const id = c.req.param("id");
-    if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
+    if (!ObjectId.isValid(id)) return notFoundResponse(c);
     return runAdminEffect(
       c,
       listProviderCatalog({
@@ -169,7 +155,7 @@ providerRoutes.post(
   async (c) => {
     const orgId = c.get("orgId");
     const id = c.req.param("id");
-    if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
+    if (!ObjectId.isValid(id)) return notFoundResponse(c);
     const globalTimeoutMs =
       getApiRuntimeConfig().operational.providerHttpTimeoutMs;
     return runAdminEffect(

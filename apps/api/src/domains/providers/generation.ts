@@ -19,7 +19,7 @@ import type {
   RateLimitRule,
 } from "@tokenpanel/db";
 import type { AppError } from "../../errors/families.ts";
-import { SystemError } from "../../errors/families.ts";
+import { isAppError, SystemError } from "../../errors/families.ts";
 import { classifyProviderError } from "../../errors/classify-provider.ts";
 import { SAFE_MESSAGES } from "../../errors/safe-messages.ts";
 import {
@@ -763,15 +763,9 @@ export function classifyGenerationFailure(
   err: unknown,
   opts?: { streamCommitted?: boolean },
 ): AppError {
-  if (
-    typeof err === "object" &&
-    err !== null &&
-    "_tag" in err &&
-    typeof (err as { _tag: unknown })._tag === "string"
-  ) {
-    // Already an AppError-like tagged error
-    return err as AppError;
-  }
+  // Adapter ProviderError is tagged too but is not an AppError; it must go
+  // through classifyProviderError or renderers fall back to a generic message.
+  if (isAppError(err)) return err;
   if (isAbortError(err)) {
     // Callers should treat as interruption, not render.
     return new SystemError({

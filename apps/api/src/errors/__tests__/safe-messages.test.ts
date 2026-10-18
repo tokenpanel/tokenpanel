@@ -133,6 +133,8 @@ describe("looksLikeUnsafeDiagnostic", () => {
       "Customer balance currency does not match model currency",
       "Model has no active provider entries",
       "Provider request timed out after retries",
+      "openai streamChat failed (HTTP 400)",
+      "anthropic streamChat failed (HTTP 529)",
     ];
     for (const text of clean) {
       expect(looksLikeUnsafeDiagnostic(text)).toBe(false);

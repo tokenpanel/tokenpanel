@@ -4,7 +4,7 @@ import type { AuthVariables } from "../middleware/auth.ts";
 import { requireAuth, requirePermission } from "../middleware/auth.ts";
 import { runAdminEffect } from "../http/adapters/boundary.ts";
 import { getSource, listModels, listSources } from "../catalog-sources/index.ts";
-import { NotFoundError, SystemError } from "../errors/families.ts";
+import { NotFoundError, ProviderUnavailableError } from "../errors/families.ts";
 
 export const catalogSourceRoutes = new Hono<{ Variables: AuthVariables }>();
 
@@ -43,11 +43,17 @@ catalogSourceRoutes.get(
         const items = yield* Effect.tryPromise({
           try: () => listModels(id),
           catch: (err) =>
-            // Public message is fixed; raw upstream text stays in diagnostic
-            // (logs/observability only — never echoed to clients).
-            new SystemError({
-              code: "system_error",
+            // Admin-only route: the standard shows this message plus the
+            // redacted diagnostic as `upstream.detail` for debugging.
+            new ProviderUnavailableError({
+              code: "provider_unavailable",
               message: "Failed to fetch models from catalog source",
+              category: "connection",
+              phase: "request",
+              retryClass: "transient",
+              fallbackClass: "ineligible",
+              acceptanceClass: "not_accepted",
+              streamCommitClass: "not_committed",
               diagnostic:
                 err instanceof Error
                   ? `catalog_source_upstream: ${err.message}`
@@ -58,24 +64,6 @@ catalogSourceRoutes.get(
       }),
       {
         operation: "listCatalogSourceModels",
-        mapError: (err) => {
-          if (
-            err &&
-            typeof err === "object" &&
-            "_tag" in err &&
-            (err as { _tag: string })._tag === "SystemError"
-          ) {
-            return {
-              status: 502,
-              body: {
-                error: "upstream_error",
-                message: "Failed to fetch models from catalog source",
-              },
-              headers: {},
-            };
-          }
-          return null;
-        },
       },
     );
   },

@@ -70,7 +70,11 @@ async function errorOutcome(err: AppError, surface: HttpSurface) {
 // ---------------------------------------------------------------------------
 
 type SurfaceStatus = Readonly<Record<HttpSurface, number>>;
-/** Lockstep status across all four surfaces (≈18 matrix rows share this). */
+/**
+ * Lockstep status across all four surfaces. admin/management columns here
+ * are the legacy (version 1) renderers; openai/anthropic always use the
+ * standard renderer in the providers' error contracts.
+ */
 const same = (n: number): SurfaceStatus => ({
   admin: n,
   management: n,
@@ -145,7 +149,7 @@ const STATUS_MATRIX: readonly {
         code: "insufficient_balance",
         message: "balance too low",
       }),
-    status: same(402),
+    status: { admin: 402, management: 402, openai: 429, anthropic: 402 },
   },
   {
     name: "BudgetExceededError",
@@ -180,7 +184,7 @@ const STATUS_MATRIX: readonly {
         code: "provider_rejected",
         httpStatus: 403,
       }),
-    status: { admin: 403, management: 502, openai: 403, anthropic: 403 },
+    status: { admin: 403, management: 502, openai: 502, anthropic: 502 },
   },
   {
     name: "ProviderRejectedError http 5xx",
@@ -196,7 +200,7 @@ const STATUS_MATRIX: readonly {
         code: "upstream_error",
         httpStatus: 503,
       }),
-    status: { admin: 400, management: 502, openai: 503, anthropic: 503 },
+    status: { admin: 400, management: 502, openai: 502, anthropic: 502 },
   },
   {
     name: "ProviderRejectedError without httpStatus",
@@ -211,7 +215,7 @@ const STATUS_MATRIX: readonly {
         streamCommitClass: "not_committed",
         code: "provider_rejected",
       }),
-    status: { admin: 400, management: 502, openai: 400, anthropic: 400 },
+    status: { admin: 400, management: 502, openai: 502, anthropic: 502 },
   },
   {
     name: "ProviderUnavailableError",
@@ -241,7 +245,7 @@ const STATUS_MATRIX: readonly {
         streamCommitClass: "not_committed",
         code: "no_active_entries",
       }),
-    status: { admin: 502, management: 502, openai: 503, anthropic: 502 },
+    status: { admin: 502, management: 502, openai: 503, anthropic: 503 },
   },
   {
     name: "ProviderTimeoutError",
@@ -626,7 +630,12 @@ describe("toHttpResponse defect boundary", () => {
         throw new Error(`expected defect outcome, got ${outcome.kind}`);
       }
       expect(outcome.response.status).toBe(500);
-      expect(outcome.response.headers).toEqual({});
+      // OpenAI/Anthropic surfaces tell SDKs whether a retry can help.
+      expect(outcome.response.headers).toEqual(
+        surface === "openai" || surface === "anthropic"
+          ? { "x-should-retry": "true" }
+          : {},
+      );
       const wire = JSON.stringify(outcome.response.body);
       expect(wire).not.toContain("hunter2");
       expect(wire).not.toContain("mongodb://");
@@ -643,7 +652,11 @@ describe("toHttpResponse defect boundary", () => {
     expect(outcome.response.status).toBe(500);
     expect(outcome.response.body).toEqual({
       type: "error",
-      error: { type: "api_error", message: SAFE_MESSAGES.internal_server_error },
+      error: {
+        type: "api_error",
+        code: "internal_error",
+        message: "An internal error occurred.",
+      },
     });
     expect(outcome.privateLog).toMatchObject({ defect: true });
   });

@@ -33,15 +33,50 @@ export function clearToken(): void {
   }
 }
 
+/**
+ * Standard API error body (wiki: Errors): `{ error: { code, message,
+ * details?, upstream? } }`. Admin routes always use it.
+ */
+type StandardErrorBody = {
+  error: {
+    code: string;
+    message: string;
+    details?: { issues?: { path: string; message: string }[] } & Record<string, unknown>;
+  };
+};
+
+function standardError(body: unknown): StandardErrorBody["error"] | null {
+  if (!body || typeof body !== "object" || !("error" in body)) return null;
+  const e = (body as { error: unknown }).error;
+  if (!e || typeof e !== "object") return null;
+  const { code, message } = e as { code?: unknown; message?: unknown };
+  return typeof code === "string" && typeof message === "string"
+    ? (e as StandardErrorBody["error"])
+    : null;
+}
+
 export class ApiError extends Error {
   readonly status: number;
   readonly body: unknown;
+  /** Stable error code (`error.code`), or null when the body has none. */
+  readonly code: string | null;
 
   constructor(status: number, message: string, body: unknown) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.body = body;
+    this.code = standardError(body)?.code ?? null;
+  }
+
+  /** Validation issues keyed by top-level field (first message per field). */
+  fieldErrors(): Record<string, string> {
+    const out: Record<string, string> = {};
+    for (const issue of standardError(this.body)?.details?.issues ?? []) {
+      const field = issue.path.split(".")[0] ?? "";
+      if (field && out[field] === undefined) out[field] = issue.message;
+    }
+    return out;
   }
 }
 
@@ -91,6 +126,7 @@ async function apiFetch<T>(path: string, options: FetchOptions = {}): Promise<T>
 
   if (!res.ok) {
     const message =
+      (isJson ? standardError(parsed)?.message : undefined) ??
       (isJson && parsed && typeof parsed === "object" && "message" in parsed && typeof (parsed as { message: unknown }).message === "string"
         ? (parsed as { message: string }).message
         : null) ?? `request_failed_${res.status}`;

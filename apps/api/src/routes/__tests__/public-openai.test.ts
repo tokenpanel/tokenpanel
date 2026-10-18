@@ -3,7 +3,6 @@ import { ObjectId } from "mongodb";
 import {
   toOpenAIModel,
   translateMessage,
-  formatOpenAIError,
   buildOpenAIChatRequest,
   openAICompletionJson,
 } from "../public/openai.ts";
@@ -491,33 +490,4 @@ test("toOpenAIFinishReason: unknown reasons map to stop, never leak foreign valu
   expect(toOpenAIFinishReason("refusal")).toBe("content_filter");
   expect(toOpenAIFinishReason("weird_future_reason")).toBe("stop");
   expect(toOpenAIFinishReason(undefined)).toBe("stop");
-});
-
-// ---------------------------------------------------------------------------
-// Error envelope — OpenAI API reference error types
-// ---------------------------------------------------------------------------
-
-test("formatOpenAIError: rate_limited → rate_limit_error type", () => {
-  const e = formatOpenAIError("rate_limited", "too many");
-  expect(e.error.type).toBe("rate_limit_error");
-  expect(e.error.code).toBe("rate_limited");
-});
-
-test("formatOpenAIError: insufficient_balance → invalid_request_error (billing_error is not an OpenAI type)", () => {
-  const e = formatOpenAIError("insufficient_balance", "no funds");
-  expect(e.error.type).toBe("invalid_request_error");
-  expect(e.error.code).toBe("insufficient_balance");
-});
-
-test("formatOpenAIError: status drives spec type (401/403/404/429/5xx)", () => {
-  expect(formatOpenAIError("x", "m", undefined, 401).error.type).toBe("authentication_error");
-  expect(formatOpenAIError("x", "m", undefined, 403).error.type).toBe("permission_error");
-  expect(formatOpenAIError("x", "m", undefined, 404).error.type).toBe("not_found_error");
-  expect(formatOpenAIError("x", "m", undefined, 429).error.type).toBe("rate_limit_error");
-  expect(formatOpenAIError("x", "m", undefined, 500).error.type).toBe("api_error");
-});
-
-test("formatOpenAIError: merges extra fields into error object", () => {
-  const e = formatOpenAIError("rate_limited", "too many", { retryAfterSeconds: 60 });
-  expect((e.error as Record<string, unknown>).retryAfterSeconds).toBe(60);
 });

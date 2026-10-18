@@ -33,9 +33,9 @@ import {
   UsageDateRangeQuery,
 } from "../http/validation/query.ts";
 import { withParseApi } from "../http/validation/with-parse-api.ts";
-import { isAppError } from "../errors/families.ts";
 import { Schema } from "effect";
 import { SafeInt, CurrencyCode, exactOptional, maxString } from "@tokenpanel/contracts/effect";
+import { notFoundResponse, respondWithCode } from "../http/error-context.ts";
 
 export const customerListQuery = withParseApi(CustomerListQuery);
 export const historyQuery = withParseApi(HistoryQuery);
@@ -132,7 +132,7 @@ app.post(
 app.get("/:id", requirePermission("customers:read"), async (c) => {
   const orgId = c.get("orgId");
   const id = c.req.param("id");
-  if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
+  if (!ObjectId.isValid(id)) return notFoundResponse(c);
   const canReadBalances = sessionCanReadBalances(c);
   return runAdminEffect(
     c,
@@ -152,7 +152,7 @@ app.patch(
   async (c) => {
     const orgId = c.get("orgId");
     const id = c.req.param("id");
-    if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
+    if (!ObjectId.isValid(id)) return notFoundResponse(c);
     const body = c.req.valid("json");
     const canReadBalances = sessionCanReadBalances(c);
     return runAdminEffect(
@@ -174,7 +174,7 @@ app.patch(
 app.delete("/:id", requirePermission("customers:write"), async (c) => {
   const orgId = c.get("orgId");
   const id = c.req.param("id");
-  if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
+  if (!ObjectId.isValid(id)) return notFoundResponse(c);
   return runAdminEffect(
     c,
     closeCustomer({
@@ -192,7 +192,7 @@ app.post(
   async (c) => {
     const orgId = c.get("orgId");
     const id = c.req.param("id");
-    if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
+    if (!ObjectId.isValid(id)) return notFoundResponse(c);
     const body = c.req.valid("json");
     return runAdminEffect(
       c,
@@ -206,24 +206,6 @@ app.post(
       }),
       {
         operation: "adjustCustomerBalance",
-        mapError: (err) => {
-          if (
-            isAppError(err) &&
-            err._tag === "InsufficientBalanceError" &&
-            err.code === "currency_mismatch"
-          ) {
-            return {
-              status: 409,
-              body: {
-                error: "currency_mismatch",
-                balanceCurrency: err.balanceCurrency,
-                requestCurrency: err.currency,
-              },
-              headers: {},
-            };
-          }
-          return null;
-        },
       },
     );
   },
@@ -236,7 +218,7 @@ app.get(
   async (c) => {
     const orgId = c.get("orgId");
     const id = c.req.param("id");
-    if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
+    if (!ObjectId.isValid(id)) return notFoundResponse(c);
     const q = c.req.valid("query");
     return runAdminEffect(
       c,
@@ -258,10 +240,12 @@ app.post(
   async (c) => {
     const orgId = c.get("orgId");
     const id = c.req.param("id");
-    if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
+    if (!ObjectId.isValid(id)) return notFoundResponse(c);
     const body = c.req.valid("json");
     if (!ObjectId.isValid(body.planId)) {
-      return c.json({ error: "plan_not_found" }, 404);
+      return respondWithCode(c, "plan_not_found", () =>
+        c.json({ error: "plan_not_found" }, 404),
+      );
     }
     return runAdminEffect(
       c,
@@ -281,7 +265,7 @@ app.get(
   async (c) => {
     const orgId = c.get("orgId");
     const id = c.req.param("id");
-    if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
+    if (!ObjectId.isValid(id)) return notFoundResponse(c);
     return runAdminEffect(
       c,
       getActiveSubscription({
@@ -296,7 +280,7 @@ app.get(
 app.get("/:id/limits", requirePermission("customers:read"), async (c) => {
   const orgId = c.get("orgId");
   const id = c.req.param("id");
-  if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
+  if (!ObjectId.isValid(id)) return notFoundResponse(c);
   return runAdminEffect(
     c,
     listCustomerLimits({
@@ -310,7 +294,7 @@ app.get("/:id/limits", requirePermission("customers:read"), async (c) => {
 app.get("/:id/budgets", requirePermission("customers:read"), async (c) => {
   const orgId = c.get("orgId");
   const id = c.req.param("id");
-  if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
+  if (!ObjectId.isValid(id)) return notFoundResponse(c);
   return runAdminEffect(
     c,
     listCustomerBudgets({
@@ -328,7 +312,7 @@ app.get(
   async (c) => {
     const orgId = c.get("orgId");
     const id = c.req.param("id");
-    if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
+    if (!ObjectId.isValid(id)) return notFoundResponse(c);
     const q = c.req.valid("query");
     return runAdminEffect(
       c,

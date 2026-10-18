@@ -19,6 +19,7 @@ import {
 import { runAdminEffect } from "../http/adapters/boundary.ts";
 import { sValidator } from "../http/validation/validator.ts";
 import { ObjectId as MongoObjectId } from "mongodb";
+import { notFoundResponse } from "../http/error-context.ts";
 
 export function genRuleId(): string {
   return genRuleIdFromToken(new MongoObjectId().toHexString());
@@ -74,7 +75,7 @@ planRoutes.post(
 planRoutes.get("/:id", requirePermission("plans:read"), async (c) => {
   const orgId = c.get("orgId");
   const id = c.req.param("id");
-  if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
+  if (!ObjectId.isValid(id)) return notFoundResponse(c);
   return runAdminEffect(
     c,
     getPlan({ organizationId: orgId.toHexString(), planId: id }),
@@ -89,7 +90,7 @@ planRoutes.patch(
   async (c) => {
     const orgId = c.get("orgId");
     const id = c.req.param("id");
-    if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
+    if (!ObjectId.isValid(id)) return notFoundResponse(c);
     const body = c.req.valid("json");
     return runAdminEffect(
       c,
@@ -106,7 +107,7 @@ planRoutes.patch(
 planRoutes.delete("/:id", requirePermission("plans:write"), async (c) => {
   const orgId = c.get("orgId");
   const id = c.req.param("id");
-  if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
+  if (!ObjectId.isValid(id)) return notFoundResponse(c);
   return runAdminEffect(
     c,
     deactivatePlan({

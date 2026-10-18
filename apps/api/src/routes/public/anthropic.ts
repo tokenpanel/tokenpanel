@@ -15,9 +15,19 @@ import {
   actorForChatContext,
   billableCustomerId,
   modelWhitelistForContext,
-  V1ChatError,
+  v1ChatErrorToAppError,
   type ChatContext,
 } from "../../lib/v1-chat-context.ts";
+import { renderedJson } from "../../http/error-context.ts";
+import {
+  renderStandardCode,
+  renderStandardValidation,
+  standardErrorBody,
+} from "../../http/renderers/standard.ts";
+import {
+  standardGenerationError,
+  standardStreamError,
+} from "../../http/stream-errors.ts";
 import type { ChatRequest, ChatMessage, ContentPart } from "../../providers/index.ts";
 import {
   toAnthropicStopReason,
@@ -26,28 +36,21 @@ import {
 } from "../../providers/index.ts";
 import {
   applyDoneUsage,
-  classifyGenerationFailure,
   completeGeneration,
   emptyStreamUsage,
   openStreamGeneration,
   type GenerationCompleteResult,
 } from "../../domains/providers/generation.ts";
 import {
-  formatAnthropicErrorBody,
-  anthropicSseTerminalFromAppError,
-} from "../../http/renderers/anthropic.ts";
-import { isAppError } from "../../errors/families.ts";
-import { publicMessageForCode, SAFE_MESSAGES } from "../../errors/safe-messages.ts";
-import {
   mapExitToHttpResponse,
   runAnthropicEffect,
 } from "../../http/adapters/boundary.ts";
 import { getAppRuntime } from "../../runtime/app-runtime.ts";
-import type { RenderedHttpError } from "../../http/renderers/types.ts";
 import {
   AnthropicMessagesBody,
   type AnthropicMessage,
   safeParseSchema,
+  standardIssues,
 } from "../../http/validation/index.ts";
 
 const publicAnthropic = new Hono<{ Variables: PublicAuthVariables }>();
@@ -102,39 +105,6 @@ export function translateAnthropicMessage(m: AnthropicMessage): ChatMessage {
     });
   }
   return { role: m.role, content };
-}
-
-export function anthropicError(type: string, message: string, extra?: Record<string, unknown>) {
-  return {
-    type: "error",
-    error: { type, message, ...(extra ?? {}) },
-  };
-}
-
-/** Preserve historical V1ChatError → Anthropic envelope mapping. */
-function mapAnthropicRouteError(err: unknown): RenderedHttpError | null {
-  if (err instanceof V1ChatError) {
-    const type =
-      err.status === 401
-        ? "authentication_error"
-        : err.status === 403
-          ? "permission_error"
-          : err.status === 404
-            ? "not_found_error"
-            : err.status === 429
-              ? "rate_limit_error"
-              : err.status === 402
-                ? "billing_error"
-                : err.status >= 500
-                  ? "api_error"
-                  : "invalid_request_error";
-    return {
-      status: err.status,
-      body: anthropicError(type, err.message),
-      headers: {},
-    };
-  }
-  return null;
 }
 
 /**
@@ -324,16 +294,18 @@ publicAnthropic.post("/v1/messages", async (c) => {
   try {
     raw = await c.req.json();
   } catch {
-    return c.json(anthropicError("invalid_request_error", "invalid body"), 400 as 400);
+    return renderedJson(
+      c,
+      renderStandardCode("anthropic", "validation_error", {
+        message: "The request body is not valid JSON.",
+      }),
+    );
   }
   const parsed = safeParseSchema(AnthropicMessagesBody, raw);
   if (!parsed.success) {
-    const msg = parsed.error.issues
-      .map((i) => `${i.path.join(".")}: ${i.message}`)
-      .join("; ");
-    return c.json(
-      anthropicError("invalid_request_error", msg || "invalid body"),
-      400 as 400,
+    return renderedJson(
+      c,
+      renderStandardValidation("anthropic", standardIssues(parsed.error.issues)),
     );
   }
   const body = parsed.data;
@@ -341,7 +313,7 @@ publicAnthropic.post("/v1/messages", async (c) => {
   const orgId = c.get("orgId");
   const principal = c.get("principal");
   if (!principal) {
-    return c.json(anthropicError("authentication_error", "missing principal"), 401 as 401);
+    return renderedJson(c, renderStandardCode("anthropic", "unauthorized"));
   }
   const stream = body.stream ?? false;
   const abortSignal = c.req.raw.signal;
@@ -394,7 +366,7 @@ publicAnthropic.post("/v1/messages", async (c) => {
       }),
       {
         operation: "anthropic.messages",
-        mapError: (err) => mapAnthropicRouteError(err),
+        toAppError: v1ChatErrorToAppError,
       },
     );
   }
@@ -411,7 +383,7 @@ publicAnthropic.post("/v1/messages", async (c) => {
       {
         surface: "anthropic",
         operation: "anthropic.messages.streamPrep",
-        mapError: (err) => mapAnthropicRouteError(err),
+        toAppError: v1ChatErrorToAppError,
       },
       failures,
     );
@@ -502,32 +474,22 @@ publicAnthropic.post("/v1/messages", async (c) => {
         for (const s of t.start) emitBlockStart(s.index, s.kind);
         return t.index;
       };
-      const enqueueTerminalError = (type: string, message: string) => {
+      // Terminal `event: error` (Anthropic streaming contract). TokenPanel
+      // text only; provider output never reaches here.
+      const enqueueTerminalError = (code: string) => {
         if (terminalErrorEmitted || clientDisconnected) return;
         terminalErrorEmitted = true;
         closeOpenBlock();
-        enqueue("error", {
-          type: "error",
-          error: { type, message: publicMessageForCode(type, message) },
-        });
+        enqueue("error", standardErrorBody("anthropic", standardStreamError(code)));
       };
-      const enqueueAppError = (err: unknown) => {
-        const classified = isAppError(err)
-          ? err
-          : classifyGenerationFailure(err);
-        if (isAppError(classified) && !terminalErrorEmitted) {
-          terminalErrorEmitted = true;
-          closeOpenBlock();
-          try {
-            controller.enqueue(
-              encoder.encode(anthropicSseTerminalFromAppError(classified)),
-            );
-          } catch {
-            clientDisconnected = true;
-          }
-        } else if (!terminalErrorEmitted) {
-          enqueueTerminalError("upstream_error", SAFE_MESSAGES.upstream_error);
-        }
+      const enqueueAppError = (err: unknown, streamCommitted = false) => {
+        if (terminalErrorEmitted || clientDisconnected) return;
+        terminalErrorEmitted = true;
+        closeOpenBlock();
+        enqueue(
+          "error",
+          standardErrorBody("anthropic", standardGenerationError(err, { streamCommitted })),
+        );
       };
       // SSE heartbeat: keeps the connection alive through proxies during
       // upstream silence. Comment lines are ignored by all SSE clients.
@@ -564,11 +526,7 @@ publicAnthropic.post("/v1/messages", async (c) => {
           }
           if (event.kind !== "chunk") {
             if (event.kind === "terminal_fail" && !clientDisconnected) {
-              enqueueAppError(
-                classifyGenerationFailure(event.err, {
-                  streamCommitted: event.streamCommitted,
-                }),
-              );
+              enqueueAppError(event.err, event.streamCommitted);
             }
             continue;
           }
@@ -615,20 +573,14 @@ publicAnthropic.post("/v1/messages", async (c) => {
           } else if (chunk.type === "done") {
             applyDoneUsage(usage, chunk);
           } else if (chunk.type === "error") {
-            enqueueTerminalError(
-              "upstream_error",
-              chunk.error?.message ?? SAFE_MESSAGES.upstream_error,
-            );
+            enqueueTerminalError(chunk.error?.code ?? "upstream_error");
           }
         }
 
         if (clientDisconnected || abortSignal.aborted) {
           // No fabricated interruption body (13.6).
         } else if (!usage.streamComplete) {
-          enqueueTerminalError(
-            "stream_truncated",
-            "Upstream stream ended without message_stop; response may be incomplete",
-          );
+          enqueueTerminalError("stream_truncated");
         } else {
           closeOpenBlock();
           enqueue("message_delta", {
@@ -669,6 +621,5 @@ publicAnthropic.post("/v1/messages", async (c) => {
   return new Response(body$, { headers: c.res.headers, status: 200 });
 });
 
-void formatAnthropicErrorBody;
 
 export default publicAnthropic;

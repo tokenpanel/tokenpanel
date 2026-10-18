@@ -20,10 +20,10 @@ import {
   actorForChatContext,
   billableCustomerId,
   modelWhitelistForContext,
-  V1ChatError,
+  v1ChatErrorToAppError,
   type ChatContext,
 } from "../../lib/v1-chat-context.ts";
-import { formatOpenAIError } from "../public/openai.ts";
+import { renderStandardError } from "../../http/renderers/standard.ts";
 import type { PublicPrincipal } from "../../middleware/public-auth.ts";
 
 function managementPrincipal(
@@ -100,14 +100,17 @@ function makeDb(customers: CustomerDoc[]): TypedDb {
 }
 
 /** Map V1ChatError the same way /v1/chat/completions does. */
-function toRouteError(err: unknown): { status: number; body: ReturnType<typeof formatOpenAIError> } {
-  if (err instanceof V1ChatError) {
-    return {
-      status: err.status,
-      body: formatOpenAIError(err.code, err.message),
-    };
-  }
-  throw err;
+function toRouteError(err: unknown): {
+  status: number;
+  body: { error: { code: string; type: string; message: string } };
+} {
+  const appErr = v1ChatErrorToAppError(err);
+  if (!appErr) throw err;
+  const rendered = renderStandardError("openai", appErr);
+  return {
+    status: rendered.status,
+    body: rendered.body as { error: { code: string; type: string; message: string } },
+  };
 }
 
 describe("tp_mgmt_ auth through /v1 chat context", () => {

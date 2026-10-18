@@ -27,6 +27,7 @@ import {
   maxString,
 } from "@tokenpanel/contracts/effect";
 import { withParseApi } from "../../http/validation/with-parse-api.ts";
+import { notFoundResponse, respondWithCode } from "../../http/error-context.ts";
 
 type ManagementAuthVariables = PublicAuthVariables;
 
@@ -88,7 +89,7 @@ app.patch(
   async (c) => {
     const orgId = c.get("orgId");
     const id = c.req.param("id");
-    if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
+    if (!ObjectId.isValid(id)) return notFoundResponse(c);
     const body = c.req.valid("json");
     const canReadBalances = hasBalancesRead(c);
     return runManagementEffect(
@@ -113,7 +114,7 @@ app.delete(
   async (c) => {
     const orgId = c.get("orgId");
     const id = c.req.param("id");
-    if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
+    if (!ObjectId.isValid(id)) return notFoundResponse(c);
     return runManagementEffect(
       c,
       closeCustomer({
@@ -132,14 +133,16 @@ app.post(
   async (c) => {
     const orgId = c.get("orgId");
     const id = c.req.param("id");
-    if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
+    if (!ObjectId.isValid(id)) return notFoundResponse(c);
     const idempotencyKey = c.req.header("Idempotency-Key");
     if (
       idempotencyKey !== undefined &&
       (idempotencyKey.trim().length === 0 ||
         idempotencyKey.length > BALANCE_IDEMPOTENCY_KEY_MAX_CHARS)
     ) {
-      return c.json({ error: "invalid_idempotency_key" }, 400);
+      return respondWithCode(c, "invalid_idempotency_key", () =>
+        c.json({ error: "invalid_idempotency_key" }, 400),
+      );
     }
     const body = c.req.valid("json");
     const canReadBalances = hasBalancesRead(c);
@@ -193,10 +196,12 @@ app.post(
   async (c) => {
     const orgId = c.get("orgId");
     const id = c.req.param("id");
-    if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
+    if (!ObjectId.isValid(id)) return notFoundResponse(c);
     const body = c.req.valid("json");
     if (!ObjectId.isValid(body.planId)) {
-      return c.json({ error: "plan_not_found" }, 404);
+      return respondWithCode(c, "plan_not_found", () =>
+        c.json({ error: "plan_not_found" }, 404),
+      );
     }
     return runManagementEffect(
       c,

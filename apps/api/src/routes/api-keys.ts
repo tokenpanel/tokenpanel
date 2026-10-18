@@ -24,6 +24,7 @@ import { withParseApi } from "../http/validation/with-parse-api.ts";
 import { KeyRepository } from "../domains/ports/key-repository.ts";
 import { NotFoundError } from "../errors/families.ts";
 import { parseObjectIdParam } from "./route-utils.ts";
+import { notFoundResponse } from "../http/error-context.ts";
 
 /** @deprecated Test helper alias — use stripCustomerKey from domains/keys. */
 export const stripKey = stripCustomerKey;
@@ -100,7 +101,7 @@ apiKeyRoutes.get(
   async (c) => {
     const orgId = c.get("orgId");
     const id = c.req.param("id");
-    if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
+    if (!ObjectId.isValid(id)) return notFoundResponse(c);
     return runAdminEffect(
       c,
       Effect.gen(function* () {
@@ -130,7 +131,7 @@ apiKeyRoutes.patch(
   async (c) => {
     const orgId = c.get("orgId");
     const id = c.req.param("id");
-    if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
+    if (!ObjectId.isValid(id)) return notFoundResponse(c);
     const body = c.req.valid("json");
     return runAdminEffect(
       c,
@@ -150,7 +151,7 @@ apiKeyRoutes.delete(
   async (c) => {
     const orgId = c.get("orgId");
     const id = c.req.param("id");
-    if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
+    if (!ObjectId.isValid(id)) return notFoundResponse(c);
     return runAdminEffect(
       c,
       revokeCustomerApiKey({

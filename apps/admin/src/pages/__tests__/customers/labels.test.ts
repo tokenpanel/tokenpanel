@@ -39,23 +39,37 @@ test("errorMessage: non-ApiError → fallback", () => {
   expect(errorMessage(undefined, "Fallback.")).toBe("Fallback.");
 });
 
-test("errorMessage: 404 → Not found regardless of message", () => {
-  expect(errorMessage(new ApiError(404, "missing", null), "Fallback.")).toBe("Not found.");
+test("errorMessage: ApiError shows the API's standard message", () => {
+  const body = {
+    error: {
+      code: "subscription_already_active",
+      message: "The customer already has an active subscription.",
+    },
+  };
+  const err = new ApiError(409, body.error.message, body);
+  expect(err.code).toBe("subscription_already_active");
+  expect(errorMessage(err, "F.")).toBe("The customer already has an active subscription.");
 });
 
-test("errorMessage: 409 maps known conflict bodies to friendly text", () => {
-  expect(
-    errorMessage(new ApiError(409, "conflict", { error: "subscription_already_active" }), "F."),
-  ).toBe("Already has an active subscription.");
-  expect(
-    errorMessage(new ApiError(409, "conflict", { error: "duplicate_external_id_or_email" }), "F."),
-  ).toBe("External ID or email already in use.");
-  expect(errorMessage(new ApiError(409, "conflict", { error: "plan_not_active" }), "F.")).toBe(
-    "Selected plan is not active.",
-  );
+test("ApiError.fieldErrors: first issue per top-level field", () => {
+  const err = new ApiError(400, "Invalid request: password: too short", {
+    error: {
+      code: "validation_error",
+      message: "Invalid request: password: too short",
+      details: {
+        issues: [
+          { path: "password", message: "too short" },
+          { path: "password", message: "needs a digit" },
+          { path: "entries.0.providerId", message: "Provider not found" },
+        ],
+      },
+    },
+  });
+  expect(err.fieldErrors()).toEqual({ password: "too short", entries: "Provider not found" });
+  expect(new ApiError(500, "x", null).fieldErrors()).toEqual({});
 });
 
-test("errorMessage: 409 unknown body → raw message; other statuses → message", () => {
+test("errorMessage: non-standard bodies → raw message", () => {
   expect(errorMessage(new ApiError(409, "conflict", { error: "mystery" }), "F.")).toBe("conflict");
   expect(errorMessage(new ApiError(409, "conflict", null), "F.")).toBe("conflict");
   expect(errorMessage(new ApiError(500, "kaboom", null), "F.")).toBe("kaboom");

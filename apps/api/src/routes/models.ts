@@ -26,7 +26,7 @@ import {
 } from "../domains/models/operations.ts";
 import { runAdminEffect } from "../http/adapters/boundary.ts";
 import { sValidator } from "../http/validation/validator.ts";
-import { isAppError } from "../errors/families.ts";
+import { notFoundResponse } from "../http/error-context.ts";
 
 export function genEntryId(): string {
   return new ObjectId().toHexString().slice(0, 12);
@@ -101,20 +101,6 @@ export function createModelRoutes(): Hono<{ Variables: AuthVariables }> {
         {
           operation: "createModel",
           successStatus: 201,
-          mapError: (err) => {
-            if (
-              isAppError(err) &&
-              err._tag === "ValidationError" &&
-              err.message === "provider_not_found"
-            ) {
-              return {
-                status: 400,
-                body: { error: "provider_not_found" },
-                headers: {},
-              };
-            }
-            return null;
-          },
         },
       );
     },
@@ -123,7 +109,7 @@ export function createModelRoutes(): Hono<{ Variables: AuthVariables }> {
   modelRoutes.get("/:id", requirePermission("models:read"), async (c) => {
     const orgId = c.get("orgId");
     const id = c.req.param("id");
-    if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
+    if (!ObjectId.isValid(id)) return notFoundResponse(c);
     return runAdminEffect(
       c,
       getModel({ organizationId: orgId.toHexString(), modelId: id }),
@@ -139,7 +125,7 @@ export function createModelRoutes(): Hono<{ Variables: AuthVariables }> {
       const body = c.req.valid("json");
       const orgId = c.get("orgId");
       const id = c.req.param("id");
-      if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
+      if (!ObjectId.isValid(id)) return notFoundResponse(c);
       const { entries, ...rest } = body;
       return runAdminEffect(
         c,
@@ -157,20 +143,6 @@ export function createModelRoutes(): Hono<{ Variables: AuthVariables }> {
         }),
         {
           operation: "updateModel",
-          mapError: (err) => {
-            if (
-              isAppError(err) &&
-              err._tag === "ValidationError" &&
-              err.message === "provider_not_found"
-            ) {
-              return {
-                status: 400,
-                body: { error: "provider_not_found" },
-                headers: {},
-              };
-            }
-            return null;
-          },
         },
       );
     },
@@ -182,7 +154,7 @@ export function createModelRoutes(): Hono<{ Variables: AuthVariables }> {
     async (c) => {
       const orgId = c.get("orgId");
       const id = c.req.param("id");
-      if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
+      if (!ObjectId.isValid(id)) return notFoundResponse(c);
       return runAdminEffect(
         c,
         deleteModel({
@@ -201,7 +173,7 @@ export function createModelRoutes(): Hono<{ Variables: AuthVariables }> {
     async (c) => {
       const orgId = c.get("orgId");
       const id = c.req.param("id");
-      if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
+      if (!ObjectId.isValid(id)) return notFoundResponse(c);
       const body = c.req.valid("json");
       return runAdminEffect(
         c,
@@ -222,7 +194,7 @@ export function createModelRoutes(): Hono<{ Variables: AuthVariables }> {
     async (c) => {
       const orgId = c.get("orgId");
       const id = c.req.param("id");
-      if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
+      if (!ObjectId.isValid(id)) return notFoundResponse(c);
       const body = c.req.valid("json");
       return runAdminEffect(
         c,
@@ -243,7 +215,7 @@ export function createModelRoutes(): Hono<{ Variables: AuthVariables }> {
       const orgId = c.get("orgId");
       const id = c.req.param("id");
       const entryId = c.req.param("entryId");
-      if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
+      if (!ObjectId.isValid(id)) return notFoundResponse(c);
       return runAdminEffect(
         c,
         removeModelEntry({

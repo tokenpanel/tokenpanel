@@ -37,6 +37,9 @@ const MODELS = [
 const PROMPT_TOKENS = 1000;
 const COMPLETION_TOKENS = 2000;
 const REPLY = "Hello from the mock provider!";
+// Any message containing ERROR_TRIGGER gets an OpenAI-style HTTP 400.
+const ERROR_TRIGGER = "mock-upstream-error";
+const ERROR_MESSAGE = "Mock provider rejected the request";
 
 function usage() {
   return {
@@ -90,8 +93,18 @@ const server = Bun.serve({
     }
 
     if (req.method === "POST" && path.endsWith("/chat/completions")) {
-      const body = (await req.json().catch(() => ({}))) as { model?: unknown; stream?: unknown };
+      const body = (await req.json().catch(() => ({}))) as {
+        model?: unknown;
+        stream?: unknown;
+        messages?: unknown;
+      };
       const model = typeof body.model === "string" ? body.model : "mock-gpt";
+      if (JSON.stringify(body.messages ?? []).includes(ERROR_TRIGGER)) {
+        return Response.json(
+          { error: { message: ERROR_MESSAGE, type: "invalid_request_error", code: null } },
+          { status: 400 },
+        );
+      }
       if (body.stream) {
         return new Response(sseStream(model), {
           headers: {

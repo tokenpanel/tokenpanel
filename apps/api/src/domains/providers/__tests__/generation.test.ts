@@ -32,6 +32,7 @@ import type { BalanceReservation } from "../../billing/workflow.ts";
 import type { SettlementActor } from "../../settlement/settle.ts";
 import type { LimitReservation } from "../../../lib/rate-limits.ts";
 import {
+  isAppError,
   ProviderRejectedError,
   ProviderUnavailableError,
   SystemError,
@@ -585,15 +586,33 @@ test("classifyGenerationFailure: tagged AppError passes through untouched", () =
   expect(classifyGenerationFailure(tagged)).toBe(tagged);
 });
 
-test("classifyGenerationFailure: tagged ProviderError (4xx) passes through as-is, not re-wrapped", () => {
+test("classifyGenerationFailure: adapter ProviderError (4xx) maps to ProviderRejectedError", () => {
   const providerError = makeProviderError({
-    message: "Invalid request payload",
+    message: "openai streamChat failed (HTTP 400)",
     category: "http_4xx",
-    phase: "request",
+    phase: "headers",
     httpStatus: 400,
+    diagnostic: '{"error":{"message":"model not found"}}',
   });
-  const classified: unknown = classifyGenerationFailure(providerError);
-  expect(classified).toBe(providerError);
+  const classified = classifyGenerationFailure(providerError);
+  expect(isAppError(classified)).toBe(true);
+  expect(classified).toBeInstanceOf(ProviderRejectedError);
+  if (!(classified instanceof ProviderRejectedError)) return;
+  expect(classified.message).toBe("openai streamChat failed (HTTP 400)");
+  expect(classified.httpStatus).toBe(400);
+  expect(classified.diagnostic).toBe('{"error":{"message":"model not found"}}');
+});
+
+test("classifyGenerationFailure: adapter ProviderError (5xx) maps to ProviderUnavailableError", () => {
+  const providerError = makeProviderError({
+    message: "openai streamChat failed (HTTP 503)",
+    category: "http_5xx",
+    phase: "headers",
+    httpStatus: 503,
+  });
+  expect(classifyGenerationFailure(providerError)).toBeInstanceOf(
+    ProviderUnavailableError,
+  );
 });
 
 test("classifyGenerationFailure: AbortError maps to SystemError with 'aborted' diagnostic", () => {

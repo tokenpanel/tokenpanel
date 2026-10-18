@@ -14,14 +14,23 @@ import {
   actorForChatContext,
   billableCustomerId,
   modelWhitelistForContext,
-  V1ChatError,
+  v1ChatErrorToAppError,
   type ChatContext,
 } from "../../lib/v1-chat-context.ts";
+import { renderedJson } from "../../http/error-context.ts";
+import {
+  renderStandardCode,
+  renderStandardValidation,
+  standardErrorBody,
+} from "../../http/renderers/standard.ts";
+import {
+  standardGenerationError,
+  standardStreamError,
+} from "../../http/stream-errors.ts";
 import type { ChatRequest, ChatMessage, ContentPart } from "../../providers/index.ts";
 import { toOpenAIFinishReason, toOpenAIToolCallDeltas } from "../../providers/index.ts";
 import {
   applyDoneUsage,
-  classifyGenerationFailure,
   completeGeneration,
   emptyStreamUsage,
   openStreamGeneration,
@@ -34,16 +43,10 @@ import {
 } from "../../http/adapters/boundary.ts";
 import { getAppRuntime } from "../../runtime/app-runtime.ts";
 import {
-  formatOpenAIErrorBody,
-  openAISseTerminalFromAppError,
-} from "../../http/renderers/openai.ts";
-import { isAppError } from "../../errors/families.ts";
-import { publicMessageForCode, SAFE_MESSAGES } from "../../errors/safe-messages.ts";
-import type { RenderedHttpError } from "../../http/renderers/types.ts";
-import {
   OpenAIChatCompletionBody,
   type OpenAIMessage,
   safeParseSchema,
+  standardIssues,
 } from "../../http/validation/index.ts";
 
 const publicOpenAI = new Hono<{ Variables: PublicAuthVariables }>();
@@ -67,7 +70,12 @@ publicOpenAI.get("/v1/models", async (c) => {
     const scopes = principal.managementKey.scopes;
     const allowed = scopes.includes("models:read") || scopes.includes("chat:write");
     if (!allowed) {
-      return c.json(formatOpenAIError("missing_scope", "Management key lacks models:read or chat:write"), 403 as 403);
+      return renderedJson(
+        c,
+        renderStandardCode("openai", "missing_scope", {
+          details: { requiredScopes: ["models:read", "chat:write"] },
+        }),
+      );
     }
   }
   const whitelist =
@@ -152,52 +160,6 @@ export function translateMessage(m: OpenAIMessage): ChatMessage {
     toolCallId: m.tool_call_id,
     toolCalls: m.tool_calls ? [...m.tool_calls] : undefined,
   };
-}
-
-/** OpenAI error `type` per the API reference (status-driven). */
-function openAIErrorTypeForStatus(status: number, code: string): string {
-  switch (status) {
-    case 401:
-      return "authentication_error";
-    case 403:
-      return "permission_error";
-    case 404:
-      return "not_found_error";
-    case 429:
-      return "rate_limit_error";
-    default:
-      if (status >= 500) return "api_error";
-      if (code === "rate_limited") return "rate_limit_error";
-      return "invalid_request_error";
-  }
-}
-
-export function formatOpenAIError(
-  code: string,
-  message: string,
-  extra?: Record<string, unknown>,
-  status?: number,
-) {
-  return {
-    error: {
-      message,
-      type: openAIErrorTypeForStatus(status ?? 400, code),
-      code,
-      ...(extra ?? {}),
-    },
-  };
-}
-
-/** Preserve historical V1ChatError wire shape (status + formatOpenAIError). */
-function mapOpenAIRouteError(err: unknown): RenderedHttpError | null {
-  if (err instanceof V1ChatError) {
-    return {
-      status: err.status,
-      body: formatOpenAIError(err.code, err.message, undefined, err.status),
-      headers: {},
-    };
-  }
-  return null;
 }
 
 /**
@@ -349,21 +311,26 @@ publicOpenAI.post("/v1/chat/completions", async (c) => {
   try {
     raw = await c.req.json();
   } catch {
-    return c.json(formatOpenAIError("invalid_request", "invalid body"), 400 as 400);
+    return renderedJson(
+      c,
+      renderStandardCode("openai", "validation_error", {
+        message: "The request body is not valid JSON.",
+      }),
+    );
   }
   const parsed = safeParseSchema(OpenAIChatCompletionBody, raw);
   if (!parsed.success) {
-    const msg = parsed.error.issues
-      .map((i) => `${i.path.join(".")}: ${i.message}`)
-      .join("; ");
-    return c.json(formatOpenAIError("invalid_request", msg || "invalid body"), 400 as 400);
+    return renderedJson(
+      c,
+      renderStandardValidation("openai", standardIssues(parsed.error.issues)),
+    );
   }
   const body = parsed.data;
 
   const orgId = c.get("orgId");
   const principal = c.get("principal");
   if (!principal) {
-    return c.json(formatOpenAIError("unauthorized", "missing principal"), 401 as 401);
+    return renderedJson(c, renderStandardCode("openai", "unauthorized"));
   }
   const stream = body.stream ?? false;
   const abortSignal = c.req.raw.signal;
@@ -419,7 +386,7 @@ publicOpenAI.post("/v1/chat/completions", async (c) => {
       }),
       {
         operation: "openai.chatCompletions",
-        mapError: (err) => mapOpenAIRouteError(err),
+        toAppError: v1ChatErrorToAppError,
       },
     );
   }
@@ -436,7 +403,7 @@ publicOpenAI.post("/v1/chat/completions", async (c) => {
       {
         surface: "openai",
         operation: "openai.chatCompletions.streamPrep",
-        mapError: (err) => mapOpenAIRouteError(err),
+        toAppError: v1ChatErrorToAppError,
       },
       failures,
     );
@@ -500,30 +467,19 @@ publicOpenAI.post("/v1/chat/completions", async (c) => {
           clientDisconnected = true;
         }
       };
-      const enqueueTerminalError = (code: string, message: string) => {
+      // Terminal error event: `data: {"error":{…}}`, which OpenAI SDKs raise
+      // as APIError. TokenPanel text only; provider output never reaches here.
+      const enqueueTerminalError = (code: string) => {
         if (terminalErrorEmitted || clientDisconnected) return;
         terminalErrorEmitted = true;
-        enqueue(formatOpenAIError(code, publicMessageForCode(code, message)));
+        enqueue(standardErrorBody("openai", standardStreamError(code)));
       };
-      const enqueueAppError = (err: unknown) => {
-        const classified = isAppError(err)
-          ? err
-          : classifyGenerationFailure(err);
-        if (isAppError(classified) && !terminalErrorEmitted) {
-          terminalErrorEmitted = true;
-          try {
-            controller.enqueue(
-              encoder.encode(openAISseTerminalFromAppError(classified)),
-            );
-          } catch {
-            clientDisconnected = true;
-          }
-        } else if (!terminalErrorEmitted) {
-          enqueueTerminalError(
-            "upstream_error",
-            SAFE_MESSAGES.upstream_error,
-          );
-        }
+      const enqueueAppError = (err: unknown, streamCommitted = false) => {
+        if (terminalErrorEmitted || clientDisconnected) return;
+        terminalErrorEmitted = true;
+        enqueue(
+          standardErrorBody("openai", standardGenerationError(err, { streamCommitted })),
+        );
       };
       // SSE heartbeat: keeps the connection alive through proxies (Cloudflare,
       // Caddy, nginx) during upstream silence (LLM thinking, slow generation).
@@ -545,11 +501,7 @@ publicOpenAI.post("/v1/chat/completions", async (c) => {
           }
           if (event.kind !== "chunk") {
             if (event.kind === "terminal_fail" && !clientDisconnected) {
-              enqueueAppError(
-                classifyGenerationFailure(event.err, {
-                  streamCommitted: event.streamCommitted,
-                }),
-              );
+              enqueueAppError(event.err, event.streamCommitted);
             }
             continue;
           }
@@ -582,19 +534,13 @@ publicOpenAI.post("/v1/chat/completions", async (c) => {
           } else if (chunk.type === "done") {
             applyDoneUsage(usage, chunk);
           } else if (chunk.type === "error") {
-            enqueueTerminalError(
-              "upstream_error",
-              chunk.error?.message ?? SAFE_MESSAGES.upstream_error,
-            );
+            enqueueTerminalError(chunk.error?.code ?? "upstream_error");
           }
         }
         if (clientDisconnected || abortSignal.aborted) {
           // No fabricated interruption SSE body (13.6).
         } else if (!usage.streamComplete) {
-          enqueueTerminalError(
-            "stream_truncated",
-            "Upstream stream ended without a terminal event; response may be incomplete",
-          );
+          enqueueTerminalError("stream_truncated");
         } else {
           enqueue({
             id,
@@ -675,6 +621,5 @@ publicOpenAI.post("/v1/chat/completions", async (c) => {
   return new Response(body$, { headers: c.res.headers, status: 200 });
 });
 
-void formatOpenAIErrorBody;
 
 export default publicOpenAI;

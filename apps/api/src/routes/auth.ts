@@ -14,13 +14,13 @@ import {
 } from "../domains/auth/operations.ts";
 import { toUserView } from "../domains/auth/view.ts";
 import { runAdminEffect } from "../http/adapters/boundary.ts";
-import { isAppError } from "../errors/families.ts";
 import {
   LoginBody,
   UpdateMeBody,
   ChangePasswordBody,
 } from "../http/validation/identity.ts";
 import { withParseApi } from "../http/validation/with-parse-api.ts";
+import { respondWithCode } from "../http/error-context.ts";
 
 export const loginBody = withParseApi(LoginBody);
 export const updateMeBody = withParseApi(UpdateMeBody);
@@ -37,10 +37,14 @@ authRoutes.post("/login", sValidator("json", loginBody), async (c) => {
   const clientIp = getRequestClientIp(c);
   const gate = loginThrottle.check(clientIp);
   if (!gate.allowed) {
-    return c.json(
-      { error: "too_many_attempts" },
-      429,
-      { "Retry-After": String(gate.retryAfterSeconds) },
+    return respondWithCode(
+      c,
+      "too_many_attempts",
+      () =>
+        c.json({ error: "too_many_attempts" }, 429, {
+          "Retry-After": String(gate.retryAfterSeconds),
+        }),
+      { retryAfterSeconds: gate.retryAfterSeconds },
     );
   }
   return runAdminEffect(
@@ -55,20 +59,6 @@ authRoutes.post("/login", sValidator("json", loginBody), async (c) => {
     ),
     {
       operation: "login",
-      mapError: (err) => {
-        if (!isAppError(err)) return null;
-        if (
-          err._tag === "AuthorizationError" &&
-          (err.code === "user_disabled" || err.reason === "user_disabled")
-        ) {
-          return {
-            status: 403,
-            body: { error: "forbidden", message: "user disabled" },
-            headers: {},
-          };
-        }
-        return null;
-      },
     },
   );
 });
@@ -123,17 +113,7 @@ authRoutes.patch(
 authRoutes.post(
   "/password",
   requireAuth,
-  sValidator("json", changePasswordBody, (result, c) => {
-    if (!result.success) {
-      return c.json(
-        {
-          error: "validation_error",
-          details: result.error.flatten().fieldErrors,
-        },
-        422,
-      );
-    }
-  }),
+  sValidator("json", changePasswordBody),
   async (c) => {
     const user = c.get("user");
     const body = c.req.valid("json");

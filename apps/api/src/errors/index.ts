@@ -3,7 +3,7 @@
  *
  * Routes / domain services (later):
  *   import { NotFoundError, classifyMongoError, toHttpResponse } from "../errors/index.ts"
- *   import { renderAdminError, renderOpenAIError } from "../http/renderers/index.ts"
+ *   import { renderAdminError, renderStandardError } from "../http/renderers/index.ts"
  */
 
 export { ErrorCodes, type ErrorCode } from "./codes.ts";

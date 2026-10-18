@@ -2,6 +2,7 @@ import { test, expect } from "bun:test";
 import {
   applyEventToState,
   round,
+  upstreamErrorDetail,
   type StreamPanelState,
 } from "../stream-utils.ts";
 
@@ -26,6 +27,7 @@ function baseState(): StreamPanelState {
     reasoning: "",
     done: false,
     error: null,
+    errorDetail: null,
     provider: null,
     cost: null,
     billed: false,
@@ -125,6 +127,38 @@ test("error event sets the terminal done+error state", () => {
   });
   expect(st.done).toBe(true);
   expect(st.error).toBe("upstream exploded");
+});
+
+test("error event keeps the upstream provider reason from upstream.detail", () => {
+  const st = applyEventToState(baseState(), {
+    error: {
+      message: "openai streamChat failed (HTTP 400)",
+      type: "invalid_request_error",
+      code: "upstream_error",
+      upstream: {
+        status: 400,
+        detail: '{"error":{"message":"Model z-ai/glm-5.3 does not exist"}}',
+      },
+    },
+  });
+  expect(st.error).toBe("openai streamChat failed (HTTP 400)");
+  expect(st.errorDetail).toBe("Model z-ai/glm-5.3 does not exist");
+});
+
+test("error event without upstream detail leaves errorDetail null", () => {
+  const st = applyEventToState(baseState(), {
+    error: { message: "Upstream stream ended without a terminal event" },
+  });
+  expect(st.errorDetail).toBeNull();
+});
+
+test("upstreamErrorDetail extracts JSON messages and falls back to raw text", () => {
+  expect(upstreamErrorDetail(undefined)).toBeNull();
+  expect(upstreamErrorDetail('{"error":{"message":"bad key"}}')).toBe("bad key");
+  expect(upstreamErrorDetail('{"error":"quota exceeded"}')).toBe("quota exceeded");
+  expect(upstreamErrorDetail('{"message":"rate limited"}')).toBe("rate limited");
+  expect(upstreamErrorDetail('{"error":{"message":"trunc')).toBe('{"error":{"message":"trunc');
+  expect(upstreamErrorDetail("Bad Gateway")).toBe("Bad Gateway");
 });
 
 test("error object without message falls back to 'error'", () => {

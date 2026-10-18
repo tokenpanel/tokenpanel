@@ -20,7 +20,8 @@ import { switchActiveOrganization } from "../domains/auth/operations.ts";
 import { OrganizationRepository } from "../domains/ports/organization-repository.ts";
 import { runAdminEffect } from "../http/adapters/boundary.ts";
 import { sValidator } from "../http/validation/validator.ts";
-import { isAppError } from "../errors/families.ts";
+import { ConflictError, isAppError } from "../errors/families.ts";
+import { notFoundResponse, respondWithCode } from "../http/error-context.ts";
 
 export const organizationRoutes = new Hono<{ Variables: AuthVariables }>();
 
@@ -77,7 +78,7 @@ organizationRoutes.post(
 organizationRoutes.get("/:id", async (c) => {
   const user = c.get("user");
   const id = c.req.param("id");
-  if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
+  if (!ObjectId.isValid(id)) return notFoundResponse(c);
   return runAdminEffect(
     c,
     getOrganization({ user, organizationId: id }),
@@ -91,7 +92,7 @@ organizationRoutes.patch(
   async (c) => {
     const user = c.get("user");
     const id = c.req.param("id");
-    if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
+    if (!ObjectId.isValid(id)) return notFoundResponse(c);
     const body = c.req.valid("json");
     return runAdminEffect(
       c,
@@ -114,7 +115,7 @@ organizationRoutes.patch(
 organizationRoutes.delete("/:id", async (c) => {
   const user = c.get("user");
   const id = c.req.param("id");
-  if (!ObjectId.isValid(id)) return c.json({ error: "not_found" }, 404);
+  if (!ObjectId.isValid(id)) return notFoundResponse(c);
   return runAdminEffect(
     c,
     Effect.gen(function* () {
@@ -128,7 +129,12 @@ organizationRoutes.delete("/:id", async (c) => {
             e._tag === "ConflictError" &&
             e.code === "org_not_empty"
           ) {
-            return Object.assign(e, { _counts: counts });
+            return new ConflictError({
+              code: e.code,
+              message: e.message,
+              ...(e.fields !== undefined ? { fields: e.fields } : {}),
+              details: { counts },
+            });
           }
           return e;
         }),
@@ -136,41 +142,6 @@ organizationRoutes.delete("/:id", async (c) => {
     }),
     {
       operation: "deleteOrganization",
-      mapError: (err) => {
-        if (!isAppError(err)) return null;
-        if (err._tag === "ConflictError" && err.code === "org_not_empty") {
-          const counts = (err as { _counts?: unknown })._counts;
-          return {
-            status: 409,
-            body: {
-              error: "org_not_empty",
-              ...(counts !== undefined ? { counts } : {}),
-            },
-            headers: {},
-          };
-        }
-        if (err._tag === "ConflictError" && err.code === "last_org") {
-          return {
-            status: 409,
-            body: {
-              error: "last_org",
-              message: "cannot delete your only organization",
-            },
-            headers: {},
-          };
-        }
-        if (
-          err._tag === "AuthorizationError" &&
-          err.reason === "not_owner"
-        ) {
-          return {
-            status: 403,
-            body: { error: "forbidden", reason: "not_owner" },
-            headers: {},
-          };
-        }
-        return null;
-      },
     },
   );
 });
@@ -182,7 +153,15 @@ organizationRoutes.post("/switch", async (c) => {
   } | null;
   const targetId = body?.organizationId;
   if (!targetId || !ObjectId.isValid(targetId)) {
-    return c.json({ error: "invalid_organization_id" }, 400);
+    return respondWithCode(
+      c,
+      "validation_error",
+      () => c.json({ error: "invalid_organization_id" }, 400),
+      {
+        message: "organizationId must be a valid id.",
+        details: { issues: [{ path: "organizationId", message: "Invalid id" }] },
+      },
+    );
   }
   const sessionId = c.get("sessionId");
   return runAdminEffect(
@@ -207,20 +186,6 @@ organizationRoutes.post("/switch", async (c) => {
     }),
     {
       operation: "switchOrganization",
-      mapError: (err) => {
-        if (!isAppError(err)) return null;
-        if (
-          err._tag === "AuthorizationError" &&
-          err.reason === "not_a_member"
-        ) {
-          return {
-            status: 403,
-            body: { error: "forbidden", reason: "not_a_member" },
-            headers: {},
-          };
-        }
-        return null;
-      },
     },
   );
 });

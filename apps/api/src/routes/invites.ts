@@ -15,6 +15,7 @@ import { InviteBody, AcceptInviteBody } from "../http/validation/identity.ts";
 import { withParseApi } from "../http/validation/with-parse-api.ts";
 import { inviteThrottle } from "../lib/throttle.ts";
 import { getRequestClientIp } from "../lib/client-ip.ts";
+import { respondWithCode } from "../http/error-context.ts";
 
 export const inviteBody = withParseApi(InviteBody);
 export const acceptInviteBody = withParseApi(AcceptInviteBody);
@@ -84,10 +85,14 @@ acceptInviteRoute.post(
     const clientIp = getRequestClientIp(c);
     const gate = inviteThrottle.check(clientIp);
     if (!gate.allowed) {
-      return c.json(
-        { error: "too_many_attempts" },
-        429,
-        { "Retry-After": String(gate.retryAfterSeconds) },
+      return respondWithCode(
+        c,
+        "too_many_attempts",
+        () =>
+          c.json({ error: "too_many_attempts" }, 429, {
+            "Retry-After": String(gate.retryAfterSeconds),
+          }),
+        { retryAfterSeconds: gate.retryAfterSeconds },
       );
     }
     return runAdminEffect(
@@ -113,20 +118,6 @@ acceptInviteRoute.post(
       {
         operation: "acceptInvite",
         successStatus: 201,
-        mapError: (err) => {
-          if (!isAppError(err)) return null;
-          if (err._tag === "InvalidStateError" && err.code === "expired") {
-            return { status: 410, body: { error: "expired" }, headers: {} };
-          }
-          if (err._tag === "NotFoundError" && err.code === "invalid_or_expired") {
-            return {
-              status: 404,
-              body: { error: "invalid_or_expired" },
-              headers: {},
-            };
-          }
-          return null;
-        },
       },
     );
   },

@@ -15,6 +15,7 @@ import {
   type ResolvedPublicPrincipal,
 } from "../domains/auth/session.ts";
 import { runMiddlewareEffect } from "../http/adapters/boundary.ts";
+import { respondWithCode } from "../http/error-context.ts";
 import { isAppError, AuthorizationError } from "../errors/families.ts";
 import { renderAdminError } from "../http/renderers/admin.ts";
 import { getAppRuntime } from "../runtime/app-runtime.ts";
@@ -83,9 +84,15 @@ export const requirePublicPrincipal: MiddlewareHandler<{
   if (attemptedBearer) {
     const gate = apiKeyThrottle.check(clientIp);
     if (!gate.allowed) {
-      return c.json({ error: "unauthorized" }, 401, {
-        "Retry-After": String(gate.retryAfterSeconds),
-      });
+      return respondWithCode(
+        c,
+        "unauthorized",
+        () =>
+          c.json({ error: "unauthorized" }, 401, {
+            "Retry-After": String(gate.retryAfterSeconds),
+          }),
+        { retryAfterSeconds: gate.retryAfterSeconds },
+      );
     }
   }
 

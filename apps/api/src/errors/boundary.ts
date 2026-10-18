@@ -19,16 +19,29 @@ import { policyFor } from "./policy.ts";
 import { SAFE_MESSAGES } from "./safe-messages.ts";
 import type { HttpSurface } from "./variants.ts";
 import { renderAdminDefect, renderAdminError } from "../http/renderers/admin.ts";
-import { renderAnthropicDefect, renderAnthropicError } from "../http/renderers/anthropic.ts";
 import {
   renderManagementDefect,
   renderManagementError,
 } from "../http/renderers/management.ts";
-import { renderOpenAIDefect, renderOpenAIError } from "../http/renderers/openai.ts";
+import {
+  renderStandardDefect,
+  renderStandardError,
+} from "../http/renderers/standard.ts";
 import type { BoundaryOutcome, RenderedHttpError } from "../http/renderers/types.ts";
+
+/** Standard (catalogue) rendering vs legacy version 1; see http/error-context.ts. */
+export type RenderStyle = {
+  readonly standard: boolean;
+  /** Admin-only upstream provider detail (standard only). */
+  readonly debug: boolean;
+};
+
+export const LEGACY_STYLE: RenderStyle = { standard: false, debug: false };
 
 export type ToHttpResponseOptions = {
   readonly surface: HttpSurface;
+  /** Defaults to legacy version 1 rendering. */
+  readonly style?: RenderStyle;
   readonly correlation?: CorrelationIds;
   readonly operation?: string;
   /**
@@ -40,40 +53,27 @@ export type ToHttpResponseOptions = {
   readonly log?: (fields: StructuredLogFields) => void;
 };
 
-function renderError(surface: HttpSurface, err: AppError): RenderedHttpError {
-  switch (surface) {
-    case "admin":
-      return renderAdminError(err);
-    case "management":
-      return renderManagementError(err);
-    case "openai":
-      return renderOpenAIError(err);
-    case "anthropic":
-      return renderAnthropicError(err);
-    default: {
-      const _e: never = surface;
-      void _e;
-      return renderAdminError(err);
-    }
+function renderError(
+  surface: HttpSurface,
+  err: AppError,
+  style: RenderStyle = LEGACY_STYLE,
+): RenderedHttpError {
+  // The OpenAI/Anthropic-compatible surfaces have a single (standard)
+  // behavior; only the native surfaces keep a legacy version 1 renderer.
+  if (style.standard || surface === "openai" || surface === "anthropic") {
+    return renderStandardError(surface, err, { debug: style.debug });
   }
+  return surface === "admin" ? renderAdminError(err) : renderManagementError(err);
 }
 
-function renderDefect(surface: HttpSurface): RenderedHttpError {
-  switch (surface) {
-    case "admin":
-      return renderAdminDefect();
-    case "management":
-      return renderManagementDefect();
-    case "openai":
-      return renderOpenAIDefect();
-    case "anthropic":
-      return renderAnthropicDefect();
-    default: {
-      const _e: never = surface;
-      void _e;
-      return renderAdminDefect();
-    }
+function renderDefect(
+  surface: HttpSurface,
+  style: RenderStyle = LEGACY_STYLE,
+): RenderedHttpError {
+  if (style.standard || surface === "openai" || surface === "anthropic") {
+    return renderStandardDefect(surface);
   }
+  return surface === "admin" ? renderAdminDefect() : renderManagementDefect();
 }
 
 const loggedDefects = new WeakSet<object>();
@@ -120,7 +120,7 @@ export function toHttpResponse<A, E>(
     );
     return {
       kind: "error",
-      response: renderError(options.surface, firstFailure),
+      response: renderError(options.surface, firstFailure, options.style),
     };
   }
 
@@ -148,12 +148,16 @@ export function toHttpResponse<A, E>(
   }
 
   if (!responsePossible) {
-    return { kind: "defect", response: renderDefect(options.surface), privateLog };
+    return {
+      kind: "defect",
+      response: renderDefect(options.surface, options.style),
+      privateLog,
+    };
   }
 
   return {
     kind: "defect",
-    response: renderDefect(options.surface),
+    response: renderDefect(options.surface, options.style),
     privateLog,
   };
 }
@@ -164,8 +168,9 @@ export function toHttpResponse<A, E>(
 export function renderAppError(
   err: AppError,
   surface: HttpSurface,
+  style?: RenderStyle,
 ): RenderedHttpError {
-  return renderError(surface, err);
+  return renderError(surface, err, style);
 }
 
 /**
@@ -179,10 +184,11 @@ export function renderUnknownThrow(
     correlation?: CorrelationIds;
     operation?: string;
     log?: (fields: StructuredLogFields) => void;
+    style?: RenderStyle;
   },
 ): RenderedHttpError {
   if (isAppError(err)) {
-    return renderError(surface, err);
+    return renderError(surface, err, options?.style);
   }
   const log = options?.log ?? (() => {});
   log(
@@ -197,5 +203,5 @@ export function renderUnknownThrow(
     }),
   );
   void SAFE_MESSAGES;
-  return renderDefect(surface);
+  return renderDefect(surface, options?.style);
 }
